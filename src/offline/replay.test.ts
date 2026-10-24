@@ -96,6 +96,27 @@ describe('a queued write is sent as the registry says', () => {
   });
 });
 
+describe('client headers cannot add a second spelling of the headers replay sets itself', () => {
+  const names = (headers: Record<string, string>, wanted: string): string[] => Object.keys(headers).filter((name) => name.trim().toLowerCase() === wanted);
+
+  it('a Content-Type or Idempotency-Key of any case never reaches the request; the row sets exactly one of each', async () => {
+    const w = await createReplayWorld({
+      clientHeaders: { 'CONTENT-TYPE': 'text/evil', 'Content-Type': 'text/evil', ' content-type ': 'text/evil', 'IDEMPOTENCY-KEY': 'forged', 'idempotency-key': 'forged', 'X-Client-Version': '1.2.3' },
+    });
+    seed(w, 'insp-1');
+    const row = await w.queue('inspection.update', UPDATE('insp-1'));
+    await w.replayer.replay();
+    const headers = w.server.requests[0]?.headers ?? {};
+    expect(names(headers, 'content-type')).toEqual(['content-type']);
+    expect(headers['content-type']).toBe('application/json');
+    expect(names(headers, 'idempotency-key')).toEqual(['Idempotency-Key']);
+    expect(headers['Idempotency-Key']).toBe(row.idempotencyKey);
+    expect(Object.values(headers)).not.toContain('text/evil');
+    expect(Object.values(headers)).not.toContain('forged');
+    expect(headers['X-Client-Version']).toBe('1.2.3');
+  });
+});
+
 describe('P0-9 ordering: strictly per inspection', () => {
   it('a failed write stops only its own inspection; the others go on (positive control: after a retry the held write follows in order)', async () => {
     const w = await createReplayWorld();

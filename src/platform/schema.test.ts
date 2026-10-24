@@ -196,6 +196,7 @@ describe('migrate() on the sql.js double', () => {
     expect(await indexes('media')).toEqual([['idx_media_inspection', 0]]);
     expect(await indexes('outbox')).toEqual([
       ['idx_outbox_inspection', 0],
+      ['idx_outbox_line', 0],
       ['idx_outbox_seq', 1],
       ['idx_outbox_state_next', 0],
     ]);
@@ -489,16 +490,22 @@ describe('application-level state validators', () => {
 });
 
 describe('SchemaDriftError: a version 1 database written before the migration was edited in place', () => {
-  it('the expected columns are exactly what the current migration creates (so the list cannot drift from it)', async () => {
-    await migrate(db, 0);
+  async function applyVersion1Only(): Promise<void> {
+    const first = MIGRATIONS[0];
+    if (first === undefined) throw new Error('no version 1 migration');
+    await migrate(db, 0, [first]);
+  }
+
+  it('the expected columns are exactly what the version 1 migration creates (so the list cannot drift from it)', async () => {
+    await applyVersion1Only();
     for (const [table, expected] of Object.entries(EXPECTED_COLUMNS)) {
       expect(Object.keys(await columns(table)).sort(), table).toEqual([...expected].sort());
     }
     expect(Object.keys(EXPECTED_COLUMNS).sort()).toEqual(['outbox', 'resource_cache', 'work_package']);
   });
 
-  it('positive control: the current shape passes', async () => {
-    await migrate(db, 0);
+  it('positive control: the version 1 shape passes', async () => {
+    await applyVersion1Only();
     await expect(assertSchemaShape(db)).resolves.toBeUndefined();
   });
 
@@ -521,6 +528,32 @@ describe('SchemaDriftError: a version 1 database written before the migration wa
     await migrate(db, 0);
     await db.execute('DROP TABLE outbox');
     await expect(assertSchemaShape(db)).rejects.toBeInstanceOf(SchemaDriftError);
+  });
+
+  describe('when a version 2 migration adds a column', () => {
+    const v2: Migration = { toVersion: 2, statements: ['ALTER TABLE work_package ADD COLUMN note TEXT'] };
+
+    it('a healthy version 1 database waiting for its upgrade still passes the probe (the probe runs before the upgrade)', async () => {
+      await applyVersion1Only();
+      expect(Object.keys(await columns('work_package'))).not.toContain('note');
+      await expect(assertSchemaShape(db)).resolves.toBeUndefined();
+    });
+
+    it('the list stays equal to the version 1 shape, not to the newest one', async () => {
+      const first = MIGRATIONS[0];
+      if (first === undefined) throw new Error('no version 1 migration');
+      await migrate(db, 0, [first, v2]);
+      expect(Object.keys(await columns('work_package'))).toContain('note');
+      expect(EXPECTED_COLUMNS.work_package).not.toContain('note');
+      await expect(assertSchemaShape(db)).resolves.toBeUndefined();
+    });
+
+    it('an old-shape database still fails the probe (negative control)', async () => {
+      await applyVersion1Only();
+      await db.execute('DROP TABLE outbox');
+      await db.execute('CREATE TABLE outbox (idempotency_key TEXT PRIMARY KEY, seq INTEGER)');
+      await expect(assertSchemaShape(db)).rejects.toBeInstanceOf(SchemaDriftError);
+    });
   });
 
   it('the message tells the person what to do', () => {

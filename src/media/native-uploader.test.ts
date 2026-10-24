@@ -749,6 +749,21 @@ describe('native uploader: the client headers cannot carry credentials (a)', () 
   });
 });
 
+describe('native uploader: client headers other than credentials are passed through unchanged', () => {
+  it('a caller-supplied Content-Type or Idempotency-Key is not a credential and is kept, exactly as before', async () => {
+    const world = await createMediaWorld();
+    await world.store.put(photoRecord(ID));
+    const plugin = createFakePlugin({ engine: world.engine, files: world.files });
+    const headers = { 'X-Client-Platform': 'android', 'Content-Type': 'image/jpeg', 'Idempotency-Key': 'k-1' };
+    const uploader = createNativeUploader({
+      store: world.store, http: world.engine.http, tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },
+      plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: headers, timers: createManualTimers(),
+    });
+    await uploader.uploadDetailed(ref());
+    expect(plugin.starts[0]?.headers).toEqual(headers);
+  });
+});
+
 describe('native uploader: an uploaded key is checked again before it is reused (d)', () => {
   it("a stored key that is not this photo's own is not reused: the photo is uploaded again", async () => {
     const s = await setup();

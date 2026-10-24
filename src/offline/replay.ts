@@ -21,6 +21,7 @@ import {
   type Account,
   type OutboxRow,
 } from './outbox';
+import { HEADS_SQL, WAITING_SQL } from './replay-queries';
 import { DEFAULT_REGISTRY, findCommand, isLocalId, pathFor, type CommandDef, type CommandRegistry } from './registry';
 
 /** Why a run stopped before it reached the end of the queue. */
@@ -76,8 +77,6 @@ const ERROR_CODE = /^[A-Za-z0-9_]{1,64}$/;
  * "you are not on this inspection") is not in this set: that one is exactly what the visibility check is for.
  */
 const REFUSAL_CODES = new Set(['TENANT_SUSPENDED', 'FINANCIAL_REQUIRED', 'CAPABILITY_CEILING', 'ROLE_CEILING', 'SELF_PERMISSION_CHANGE']);
-/** True for the lowest-seq row of each line of one account; `o` is the outer row. */
-const IS_HEAD = `seq = (SELECT MIN(i.seq) FROM outbox i WHERE i.tenant_id = o.tenant_id AND i.user_id = o.user_id AND COALESCE(i.inspection_id, '') = COALESCE(o.inspection_id, ''))`;
 
 export interface ReplayDeps {
   db: Db;
@@ -353,18 +352,10 @@ export function createReplayer(deps: ReplayDeps): Replayer {
       // a next_at beyond any wait this module writes is a clock that was set back, and counts as due.
       const now = deps.clock.now();
       const farAhead = now + IMPLAUSIBLE_WAIT_MS;
-      const waiting = await deps.db.query<{ at: number | null }>(
-        `SELECT MIN(next_at) AS at FROM outbox o WHERE tenant_id = ? AND user_id = ? AND state = 'pending' AND next_at > ? AND next_at <= ? AND ${IS_HEAD}`,
-        [account.tenantId, account.userId, now, farAhead],
-      );
+      const waiting = await deps.db.query<{ at: number | null }>(WAITING_SQL, [account.tenantId, account.userId, now, farAhead]);
       const earliest = waiting[0]?.at ?? null;
       if (earliest !== null && (run.wake === null || earliest < run.wake)) run.wake = earliest;
-      const heads = await deps.db.query<{ idempotency_key: string }>(
-        `SELECT idempotency_key FROM outbox o
-         WHERE tenant_id = ? AND user_id = ? AND state = 'pending' AND (next_at IS NULL OR next_at <= ? OR next_at > ?) AND ${IS_HEAD}
-         ORDER BY seq LIMIT ?`,
-        [account.tenantId, account.userId, now, farAhead, HEADS_PER_PAGE],
-      );
+      const heads = await deps.db.query<{ idempotency_key: string }>(HEADS_SQL, [account.tenantId, account.userId, now, farAhead, HEADS_PER_PAGE]);
       let progressed = false;
       for (const head of heads) {
         if (attempted.has(head.idempotency_key)) continue;

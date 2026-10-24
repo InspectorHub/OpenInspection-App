@@ -395,6 +395,29 @@ describe('transient trouble: backoff, Retry-After, caps', () => {
     expect(summary).toMatchObject({ halted: null, refreshed: 1, failed: 4 });
   });
 
+  describe('a 404 is a valid answer from the server, so it resets the count of consecutive transport errors', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    async function runWith(middle: () => AuthError | ReturnType<typeof jsonReply>) {
+      w = await createPackageWorld({ concurrency: 1, limits: { maxAttempts: 1, maxConsecutiveErrors: 3 } });
+      ids.forEach((id, i) => w.serve(id, { date: `2026-10-26T0${String(i)}:00:00.000Z` }));
+      for (const id of ['a', 'b', 'd', 'e']) w.pkg.overrides.set(`/api/inspections/${id}`, () => new AuthError('server_unreachable'));
+      w.pkg.overrides.set('/api/inspections/c', middle);
+      return w.run();
+    }
+
+    it('two errors, a 404, two errors: the run is not halted', async () => {
+      const summary = await runWith(() => jsonReply(404, { success: false, error: { code: 'NOT_FOUND', message: 'gone' } }));
+      expect(summary.halted).toBeNull();
+      expect(nonList().map((r) => r.path).filter((path) => path.startsWith('/api/inspections/'))).toEqual(['/api/inspections/a', '/api/inspections/b', '/api/inspections/c', '/api/inspections/d', '/api/inspections/e']);
+    });
+
+    it('positive control: the same sequence with a transport error in the middle halts after three in a row', async () => {
+      const summary = await runWith(() => new AuthError('server_unreachable'));
+      expect(summary.halted).toBe('too_many_errors');
+      expect(nonList().map((r) => r.path)).toEqual(['/api/inspections/a', '/api/inspections/b', '/api/inspections/c']);
+    });
+  });
+
   it('stops at the request cap for the run, and an inspection cut off half way is not replaced', async () => {
     w = await createPackageWorld({ concurrency: 1, limits: { maxRequests: 9 } });
     for (const id of ['a', 'b', 'c', 'd']) w.serve(id);

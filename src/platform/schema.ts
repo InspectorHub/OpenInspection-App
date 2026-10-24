@@ -72,6 +72,7 @@ export const MIGRATIONS: readonly Migration[] = [
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_seq ON outbox(seq)',
       'CREATE INDEX IF NOT EXISTS idx_outbox_inspection ON outbox(inspection_id)',
       'CREATE INDEX IF NOT EXISTS idx_outbox_state_next ON outbox(state, next_at)',
+      'CREATE INDEX IF NOT EXISTS idx_outbox_line ON outbox(tenant_id, user_id, inspection_id, seq)',
       `CREATE TABLE IF NOT EXISTS work_package (
         inspection_id TEXT PRIMARY KEY,
         report_id TEXT,
@@ -142,8 +143,14 @@ export class SchemaDriftError extends Error {
 }
 
 /**
- * The columns of the tables the version 1 migration reshaped while it was still a draft. A test compares this
- * list with what the migration creates, so the two cannot disagree.
+ * A frozen snapshot of the version 1 draft shape: the columns of the tables the version 1 migration reshaped while it
+ * was still a draft. Version 1 is frozen at release. A column added later belongs in a version 2 migration and must
+ * NOT be added to this list: the probe below runs against a healthy version 1 database BEFORE its upgrade, and a
+ * column that only version 2 creates would make that database look outdated. A test compares this list with the
+ * version 1 migration alone.
+ *
+ * The probe checks columns only. It is a development-only guard against the first draft of version 1, not a general
+ * schema verifier, so it does not look at indexes.
  */
 export const EXPECTED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   outbox: ['idempotency_key', 'seq', 'op', 'payload', 'state', 'last_error', 'created_at', 'inspection_id', 'registry_version', 'tenant_id', 'user_id', 'attempts', 'next_at'],
