@@ -77,8 +77,25 @@ export interface MarkPatch {
   uploadedKey?: string | null;
 }
 
+/** One page of the table: the valid rows, how many rows the query returned, and where the next page starts. */
+export interface RowPage {
+  rows: MediaRow[];
+  /** Rows the query returned, valid or not. A page is the last one only when this is below the limit. */
+  rawCount: number;
+  /** The cursor after the last row the query returned (valid or not), or null when there is none to continue from. */
+  next: { createdAt: number; pendingId: string } | null;
+}
+
 /**
  * The field-ui `PendingMediaStore` over the app's SQLite table and the no-backup library directory.
+ *
+ * Differences from the web store that callers must know:
+ *  - `put` for an id that already has a row is silently ignored and keeps the FIRST file and row (the web
+ *    store overwrites the stored blob). A retried save therefore never touches a file that may be uploading.
+ *    A different inspection or kind under the same id is refused with CONFLICT.
+ *  - Removing a photo from the editor does not remove its row: whoever removes the photo from a document must
+ *    also call `delete(pendingId)`, or the uploaded file stays on the device (the reconciler only counts such
+ *    rows, see `countUnreferenced`).
  *
  * `get` and `list` return records whose `blob` is an EMPTY blob of the right type: the bytes stay on disk
  * and are shown through `objectUrl` and sent by the native uploader from the file itself, so a list of 50
@@ -89,6 +106,11 @@ export interface MediaStore extends PendingMediaStore {
   getRow(pendingId: string): Promise<MediaRow | null>;
   /** Valid rows, oldest first. Rows that fail validation are left out, never thrown on. */
   listRows(filter?: RowFilter): Promise<MediaRow[]>;
+  /**
+   * Like `listRows`, but also reports the raw row count and the cursor of the last raw row, so a caller pages on
+   * what the query returned: a corrupt row in a page cannot end the paging early and starve the rows behind it.
+   */
+  listRowsPage(filter?: RowFilter): Promise<RowPage>;
   /** Returns whether a row matched. `state` is checked with `assertMediaState`. */
   markState(pendingId: string, state: MediaState, patch?: MarkPatch): Promise<boolean>;
   /** The `file://` uri of the row's file. */
@@ -99,6 +121,8 @@ export interface MediaStore extends PendingMediaStore {
 export interface MediaStoreDeps {
   db: Db;
   files: Files;
+  /** Called after a NEW row was stored (not for a repeated put), so the uploader can be started. A throw is ignored. */
+  onStored?: (pendingId: string) => void;
 }
 
 const COLUMNS = 'pending_id, inspection_id, kind, path, content_type, meta, state, attempts, uploaded_key, created_at';
@@ -250,6 +274,11 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       await files.remove(path).catch(() => undefined);
       throw new MediaError('DB_FAILED');
     }
+    try {
+      deps.onStored?.(rec.pendingId);
+    } catch {
+      // A failing listener must not undo a photo that is safely stored.
+    }
   }
 
   function put(rec: PendingMediaRecord): Promise<void> {
@@ -273,7 +302,8 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
     return raw ? rowFromDb(raw) : null;
   }
 
-  async function listRows(filter: RowFilter = {}): Promise<MediaRow[]> {
+  async function listRowsPage(filter: RowFilter = {}): Promise<RowPage> {
+    const empty: RowPage = { rows: [], rawCount: 0, next: null };
     const where: string[] = [];
     const params: unknown[] = [];
     if (filter.inspectionId !== undefined) {
@@ -282,13 +312,13 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       params.push(filter.inspectionId);
     }
     if (filter.states !== undefined) {
-      if (filter.states.length === 0) return [];
+      if (filter.states.length === 0) return empty;
       for (const state of filter.states) assertMediaState(state);
       where.push(`state IN (${filter.states.map(() => '?').join(', ')})`);
       params.push(...filter.states);
     }
     if (filter.kinds !== undefined) {
-      if (filter.kinds.length === 0) return [];
+      if (filter.kinds.length === 0) return empty;
       for (const kind of filter.kinds) if (!MEDIA_KINDS.includes(kind)) throw new MediaError('INVALID_RECORD');
       where.push(`kind IN (${filter.kinds.map(() => '?').join(', ')})`);
       params.push(...filter.kinds);
@@ -299,7 +329,8 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       params.push(filter.skipGivenUpAt);
     }
     if (filter.after !== undefined) {
-      if (!Number.isFinite(filter.after.createdAt) || !isValidMediaId(filter.after.pendingId)) throw new MediaError('INVALID_RECORD');
+      // The cursor may be the id of a row this store did not write, so only its shape is checked; it is only ever bound.
+      if (!Number.isFinite(filter.after.createdAt) || !isText(filter.after.pendingId)) throw new MediaError('INVALID_RECORD');
       where.push('(created_at > ? OR (created_at = ? AND pending_id > ?))');
       params.push(filter.after.createdAt, filter.after.createdAt, filter.after.pendingId);
     }
@@ -311,13 +342,22 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       const row = rowFromDb(raw);
       if (row) rows.push(row);
     }
-    return rows;
+    const lastRaw = raws[raws.length - 1];
+    const lastId = lastRaw?.pending_id;
+    const lastAt = Number(lastRaw?.created_at);
+    const next = lastRaw !== undefined && isText(lastId) && Number.isFinite(lastAt) ? { createdAt: lastAt, pendingId: lastId } : null;
+    return { rows, rawCount: raws.length, next };
+  }
+
+  async function listRows(filter: RowFilter = {}): Promise<MediaRow[]> {
+    return (await listRowsPage(filter)).rows;
   }
 
   return {
     put,
     getRow,
     listRows,
+    listRowsPage,
 
     get: async (pendingId) => {
       try {

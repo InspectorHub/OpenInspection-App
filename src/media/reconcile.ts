@@ -1,9 +1,8 @@
-import { backoffMs } from '../auth/tokens';
 import { realTimers, type TimerPort } from '../collab/timers';
 import type { AppStatePort } from '../offline/lock-monitor';
 import type { Clock } from '../platform/clock';
 import type { Network } from '../platform/network';
-import { MAX_UPLOAD_ATTEMPTS, type NativeUploader } from './native-uploader';
+import { isExpectedKey, MAX_UPLOAD_ATTEMPTS, type NativeUploader } from './native-uploader';
 import type { ResolveResult } from './pending-doc';
 import type { MediaRow, MediaStore } from './store';
 
@@ -24,19 +23,29 @@ export const DEFAULT_MAX_ROWS_PER_PASS = 500;
 /** Pages one reconcile reads at most; a table larger than this many pages is finished by the next trigger. */
 const MAX_PAGES = 50;
 const MAX_CONCURRENCY = 8;
+/** The shortest delay the retry timer is ever armed with, so a timer can never turn into a busy loop. */
+export const MIN_RETRY_DELAY_MS = 1000;
+/** First wait before the document of an uploaded photo is looked at again after it had no such entry; doubles up to the cap. */
+export const MISSING_RECHECK_BASE_MS = 60_000;
+export const MISSING_RECHECK_CAP_MS = 3_600_000;
 
 export interface ReconcileDeps {
   store: MediaStore;
-  uploader: Pick<NativeUploader, 'uploadDetailed' | 'attach' | 'isActive'>;
+  uploader: Pick<NativeUploader, 'uploadDetailed' | 'attach' | 'isActive' | 'retryAt' | 'forgetExcept'>;
   resolvePending: ResolvePending;
   /** True when the offline lock holds or the device is revoked. A check that throws counts as locked. */
   isLocked(): boolean | Promise<boolean>;
+  /**
+   * Calls the listener whenever the device becomes unlocked; returns the unsubscribe function. Without it a run
+   * that stopped because of the lock resumes with the next network, foreground or store trigger instead.
+   */
+  onUnlocked?: (listener: () => void) => () => void;
   network: Pick<Network, 'online' | 'onChange'>;
   /** Foreground/background transitions; omitted where there is no such signal. */
   appState?: AppStatePort;
+  /** Must be the clock the uploader was given: both read the same backoff instants. */
   clock: Clock;
   timers?: TimerPort;
-  random?: () => number;
   concurrency?: number;
   maxRowsPerPass?: number;
   /** Progress of the upload of one photo, 0 to 100. */
@@ -54,25 +63,42 @@ export interface MediaReconciler {
   reconcileUploads(): Promise<ReconcileResult>;
   /** `reconcileUploads()` for an event: a trigger that arrives during a run makes one more run after it. */
   trigger(): void;
-  /** Runs now, then on the network coming back, on returning to the foreground, and when a retry is due. */
+  /** Runs now, then on the network coming back, on returning to the foreground, on unlock, and when a retry is due. */
   start(): void;
   /** Ends the run in progress (no further upload starts), unsubscribes and cancels the retry timer. */
   stop(): void;
   /** Settles when no run is in progress or queued. */
   idle(): Promise<void>;
+  /**
+   * Photos that are on the server but whose pending entry was not found in the inspection's document the last
+   * time it was looked at (memory only, this process). Their file and row are kept, never deleted: the photo may
+   * have been removed in the editor before it synced. Whoever removes a photo from a document must delete its
+   * store row too; this count is what a settings screen shows for the rest.
+   */
+  countUnreferenced(): number;
+  /** Forgets the wait before those documents are looked at again and runs now (a new photo was stored, or the user asked). */
+  recheckMissing(): void;
 }
 
 const LIVE_STATES = ['pending', 'uploading', 'failed', 'uploaded'] as const;
 
+/** What one run found out besides its counts: whether it was cut short, and when the next thing becomes due. */
+interface RunReport {
+  total: ReconcileResult;
+  /** True when the run stopped or skipped work because it was not allowed to proceed (locked, offline, signed out, stopped). */
+  blocked: boolean;
+  /** The earliest future instant at which something waits for its turn, or null. */
+  wake: number | null;
+  /** Every id the scan listed, when it listed the whole table. */
+  seen: Set<string> | null;
+}
+
 export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
   const timers = deps.timers ?? realTimers;
-  const random = deps.random ?? Math.random;
   const concurrency = Math.max(1, Math.min(Math.floor(deps.concurrency ?? DEFAULT_CONCURRENCY), MAX_CONCURRENCY));
   const maxRows = Math.max(1, Math.floor(deps.maxRowsPerPass ?? DEFAULT_MAX_ROWS_PER_PASS));
-  /** Earliest time each failed photo may start again. Memory only: after a restart the attempt count alone decides. */
-  const nextAt = new Map<string, number>();
-  /** Failures seen in this process, so a failure that burns no stored attempt still backs off. */
-  const failures = new Map<string, number>();
+  /** Uploaded photos whose pending entry was not in the document: when to look again, and how often it was not. */
+  const missing = new Map<string, { misses: number; nextAt: number }>();
   let stopped = false;
   let started = false;
   let running: Promise<ReconcileResult> | null = null;
@@ -103,8 +129,13 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     }
   }
 
+  function noteWake(run: RunReport, at: number): void {
+    if (at <= deps.clock.now()) return;
+    if (run.wake === null || at < run.wake) run.wake = at;
+  }
+
   /** Document first, then the local copy: the file is never removed before the document holds the server key. */
-  async function finish(row: MediaRow, key: string, total: ReconcileResult): Promise<void> {
+  async function finish(row: MediaRow, key: string, run: RunReport): Promise<void> {
     let resolved: ResolveResult;
     try {
       resolved = await deps.resolvePending(row.inspectionId, row.pendingId, key);
@@ -112,27 +143,48 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
       report(error);
       return;
     }
-    if (resolved === 'missing') return;
+    if (resolved === 'missing') {
+      // Nothing is deleted: the entry may not have been written yet, or the photo was removed in the editor.
+      const misses = (missing.get(row.pendingId)?.misses ?? 0) + 1;
+      const wait = Math.min(MISSING_RECHECK_BASE_MS * 2 ** (misses - 1), MISSING_RECHECK_CAP_MS);
+      const nextAt = deps.clock.now() + wait;
+      missing.set(row.pendingId, { misses, nextAt });
+      noteWake(run, nextAt);
+      return;
+    }
     try {
       await deps.store.delete(row.pendingId);
     } catch (error) {
       report(error);
       return;
     }
-    nextAt.delete(row.pendingId);
-    failures.delete(row.pendingId);
-    total.confirmed += 1;
+    missing.delete(row.pendingId);
+    run.total.confirmed += 1;
   }
 
   /** Returns true when the whole run should stop (locked, signed out, client too old). */
-  async function processRow(row: MediaRow, total: ReconcileResult): Promise<boolean> {
+  async function processRow(row: MediaRow, run: RunReport): Promise<boolean> {
     try {
-      if (!(await allowed())) return true;
-      if (row.state === 'uploaded' && row.uploadedKey !== null) {
-        await finish(row, row.uploadedKey, total);
+      if (!(await allowed())) {
+        run.blocked = true;
+        return true;
+      }
+      // A stored key that is not this photo's own is never resolved into a document: the uploader sends the photo again.
+      if (row.state === 'uploaded' && isExpectedKey(row.uploadedKey, row)) {
+        const wait = missing.get(row.pendingId);
+        if (wait !== undefined && wait.nextAt > deps.clock.now()) {
+          noteWake(run, wait.nextAt);
+          return false;
+        }
+        await finish(row, row.uploadedKey, run);
         return false;
       }
-      if (row.state === 'failed' && (row.attempts >= MAX_UPLOAD_ATTEMPTS || (nextAt.get(row.pendingId) ?? 0) > deps.clock.now())) return false;
+      if (row.state === 'failed' && row.attempts >= MAX_UPLOAD_ATTEMPTS) return false;
+      const waitUntil = deps.uploader.retryAt(row.pendingId);
+      if (waitUntil !== null && waitUntil > deps.clock.now()) {
+        noteWake(run, waitUntil);
+        return false;
+      }
       if (row.state === 'uploading') {
         if (deps.uploader.isActive(row.pendingId)) return false;
         if (row.attempts >= MAX_UPLOAD_ATTEMPTS) {
@@ -146,21 +198,17 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
         deps.onProgress ? { onProgress: deps.onProgress } : {},
       );
       if (outcome.ok) {
-        if (row.state !== 'pending' && !outcome.reused) total.retried += 1;
-        await finish(row, outcome.key, total);
+        if (row.state !== 'pending' && !outcome.reused) run.total.retried += 1;
+        await finish(row, outcome.key, run);
         return false;
       }
-      if (outcome.halt) return true;
-      if (row.state !== 'pending') total.retried += 1;
-      if (outcome.retryable) {
-        const seen = (failures.get(row.pendingId) ?? 0) + 1;
-        failures.set(row.pendingId, seen);
-        const attempt = Math.max(seen, row.attempts + 1);
-        if (attempt < MAX_UPLOAD_ATTEMPTS) nextAt.set(row.pendingId, deps.clock.now() + backoffMs(attempt, outcome.retryAfterMs, random));
-        else nextAt.delete(row.pendingId);
-      } else {
-        nextAt.delete(row.pendingId);
+      if (outcome.halt) {
+        run.blocked = true;
+        return true;
       }
+      if (row.state !== 'pending') run.total.retried += 1;
+      const next = deps.uploader.retryAt(row.pendingId);
+      if (outcome.retryable && next !== null) noteWake(run, next);
       return false;
     } catch (error) {
       report(error);
@@ -168,7 +216,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     }
   }
 
-  async function processPage(rows: MediaRow[], total: ReconcileResult): Promise<boolean> {
+  async function processPage(rows: MediaRow[], run: RunReport): Promise<boolean> {
     let index = 0;
     let halted = false;
     const worker = async (): Promise<void> => {
@@ -176,27 +224,38 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
         const row = rows[index];
         index += 1;
         if (row === undefined) return;
-        if (await processRow(row, total)) halted = true;
+        if (await processRow(row, run)) halted = true;
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, () => worker()));
     return halted;
   }
 
-  async function runOnce(): Promise<ReconcileResult> {
-    const total: ReconcileResult = { retried: 0, confirmed: 0 };
-    if (!(await allowed())) return total;
+  /** Forgets what is remembered about photos that are no longer in the table, so a gone photo leaves nothing behind. */
+  function prune(seen: ReadonlySet<string>): void {
+    deps.uploader.forgetExcept(seen);
+    for (const id of [...missing.keys()]) if (!seen.has(id)) missing.delete(id);
+  }
+
+  async function runOnce(): Promise<RunReport> {
+    const run: RunReport = { total: { retried: 0, confirmed: 0 }, blocked: false, wake: null, seen: null };
+    if (!(await allowed())) {
+      run.blocked = true;
+      return run;
+    }
     try {
       await deps.uploader.attach();
     } catch (error) {
       report(error);
-      return total;
+      return run;
     }
+    const seen = new Set<string>();
+    let complete = false;
     let after: { createdAt: number; pendingId: string } | undefined;
     for (let page = 0; page < MAX_PAGES; page += 1) {
-      let rows: MediaRow[];
+      let listed: Awaited<ReturnType<MediaStore['listRowsPage']>>;
       try {
-        rows = await deps.store.listRows({
+        listed = await deps.store.listRowsPage({
           states: LIVE_STATES,
           kinds: ['photo'],
           skipGivenUpAt: MAX_UPLOAD_ATTEMPTS,
@@ -207,39 +266,53 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
         report(error);
         break;
       }
-      const last = rows[rows.length - 1];
-      if (last === undefined) break;
-      const halted = await processPage(rows, total);
-      if (halted || rows.length < maxRows) break;
-      after = { createdAt: last.createdAt, pendingId: last.pendingId };
+      // Paging goes by the rows the query returned: a corrupt row must not end it and starve the rows behind it.
+      for (const row of listed.rows) seen.add(row.pendingId);
+      const halted = listed.rows.length > 0 && (await processPage(listed.rows, run));
+      if (halted) break;
+      if (listed.rawCount < maxRows) {
+        complete = true;
+        break;
+      }
+      if (listed.next === null) break;
+      after = listed.next;
     }
-    return total;
+    if (complete && !run.blocked && !stopped) {
+      run.seen = seen;
+      prune(seen);
+    }
+    return run;
   }
 
-  function scheduleRetry(): void {
+  /**
+   * Arms the one retry timer for the earliest future instant something waits for. Nothing is armed when the run
+   * was cut short (locked, offline, signed out): the network, foreground, unlock and store triggers resume it,
+   * and a timer that fires into a closed gate would only fire again.
+   */
+  function scheduleRetry(run: RunReport): void {
     if (retryTimer !== null) {
       timers.clearTimeout(retryTimer);
       retryTimer = null;
     }
-    if (stopped || nextAt.size === 0) return;
-    const earliest = Math.min(...nextAt.values());
+    if (stopped || run.blocked || run.wake === null) return;
     retryTimer = timers.setTimeout(() => {
       retryTimer = null;
       trigger();
-    }, Math.max(0, earliest - deps.clock.now()));
+    }, Math.max(MIN_RETRY_DELAY_MS, run.wake - deps.clock.now()));
   }
 
   function reconcileUploads(): Promise<ReconcileResult> {
     if (running !== null) return running;
     const run = (async (): Promise<ReconcileResult> => {
       const total: ReconcileResult = { retried: 0, confirmed: 0 };
+      let last: RunReport;
       do {
         again = false;
-        const result = await runOnce();
-        total.retried += result.retried;
-        total.confirmed += result.confirmed;
+        last = await runOnce();
+        total.retried += last.total.retried;
+        total.confirmed += last.total.confirmed;
       } while (again && !stopped);
-      scheduleRetry();
+      scheduleRetry(last);
       return total;
     })().finally(() => {
       running = null;
@@ -275,6 +348,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
           }),
         );
       }
+      if (deps.onUnlocked) unsubscribe.push(deps.onUnlocked(trigger));
       trigger();
     },
     stop: () => {
@@ -287,6 +361,11 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     },
     idle: async () => {
       while (running !== null) await running.catch(() => undefined);
+    },
+    countUnreferenced: () => missing.size,
+    recheckMissing: () => {
+      missing.clear();
+      trigger();
     },
   };
 }

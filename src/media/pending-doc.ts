@@ -83,12 +83,40 @@ export interface WithDocDeps {
   onError?: (error: unknown) => void;
 }
 
+/** True when everything `doc` holds (structs and deletions) is also in the stored updates of `docName`. */
+async function storedStateMatches(deps: WithDocDeps, timers: TimerPort, docName: string, doc: Y.Doc): Promise<boolean> {
+  const scratch = new Y.Doc();
+  let readFailed = false;
+  const reader = new SqlitePersistence(deps.db, docName, scratch, {
+    timers,
+    onError: (error) => {
+      readFailed = true;
+      deps.onError?.(error);
+    },
+  });
+  try {
+    await reader.whenSynced;
+    return !readFailed && Y.equalSnapshots(Y.snapshot(doc), Y.snapshot(scratch));
+  } finally {
+    await reader.destroy().catch(() => undefined);
+    scratch.destroy();
+  }
+}
+
 /**
  * The live document when the editor has the inspection open (its own persistence stores the change and its
  * connection syncs it). Otherwise a short-lived document over the same stored updates: loaded, changed,
- * flushed and destroyed, so the change is in the table the next time the inspection opens. It is NEVER opened
- * next to a live connection: when the connector reports one open but its document is not available, this fails
- * with DOC_BUSY and the caller tries again later.
+ * flushed, checked against the table and destroyed, so the change is in the table the next time the inspection
+ * opens. It is NEVER opened next to a live connection: when the connector reports one open but its document is
+ * not available, this fails with DOC_BUSY and the caller tries again later.
+ *
+ * The live path does not wait for the editor's persistence: the editor writes through the same `Db`, whose
+ * queue runs statements in call order, so a later write of the editor cannot overtake this change, and a failed
+ * write there is reported by the editor's own persistence and repaired by its compaction.
+ *
+ * On the short-lived path a change counts as stored only when no storage error was reported while it was
+ * written AND a fresh document read back from the table equals the changed one. Anything else throws
+ * DOC_FAILED, so the caller keeps the local file and its row and retries only the resolve.
  */
 export function createWithDoc(deps: WithDocDeps): WithDoc {
   const timers = deps.timers ?? realTimers;
@@ -99,17 +127,28 @@ export function createWithDoc(deps: WithDocDeps): WithDoc {
       if (live === null) throw new MediaError('DOC_BUSY');
       return fn(live);
     }
+    const docName = resultsDocName(inspectionId);
     const doc = new Y.Doc();
-    const persistence = new SqlitePersistence(deps.db, resultsDocName(inspectionId), doc, {
+    let storageFailed = false;
+    const persistence = new SqlitePersistence(deps.db, docName, doc, {
       timers,
       onError: (error) => {
+        storageFailed = true;
         deps.onError?.(error);
       },
     });
     try {
       await persistence.whenSynced;
+      let changed = false;
+      const markChanged = (): void => {
+        changed = true;
+      };
+      doc.on('update', markChanged);
       const out = fn(doc);
+      doc.off('update', markChanged);
       await persistence.flush();
+      if (storageFailed) throw new MediaError('DOC_FAILED');
+      if (changed && !(await storedStateMatches(deps, timers, docName, doc))) throw new MediaError('DOC_FAILED');
       return out;
     } catch (error) {
       if (error instanceof MediaError) throw error;

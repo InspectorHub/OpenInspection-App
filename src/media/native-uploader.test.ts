@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
 import type { SessionCheck } from '../auth/tokens';
 import { createManualTimers } from '../collab/test-support/manual-timers';
+import { createManualClock } from '../platform/clock';
+import { backoffMs } from '../auth/tokens';
 import { createNativeUploader, MAX_UPLOAD_ATTEMPTS, type NativeUploaderDeps } from './native-uploader';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, response, type FakePlugin, type MediaWorld } from './test-support/fakes';
 
@@ -13,6 +15,7 @@ interface Setup {
   world: MediaWorld;
   plugin: FakePlugin;
   timers: ReturnType<typeof createManualTimers>;
+  clock: ReturnType<typeof createManualClock>;
   state: { locked: boolean; token: string | null };
   tokens: NonNullable<NativeUploaderDeps['tokens']> & { checks: number };
   errors: unknown[];
@@ -24,6 +27,7 @@ async function setup(options: { origin?: string; allowInsecureHttp?: boolean; se
   const world = await createMediaWorld();
   const plugin = createFakePlugin({ engine: world.engine, files: world.files });
   const timers = createManualTimers();
+  const clock = createManualClock(5_000_000);
   const state = { locked: false, token: 'access-token-secret' as string | null };
   const errors: unknown[] = [];
   const progress: [string, number][] = [];
@@ -45,9 +49,11 @@ async function setup(options: { origin?: string; allowInsecureHttp?: boolean; se
     isLocked: () => state.locked,
     clientHeaders: CLIENT_HEADERS,
     timers,
+    clock,
+    random: () => 1,
     onError: (e) => errors.push(e),
   });
-  return { world, plugin, timers, state, tokens, errors, uploader, progress };
+  return { world, plugin, timers, clock, state, tokens, errors, uploader, progress };
 }
 
 const ref = (pendingId = ID) => ({ pendingId, inspectionId: INSPECTION });
@@ -81,7 +87,7 @@ describe('native uploader: the happy path', () => {
     expect(start?.headers).toEqual(CLIENT_HEADERS);
 
     const row = await s.world.store.getRow(ID);
-    expect(row).toMatchObject({ state: 'uploaded', attempts: 1, uploadedKey: `tenant-1/inspections/${INSPECTION}/photos/${ID}.jpg` });
+    expect(row).toMatchObject({ state: 'uploaded', attempts: 0, uploadedKey: `tenant-1/inspections/${INSPECTION}/photos/${ID}.jpg` });
     expect(s.world.engine.objects.size).toBe(1);
     expect(s.timers.pending()).toBe(0);
   });
@@ -153,8 +159,9 @@ describe('native uploader: the happy path', () => {
   it('an already uploaded row answers with its key and sends nothing (resolve can be retried without a second upload)', async () => {
     const s = await setup();
     await s.world.store.put(photoRecord(ID));
-    await s.world.store.markState(ID, 'uploaded', { attempts: 1, uploadedKey: 'k/inspections/i/photos/photo-1.jpg' });
-    await expect(s.uploader.uploadDetailed(ref())).resolves.toEqual({ ok: true, key: 'k/inspections/i/photos/photo-1.jpg', reused: true });
+    const key = `tenant-1/inspections/${INSPECTION}/photos/${ID}.jpg`;
+    await s.world.store.markState(ID, 'uploaded', { attempts: 1, uploadedKey: key });
+    await expect(s.uploader.uploadDetailed(ref())).resolves.toEqual({ ok: true, key, reused: true });
     expect(s.world.engine.http.calls).toHaveLength(0);
     expect(s.plugin.starts).toHaveLength(0);
   });
@@ -246,8 +253,8 @@ describe('native uploader: a signed url that was refused (401/403) is minted aga
     expect(s.world.engine.http.calls).toHaveLength(2);
     expect(s.plugin.starts).toHaveLength(2);
     expect(s.plugin.starts[0]?.serverUrl).not.toBe(s.plugin.starts[1]?.serverUrl);
-    // The attempt is counted once, not once per mint.
-    expect((await s.world.store.getRow(ID))?.attempts).toBe(1);
+    // A refused url is not a failed attempt, and a success keeps the count: nothing is used up.
+    expect((await s.world.store.getRow(ID))?.attempts).toBe(0);
   });
 
   it('a 403 behaves the same, and a second refusal is a retryable AUTH failure after exactly two starts', async () => {
@@ -332,13 +339,13 @@ describe('native uploader: mint failures', () => {
     expect(s.plugin.starts).toHaveLength(0);
   });
 
-  it('a network error on the mint call is retryable and does not burn an attempt or touch the row', async () => {
+  it('a network error on the mint call is retryable and counts one attempt, so the row shows as failed (I-6)', async () => {
     const s = await setup();
     await s.world.store.put(photoRecord(ID));
     const wrapped = { request: () => Promise.reject(new AuthError('server_unreachable')) };
-    const uploader = createNativeUploader({ store: s.world.store, http: wrapped, tokens: s.tokens, plugin: s.plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: CLIENT_HEADERS, timers: s.timers });
+    const uploader = createNativeUploader({ store: s.world.store, http: wrapped, tokens: s.tokens, plugin: s.plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: CLIENT_HEADERS, timers: s.timers, clock: s.clock, random: () => 1 });
     expect(await uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'NETWORK', retryable: true });
-    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'pending', attempts: 0 });
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: 1 });
   });
 
   it('a malformed mint answer is refused without starting an upload', async () => {
@@ -346,11 +353,14 @@ describe('native uploader: mint failures', () => {
     await s.world.store.put(photoRecord(ID));
     for (const body of [undefined, {}, { success: true }, { success: true, data: { url: 5, key: 'k' } }, { success: false, data: {} }]) {
       s.world.engine.mintOverride = () => response(200, body);
+      // Each answer is judged on its own: the backoff of the one before must have passed.
+      s.clock.advance(3_600_000);
       expect(await s.uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'BAD_URL' });
     }
     expect(s.plugin.starts).toHaveLength(0);
     // Control: the real answer is accepted on the same row.
     s.world.engine.mintOverride = null;
+    s.clock.advance(3_600_000);
     expect((await s.uploader.uploadDetailed(ref())).ok).toBe(true);
   });
 });
@@ -468,5 +478,211 @@ describe('native uploader: sanity of the harness', () => {
     console.error('probe');
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
+  });
+});
+
+/** Fails the mint until `times` attempts were made, moving the clock to each allowed start. */
+async function failRepeatedly(s: Setup, times: number): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    const at = s.uploader.retryAt(ID);
+    if (at !== null && at > s.clock.now()) s.clock.set(at);
+    await s.uploader.uploadDetailed(ref());
+  }
+}
+
+describe('native uploader: the policy the editor drain goes through (I-5)', () => {
+  it('upload() on a row that used every attempt answers the stored failure and mints nothing', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    s.world.engine.mintOverride = () => response(503);
+    await failRepeatedly(s, MAX_UPLOAD_ATTEMPTS);
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+    const calls = s.world.engine.http.calls.length;
+    expect(calls).toBe(MAX_UPLOAD_ATTEMPTS);
+    const rec = await s.world.store.get(ID);
+    if (!rec) throw new Error('record missing');
+    for (let i = 0; i < 5; i += 1) {
+      s.clock.advance(10 * 3_600_000);
+      await expect(s.uploader.upload(rec)).resolves.toEqual({ ok: false, error: 'SERVER' });
+    }
+    expect(s.world.engine.http.calls.length).toBe(calls);
+    expect(s.plugin.starts).toHaveLength(0);
+  });
+
+  it('after a restart (no memory) a row at the cap is answered GIVEN_UP, still without a mint', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    await s.world.store.markState(ID, 'failed', { attempts: MAX_UPLOAD_ATTEMPTS });
+    expect(await s.uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'GIVEN_UP', retryable: false, halt: false });
+    expect(s.world.engine.http.calls).toHaveLength(0);
+  });
+
+  it('a failed row whose backoff has not elapsed answers the stored failure without minting; after it, the upload goes', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    s.world.engine.mintOverride = () => response(503);
+    await s.uploader.uploadDetailed(ref());
+    expect(s.world.engine.http.calls).toHaveLength(1);
+    const wait = backoffMs(1, null, () => 1);
+    expect(s.uploader.retryAt(ID)).toBe(s.clock.now() + wait);
+    await expect(s.uploader.uploadDetailed(ref())).resolves.toMatchObject({ ok: false, code: 'SERVER', retryable: true });
+    s.clock.advance(wait - 1);
+    await s.uploader.uploadDetailed(ref());
+    expect(s.world.engine.http.calls).toHaveLength(1);
+    s.clock.advance(1);
+    s.world.engine.mintOverride = null;
+    await expect(s.uploader.uploadDetailed(ref())).resolves.toMatchObject({ ok: true });
+    expect(s.uploader.retryAt(ID)).toBeNull();
+  });
+
+  it('retry() is the manual override: it clears the cap and the backoff, and the next upload goes', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    s.world.engine.mintOverride = () => response(413);
+    await s.uploader.uploadDetailed(ref());
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+    s.world.engine.mintOverride = null;
+    await expect(s.uploader.uploadDetailed(ref())).resolves.toMatchObject({ ok: false, code: 'REJECTED', retryable: false });
+    await expect(s.uploader.retry(ID)).resolves.toBe(true);
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'pending', attempts: 0 });
+    await expect(s.uploader.uploadDetailed(ref())).resolves.toMatchObject({ ok: true });
+    await expect(s.uploader.retry('nobody')).resolves.toBe(false);
+    await expect(s.uploader.retry('../x')).resolves.toBe(false);
+  });
+});
+
+describe('native uploader: failures before the transfer count too (I-6)', () => {
+  const scenarios: [string, (s: Setup) => void][] = [
+    ['a mint network error', (s) => { s.world.engine.mintOverride = () => { throw new AuthError('server_unreachable'); }; }],
+    ['a malformed mint answer', (s) => { s.world.engine.mintOverride = () => response(200, { success: true }); }],
+    ['a start the plugin refuses', (s) => { s.plugin.defaultBehavior = { kind: 'reject' }; }],
+  ];
+
+  it.each(scenarios)('%s counts an attempt each time, backs off with growing delays, and ends failed at the cap', async (_name, arrange) => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    arrange(s);
+    let previous = 0;
+    for (let i = 1; i <= MAX_UPLOAD_ATTEMPTS; i += 1) {
+      const at = s.uploader.retryAt(ID);
+      if (at !== null) s.clock.set(at);
+      const outcome = await s.uploader.uploadDetailed(ref());
+      expect(outcome.ok).toBe(false);
+      expect(await s.world.store.getRow(ID), String(i)).toMatchObject({ state: 'failed', attempts: i });
+      const next = s.uploader.retryAt(ID);
+      expect(next, String(i)).not.toBeNull();
+      const delay = (next ?? 0) - s.clock.now();
+      if (i < MAX_UPLOAD_ATTEMPTS) {
+        expect(delay, String(i)).toBeGreaterThanOrEqual(previous);
+        previous = delay;
+      } else {
+        // Every attempt is used: nothing is left to wait for.
+        expect(delay).toBeLessThanOrEqual(0);
+      }
+    }
+    const calls = s.world.engine.http.calls.length;
+    s.clock.advance(100 * 3_600_000);
+    await s.uploader.uploadDetailed(ref());
+    expect(s.world.engine.http.calls.length).toBe(calls);
+    expect(s.plugin.starts.length).toBeLessThanOrEqual(MAX_UPLOAD_ATTEMPTS);
+  });
+
+  it('control: a halting failure (signed out, locked) records nothing and leaves the row as it was', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    s.state.token = null;
+    expect(await s.uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'AUTH', halt: true });
+    s.state.token = 'access-token-secret';
+    s.state.locked = true;
+    expect(await s.uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'LOCKED', halt: true });
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'pending', attempts: 0 });
+    expect(s.uploader.retryAt(ID)).toBeNull();
+  });
+});
+
+describe('native uploader: a transient stat error is not a missing file (I-4)', () => {
+  it('a stat that fails for another reason is retryable, mints nothing, and the row is not marked permanently failed', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    s.world.files.failExistsFor(`media/${ID}.jpg`);
+    const outcome = await s.uploader.uploadDetailed(ref());
+    expect(outcome).toMatchObject({ ok: false, code: 'FILE', retryable: true });
+    expect(s.world.engine.http.calls).toHaveLength(0);
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: 1 });
+    expect(s.world.files.paths()).toContain(`media/${ID}.jpg`);
+  });
+
+  it('positive control: a confirmed not-found is the permanent FILE failure', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    await s.world.files.remove(`media/${ID}.jpg`);
+    expect(await s.uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'FILE', retryable: false });
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+  });
+});
+
+describe('native uploader: attempts count recorded failures only (c)', () => {
+  it('starting an upload does not use an attempt; a recorded failure does', async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    s.plugin.defaultBehavior = { kind: 'hang' };
+    const done = s.uploader.uploadDetailed(ref());
+    await s.plugin.whenStarted(1);
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'uploading', attempts: 0 });
+    s.plugin.emit({ name: 'failed', id: 'up-1', eventId: 'e1', payload: {} });
+    await done;
+    expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: 1 });
+  });
+
+  it('ten interrupted starts (the process killed each time) do not fail a good photo', async () => {
+    const world = await createMediaWorld();
+    await world.store.put(photoRecord(ID));
+    const tokens = { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) };
+    for (let i = 0; i < MAX_UPLOAD_ATTEMPTS + 2; i += 1) {
+      const plugin = createFakePlugin({ engine: world.engine, files: world.files, idPrefix: `dead${String(i)}` });
+      plugin.defaultBehavior = { kind: 'hang' };
+      const uploader = createNativeUploader({ store: world.store, http: world.engine.http, tokens, plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: createManualTimers() });
+      void uploader.uploadDetailed(ref());
+      await plugin.whenStarted(1);
+      expect(await world.store.getRow(ID)).toMatchObject({ state: 'uploading', attempts: 0 });
+    }
+    const plugin = createFakePlugin({ engine: world.engine, files: world.files });
+    const uploader = createNativeUploader({ store: world.store, http: world.engine.http, tokens, plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: createManualTimers() });
+    await expect(uploader.uploadDetailed(ref())).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe('native uploader: the client headers cannot carry credentials (a)', () => {
+  it('Authorization, Cookie and Proxy-Authorization are dropped whatever their case; the rest is kept', async () => {
+    const world = await createMediaWorld();
+    await world.store.put(photoRecord(ID));
+    const plugin = createFakePlugin({ engine: world.engine, files: world.files });
+    const headers = { 'X-Client-Platform': 'android', authorization: 'Bearer leak', COOKIE: 'a=b', 'Proxy-Authorization': 'x', ' Authorization ': 'y', 'X-Client-Version': '1' };
+    const uploader = createNativeUploader({
+      store: world.store, http: world.engine.http, tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },
+      plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: headers, timers: createManualTimers(),
+    });
+    await uploader.uploadDetailed(ref());
+    expect(plugin.starts[0]?.headers).toEqual({ 'X-Client-Platform': 'android', 'X-Client-Version': '1' });
+    expect(Object.keys(headers)).toHaveLength(6);
+  });
+});
+
+describe('native uploader: an uploaded key is checked again before it is reused (d)', () => {
+  it("a stored key that is not this photo's own is not reused: the photo is uploaded again", async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    await s.world.store.markState(ID, 'uploaded', { uploadedKey: 'other-tenant/inspections/other/photos/stolen.jpg' });
+    const outcome = await s.uploader.uploadDetailed(ref());
+    expect(outcome).toEqual({ ok: true, key: `tenant-1/inspections/${INSPECTION}/photos/${ID}.jpg`, reused: false });
+    expect(s.plugin.starts).toHaveLength(1);
+  });
+
+  it("positive control: the photo's own stored key is reused with nothing sent", async () => {
+    const s = await setup();
+    await s.world.store.put(photoRecord(ID));
+    await s.world.store.markState(ID, 'uploaded', { uploadedKey: `tenant-1/inspections/${INSPECTION}/photos/${ID}.jpg` });
+    await expect(s.uploader.uploadDetailed(ref())).resolves.toEqual({ ok: true, key: `tenant-1/inspections/${INSPECTION}/photos/${ID}.jpg`, reused: true });
+    expect(s.plugin.starts).toHaveLength(0);
   });
 });

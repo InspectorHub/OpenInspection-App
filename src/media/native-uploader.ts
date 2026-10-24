@@ -2,13 +2,14 @@ import type { MediaUploader } from '@inspectorhub/field-ui';
 import { isAuthError } from '../auth/errors';
 import type { Http, HttpResponse } from '../auth/http';
 import { parseServerUrl } from '../auth/server-config';
-import type { TokenManager } from '../auth/tokens';
+import { backoffMs, type TokenManager } from '../auth/tokens';
 import { realTimers, type TimerPort } from '../collab/timers';
+import { systemClock, type Clock } from '../platform/clock';
 import type { UploaderPluginLike } from '../platform/uploader';
 import { isValidMediaId } from './errors';
 import { isValidUploadedKey, MEDIA_CONTENT_TYPES, type MediaRow, type MediaStore } from './store';
 
-/** Starts an upload gives up after this many; a permanent refusal uses them all at once so the row stays failed and visible. */
+/** Failed attempts after which a photo is given up on; a permanent refusal uses them all at once so the row stays failed and visible. */
 export const MAX_UPLOAD_ATTEMPTS = 8;
 /** The longest one upload may stay silent before it is abandoned and counted as failed. */
 export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
@@ -38,7 +39,9 @@ export type UploadFailureCode =
   | 'UNSUPPORTED_KIND'
   | 'UPGRADE'
   | 'PLUGIN'
-  | 'STORE';
+  | 'STORE'
+  /** Every attempt is used and nothing more is remembered about why; `retry()` is the way out. */
+  | 'GIVEN_UP';
 
 export type UploadOutcome =
   | { ok: true; key: string; /** True when the row was already uploaded and nothing was sent. */ reused: boolean }
@@ -74,9 +77,15 @@ export interface NativeUploaderDeps {
   allowInsecureHttp?: boolean;
   /** True when the offline lock holds or the device is revoked. A check that throws counts as locked. */
   isLocked(): boolean | Promise<boolean>;
-  /** `X-Client-Platform` and `X-Client-Version`, sent with the upload request. */
+  /**
+   * `X-Client-Platform` and `X-Client-Version`, sent with the upload request. The signed url carries its own
+   * authority, so `Authorization`, `Cookie` and `Proxy-Authorization` are dropped here whatever their case.
+   */
   clientHeaders: Record<string, string>;
   timers?: TimerPort;
+  /** Time source of the backoff. Share it with the reconciler, which schedules from the same instants. */
+  clock?: Clock;
+  random?: () => number;
   uploadTimeoutMs?: number;
   /** Receives storage failures. Never receives a token, a url or a path. */
   onError?: (error: unknown) => void;
@@ -89,6 +98,18 @@ export interface NativeUploader extends MediaUploader {
   attach(): Promise<void>;
   /** True while an upload of this photo is in flight in this process. */
   isActive(pendingId: string): boolean;
+  /**
+   * The earliest time (clock ms) this process will start this photo again after a failure, or null when it
+   * remembers none. Memory only: after a restart the stored attempt count alone decides.
+   */
+  retryAt(pendingId: string): number | null;
+  /**
+   * The manual retry: forgets the backoff, sets the row back to `pending` with no attempts used, and returns
+   * whether a row matched. Does nothing for a photo that is already uploaded or in flight.
+   */
+  retry(pendingId: string): Promise<boolean>;
+  /** Forgets the backoff memory of every photo not in `keep`, so a photo that is gone leaves nothing behind. */
+  forgetExcept(keep: ReadonlySet<string>): void;
   dispose(): Promise<void>;
 }
 
@@ -97,12 +118,27 @@ interface Failure {
   retryable: boolean;
   retryAfterMs: number | null;
   halt: boolean;
-  /** Write the row as failed (one attempt used, or all of them for a permanent refusal). */
-  record: boolean;
 }
 
-function failure(code: UploadFailureCode, options: { retryable: boolean; retryAfterMs?: number | null; halt?: boolean; record?: boolean }): Failure {
-  return { code, retryable: options.retryable, retryAfterMs: options.retryAfterMs ?? null, halt: options.halt ?? false, record: options.record ?? false };
+function failure(code: UploadFailureCode, options: { retryable: boolean; retryAfterMs?: number | null; halt?: boolean }): Failure {
+  return { code, retryable: options.retryable, retryAfterMs: options.retryAfterMs ?? null, halt: options.halt ?? false };
+}
+
+/** What the backoff memory keeps of one photo's failures in this process. */
+interface RetryState {
+  failures: number;
+  nextAt: number;
+  last: Failure;
+}
+
+const FORBIDDEN_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization']);
+
+function safeClientHeaders(headers: Record<string, string>): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (!FORBIDDEN_HEADERS.has(name.trim().toLowerCase())) kept[name] = value;
+  }
+  return kept;
 }
 
 function toOutcome(f: Failure): UploadOutcome {
@@ -164,7 +200,7 @@ export function resolveUploadUrl(origin: string, raw: unknown): string | null {
 }
 
 /** True for exactly `<tenant>/inspections/<inspection>/photos/<pendingId>.<ext>` with this row's ids and extension. */
-function isExpectedKey(key: unknown, row: MediaRow): key is string {
+export function isExpectedKey(key: unknown, row: MediaRow): key is string {
   if (!isValidUploadedKey(key)) return false;
   const parts = key.split('/');
   return (
@@ -188,9 +224,9 @@ function classifyStatus(status: number): StatusClass {
   if (status >= 200 && status <= 299) return { kind: 'success' };
   if (status === 401 || status === 403) return { kind: 'auth' };
   if (status === 400 || status === 404 || status === 411 || status === 413 || status === 415 || status === 422) {
-    return { kind: 'failure', failure: failure('REJECTED', { retryable: false, record: true }) };
+    return { kind: 'failure', failure: failure('REJECTED', { retryable: false }) };
   }
-  return { kind: 'failure', failure: failure('SERVER', { retryable: true, record: true }) };
+  return { kind: 'failure', failure: failure('SERVER', { retryable: true }) };
 }
 
 type Minted = { ok: true; url: string; key: string } | { ok: false; failure: Failure };
@@ -198,6 +234,10 @@ type Minted = { ok: true; url: string; key: string } | { ok: false; failure: Fai
 export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   const origin = parseServerUrl(deps.origin, { allowInsecureHttp: deps.allowInsecureHttp === true });
   const timers = deps.timers ?? realTimers;
+  const clock = deps.clock ?? systemClock;
+  const random = deps.random ?? Math.random;
+  const clientHeaders = safeClientHeaders(deps.clientHeaders);
+  const retries = new Map<string, RetryState>();
   const timeoutMs = deps.uploadTimeoutMs ?? UPLOAD_TIMEOUT_MS;
   const active = new Map<string, Promise<UploadOutcome>>();
   const waiters = new Map<string, { settle(terminal: Terminal): void; pendingId: string; onProgress: ((pendingId: string, percent: number) => void) | undefined }>();
@@ -300,9 +340,9 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
         continue;
       }
       if (res.status === 200) return parseMinted(res.json, row);
-      if ([400, 403, 404, 411, 413, 415, 422].includes(res.status)) return { ok: false, failure: failure('REJECTED', { retryable: false, record: true }) };
+      if ([400, 403, 404, 411, 413, 415, 422].includes(res.status)) return { ok: false, failure: failure('REJECTED', { retryable: false }) };
       if (res.status === 426) return { ok: false, failure: failure('UPGRADE', { retryable: true, halt: true }) };
-      return { ok: false, failure: failure('SERVER', { retryable: true, retryAfterMs: clampRetryAfter(res.retryAfterMs), record: true }) };
+      return { ok: false, failure: failure('SERVER', { retryable: true, retryAfterMs: clampRetryAfter(res.retryAfterMs) }) };
     }
   }
 
@@ -334,7 +374,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
         fileField: 'file',
         mimeType: row.contentType,
         maxRetries: 3,
-        headers: { ...deps.clientHeaders },
+        headers: { ...clientHeaders },
         notificationTitle: NOTIFICATION_TITLE,
       });
       if (typeof started.id !== 'string' || started.id.length === 0 || started.id.length > MAX_EVENT_ID_LENGTH) throw new Error('invalid upload id');
@@ -368,16 +408,47 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     return terminal;
   }
 
-  async function settleFailure(row: MediaRow, f: Failure, counted: boolean): Promise<UploadOutcome> {
-    if (f.record || counted) {
-      const attempts = f.retryable ? row.attempts + 1 : MAX_UPLOAD_ATTEMPTS;
-      try {
-        await deps.store.markState(row.pendingId, 'failed', { attempts });
-      } catch (error) {
-        report(error);
+  /**
+   * Records a failure. A halting one (locked, signed out, client too old) says nothing about the photo, so it
+   * costs no attempt and a row already marked `uploading` goes back to what it was. Every other failure is a
+   * counted attempt: the row becomes `failed` (one more attempt, or all of them for a permanent refusal) and a
+   * retryable one backs off, so the count reaches the cap after a bounded number of tries.
+   */
+  async function settleFailure(row: MediaRow, f: Failure, marked: boolean): Promise<UploadOutcome> {
+    if (f.halt) {
+      if (marked) {
+        try {
+          await deps.store.markState(row.pendingId, row.state, { attempts: row.attempts });
+        } catch (error) {
+          report(error);
+        }
       }
+      return toOutcome(f);
+    }
+    const attempts = f.retryable ? Math.min(row.attempts + 1, MAX_UPLOAD_ATTEMPTS) : MAX_UPLOAD_ATTEMPTS;
+    const seen = (retries.get(row.pendingId)?.failures ?? 0) + 1;
+    retries.set(row.pendingId, {
+      failures: seen,
+      // With every attempt used there is nothing left to wait for.
+      nextAt: f.retryable && attempts < MAX_UPLOAD_ATTEMPTS ? clock.now() + backoffMs(Math.max(seen, attempts), f.retryAfterMs, random) : 0,
+      last: f,
+    });
+    try {
+      await deps.store.markState(row.pendingId, 'failed', { attempts });
+    } catch (error) {
+      report(error);
     }
     return toOutcome(f);
+  }
+
+  /** The stored answer when the policy says this photo must not be started now, or null when it may be. */
+  function gate(row: MediaRow): UploadOutcome | null {
+    const state = retries.get(row.pendingId);
+    if (row.state === 'failed' && row.attempts >= MAX_UPLOAD_ATTEMPTS) {
+      return state ? toOutcome({ ...state.last, retryable: false, halt: false }) : toOutcome(failure('GIVEN_UP', { retryable: false }));
+    }
+    if (state !== undefined && state.nextAt > clock.now()) return toOutcome(state.last);
+    return null;
   }
 
   async function doUpload(ref: UploadRef, options: UploadOptions): Promise<UploadOutcome> {
@@ -389,51 +460,62 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       report(error);
       return toOutcome(failure('STORE', { retryable: true }));
     }
-    if (row === null) return toOutcome(failure('NOT_FOUND', { retryable: false }));
+    if (row === null) {
+      retries.delete(ref.pendingId);
+      return toOutcome(failure('NOT_FOUND', { retryable: false }));
+    }
     if (row.inspectionId !== ref.inspectionId) return toOutcome(failure('INVALID', { retryable: false }));
     if (row.kind !== 'photo') return toOutcome(failure('UNSUPPORTED_KIND', { retryable: false }));
-    if (row.state === 'uploaded' && row.uploadedKey !== null) return { ok: true, key: row.uploadedKey, reused: true };
+    // A key that is not this photo's own (a tampered row) is never reused or handed on: the photo is sent again.
+    if (row.state === 'uploaded' && isExpectedKey(row.uploadedKey, row)) {
+      retries.delete(row.pendingId);
+      return { ok: true, key: row.uploadedKey, reused: true };
+    }
+    const held = gate(row);
+    if (held !== null) return held;
 
     let present: boolean;
     try {
       present = await deps.store.fileExists(row);
     } catch {
-      return toOutcome(failure('FILE', { retryable: true }));
+      return settleFailure(row, failure('FILE', { retryable: true }), false);
     }
-    if (!present) return settleFailure(row, failure('FILE', { retryable: false, record: true }), false);
+    if (!present) return settleFailure(row, failure('FILE', { retryable: false }), false);
     try {
       await attach();
     } catch {
-      return toOutcome(failure('PLUGIN', { retryable: true }));
+      return settleFailure(row, failure('PLUGIN', { retryable: true }), false);
     }
 
-    let counted = false;
+    let marked = false;
     let refusedOnce = false;
     for (;;) {
       const minted = await mint(row);
-      if (!minted.ok) return settleFailure(row, minted.failure, counted);
+      if (!minted.ok) return settleFailure(row, minted.failure, marked);
       // Signing out or locking while the url was being minted must not start the transfer.
-      if (await locked()) return settleFailure(row, failure('LOCKED', { retryable: true, halt: true }), counted);
-      if (!counted) {
+      if (await locked()) return settleFailure(row, failure('LOCKED', { retryable: true, halt: true }), marked);
+      if (!marked) {
+        // Starting costs no attempt: only a recorded failure does, so a process that keeps being killed cannot fail a good photo.
         try {
-          if (!(await deps.store.markState(row.pendingId, 'uploading', { attempts: row.attempts + 1 }))) return toOutcome(failure('NOT_FOUND', { retryable: false }));
+          if (!(await deps.store.markState(row.pendingId, 'uploading', { attempts: row.attempts }))) return toOutcome(failure('NOT_FOUND', { retryable: false }));
         } catch (error) {
           report(error);
-          return toOutcome(failure('STORE', { retryable: true }));
+          return settleFailure(row, failure('STORE', { retryable: true }), false);
         }
-        counted = true;
+        marked = true;
       }
       const terminal = await runUpload(row, minted.url, options);
-      if (terminal === 'start-failed') return settleFailure(row, failure('FILE', { retryable: true, record: true }), counted);
-      if (terminal.kind === 'timeout') return settleFailure(row, failure('TIMEOUT', { retryable: true, record: true }), counted);
+      if (terminal === 'start-failed') return settleFailure(row, failure('FILE', { retryable: true }), marked);
+      if (terminal.kind === 'timeout') return settleFailure(row, failure('TIMEOUT', { retryable: true }), marked);
       if (terminal.statusCode === null) {
         const code = terminal.kind === 'failed' ? 'NETWORK' : 'SERVER';
-        return settleFailure(row, failure(code, { retryable: true, record: true }), counted);
+        return settleFailure(row, failure(code, { retryable: true }), marked);
       }
       const verdict = classifyStatus(terminal.statusCode);
       if (verdict.kind === 'success' && terminal.kind === 'completed') {
+        retries.delete(row.pendingId);
         try {
-          await deps.store.markState(row.pendingId, 'uploaded', { attempts: row.attempts + 1, uploadedKey: minted.key });
+          await deps.store.markState(row.pendingId, 'uploaded', { attempts: row.attempts, uploadedKey: minted.key });
         } catch (error) {
           // The photo is on the server; an unrecorded success only costs one more (overwriting) upload.
           report(error);
@@ -445,9 +527,9 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
         refusedOnce = true;
         continue;
       }
-      if (verdict.kind === 'auth') return settleFailure(row, failure('AUTH', { retryable: true, record: true }), counted);
-      if (verdict.kind === 'failure') return settleFailure(row, verdict.failure, counted);
-      return settleFailure(row, failure('NETWORK', { retryable: true, record: true }), counted);
+      if (verdict.kind === 'auth') return settleFailure(row, failure('AUTH', { retryable: true }), marked);
+      if (verdict.kind === 'failure') return settleFailure(row, verdict.failure, marked);
+      return settleFailure(row, failure('NETWORK', { retryable: true }), marked);
     }
   }
 
@@ -471,6 +553,22 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     uploadDetailed,
     attach,
     isActive: (pendingId) => active.has(pendingId),
+    retryAt: (pendingId) => retries.get(pendingId)?.nextAt ?? null,
+    retry: async (pendingId) => {
+      if (!isValidMediaId(pendingId) || active.has(pendingId)) return false;
+      retries.delete(pendingId);
+      try {
+        const row = await deps.store.getRow(pendingId);
+        if (row === null || row.state === 'uploaded') return false;
+        return await deps.store.markState(pendingId, 'pending', { attempts: 0 });
+      } catch (error) {
+        report(error);
+        return false;
+      }
+    },
+    forgetExcept: (keep) => {
+      for (const id of [...retries.keys()]) if (!keep.has(id)) retries.delete(id);
+    },
     upload: async (rec) => {
       const outcome = await uploadDetailed({ pendingId: rec.pendingId, inspectionId: rec.inspectionId });
       return outcome.ok ? { ok: true, key: outcome.key } : { ok: false, error: outcome.code };

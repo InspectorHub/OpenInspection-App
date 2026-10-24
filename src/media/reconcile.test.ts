@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createManualClock } from '../platform/clock';
+import { AuthError } from '../auth/errors';
 import { backoffMs } from '../auth/tokens';
 import { createManualTimers } from '../collab/test-support/manual-timers';
 import { fakeAppState } from '../offline/test-support/fakes';
@@ -43,7 +44,7 @@ interface Setup {
   rec: ReturnType<typeof createMediaReconciler>;
 }
 
-async function setup(options: { concurrency?: number; maxRowsPerPass?: number; world?: MediaWorld; plugin?: FakePlugin } = {}): Promise<Setup> {
+async function setup(options: { concurrency?: number; maxRowsPerPass?: number; world?: MediaWorld; plugin?: FakePlugin; onUnlocked?: (cb: () => void) => () => void } = {}): Promise<Setup> {
   const world = options.world ?? (await createMediaWorld());
   const plugin = options.plugin ?? createFakePlugin({ engine: world.engine, files: world.files });
   const timers = createManualTimers();
@@ -72,6 +73,8 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; w
     isLocked: () => state.locked,
     clientHeaders: {},
     timers,
+    clock,
+    random: () => 1,
   });
   const rec = createMediaReconciler({
     store: world.store,
@@ -82,7 +85,7 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; w
     appState,
     clock,
     timers,
-    random: () => 1,
+    ...(options.onUnlocked === undefined ? {} : { onUnlocked: options.onUnlocked }),
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     ...(options.maxRowsPerPass === undefined ? {} : { maxRowsPerPass: options.maxRowsPerPass }),
     onError: (e) => errors.push(e),
@@ -143,6 +146,7 @@ describe('reconcile: uploading, resolving, deleting', () => {
     await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 0 });
     expect(s.world.files.paths()).toEqual(['media/p1.jpg']);
     s.resolve.mockResolvedValueOnce('already');
+    s.clock.advance(60_000);
     await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
     expect(s.world.files.paths()).toEqual([]);
   });
@@ -270,8 +274,8 @@ describe('reconcile: concurrency, single flight, bounds', () => {
   it('reads the table in bounded pages and still gets through a list larger than one page', async () => {
     const s = await setup({ maxRowsPerPass: 4 });
     const limits: (number | undefined)[] = [];
-    const original = s.world.store.listRows.bind(s.world.store);
-    s.world.store.listRows = (filter) => {
+    const original = s.world.store.listRowsPage.bind(s.world.store);
+    s.world.store.listRowsPage = (filter) => {
       limits.push(filter?.limit);
       return original(filter);
     };
@@ -526,6 +530,210 @@ describe('reconcile: triggers', () => {
     await s.rec.idle();
     expect(s.plugin.starts).toHaveLength(2);
     expect(await s.world.store.listRows()).toEqual([]);
+    s.rec.stop();
+  });
+});
+
+/** Fires the pending retry timer, then lets the run it starts finish; stops after `limit` fires so a spin cannot hang the test. */
+async function fireRetryTimers(s: Setup, limit: number): Promise<number> {
+  let fires = 0;
+  while (s.timers.pending() > 0 && fires < limit) {
+    s.timers.fireNext();
+    fires += 1;
+    await s.rec.idle();
+  }
+  return fires;
+}
+
+describe('reconcile: the retry timer never spins (M-1)', () => {
+  async function failedOnce(s: Setup): Promise<number> {
+    await putPhotos(s, ['p1']);
+    s.world.engine.mintOverride = () => response(503);
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.requested()).toHaveLength(1);
+    const due = s.timers.requested()[0] ?? 0;
+    s.clock.advance(due + 1);
+    return due;
+  }
+
+  it('goes offline before the timer fires: the fire arms nothing, and the network coming back resumes the upload', async () => {
+    const s = await setup();
+    await failedOnce(s);
+    s.network.setQuietly(false);
+    const fires = await fireRetryTimers(s, 25);
+    expect(fires).toBe(1);
+    expect(s.timers.pending()).toBe(0);
+    expect(s.timers.requested()).toHaveLength(1);
+    expect(s.timers.requested().every((ms) => ms > 0)).toBe(true);
+    // Control: the network trigger resumes it.
+    s.world.engine.mintOverride = null;
+    s.network.set(true);
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.world.engine.objects.size).toBe(1);
+    s.rec.stop();
+  });
+
+  it('locks before the timer fires: the fire arms nothing, and the unlock signal resumes the upload', async () => {
+    const unlocked = new Set<() => void>();
+    const s = await setup({ onUnlocked: (cb) => { unlocked.add(cb); return () => unlocked.delete(cb); } });
+    await failedOnce(s);
+    s.state.locked = true;
+    const fires = await fireRetryTimers(s, 25);
+    expect(fires).toBe(1);
+    expect(s.timers.pending()).toBe(0);
+    expect(s.timers.requested()).toHaveLength(1);
+    // Control: unlocking resumes it.
+    s.state.locked = false;
+    s.world.engine.mintOverride = null;
+    for (const cb of [...unlocked]) cb();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    s.rec.stop();
+    expect(unlocked.size).toBe(0);
+  });
+
+  it('a photo deleted while it waits in backoff leaves no stale entry to re-arm the timer', async () => {
+    const s = await setup();
+    await failedOnce(s);
+    await s.world.store.delete('p1');
+    const fires = await fireRetryTimers(s, 25);
+    expect(fires).toBe(1);
+    expect(s.timers.pending()).toBe(0);
+    expect(s.timers.requested()).toHaveLength(1);
+    s.rec.stop();
+  });
+
+  it('still arms exactly one timer for a retry that is genuinely in the future (positive control)', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1', 'p2']);
+    s.world.engine.mintOverride = () => response(503);
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(1);
+    expect(s.timers.delays()[0]).toBeGreaterThan(0);
+    s.rec.stop();
+  });
+});
+
+describe('reconcile: a document without the entry is re-checked with a growing wait, never deleted (I-3)', () => {
+  const MINUTE = 60_000;
+
+  it('keeps the file and the row, asks the document again only after 1 min, 2 min, 4 min ... up to an hour', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.resolve.mockResolvedValue('missing');
+    await s.rec.reconcileUploads();
+    expect(s.resolve).toHaveBeenCalledTimes(1);
+    expect(s.timers.delays()).toEqual([MINUTE]);
+
+    let calls = 1;
+    for (let miss = 1; miss <= 9; miss += 1) {
+      const wait = Math.min(MINUTE * 2 ** (miss - 1), 3_600_000);
+      s.clock.advance(wait - 1);
+      await s.rec.reconcileUploads();
+      expect(s.resolve, `just before ${String(wait)}`).toHaveBeenCalledTimes(calls);
+      s.clock.advance(1);
+      await s.rec.reconcileUploads();
+      calls += 1;
+      expect(s.resolve, `at ${String(wait)}`).toHaveBeenCalledTimes(calls);
+      expect(s.timers.delays()).toEqual([Math.min(MINUTE * 2 ** miss, 3_600_000)]);
+    }
+    expect(s.world.files.paths()).toEqual(['media/p1.jpg']);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'uploaded' });
+    expect(s.plugin.starts).toHaveLength(1);
+    s.rec.stop();
+  });
+
+  it('counts the photos nobody references, and the count falls once the document has the entry', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1', 'p2']);
+    s.resolve.mockResolvedValue('missing');
+    expect(s.rec.countUnreferenced()).toBe(0);
+    await s.rec.reconcileUploads();
+    expect(s.rec.countUnreferenced()).toBe(2);
+    s.resolve.mockResolvedValue('already');
+    s.clock.advance(MINUTE);
+    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 2 });
+    expect(s.rec.countUnreferenced()).toBe(0);
+    expect(s.world.files.paths()).toEqual([]);
+  });
+
+  it('a photo deleted from the store leaves the count and the wait behind', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.resolve.mockResolvedValue('missing');
+    await s.rec.reconcileUploads();
+    expect(s.rec.countUnreferenced()).toBe(1);
+    await s.world.store.delete('p1');
+    s.clock.advance(MINUTE);
+    await s.rec.reconcileUploads();
+    expect(s.rec.countUnreferenced()).toBe(0);
+    expect(s.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('recheckMissing() forgets the wait and runs now', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.resolve.mockResolvedValueOnce('missing');
+    await s.rec.reconcileUploads();
+    expect(s.resolve).toHaveBeenCalledTimes(1);
+    s.resolve.mockResolvedValue('resolved');
+    s.rec.recheckMissing();
+    await s.rec.idle();
+    expect(s.resolve).toHaveBeenCalledTimes(2);
+    expect(await s.world.store.getRow('p1')).toBeNull();
+    expect(s.rec.countUnreferenced()).toBe(0);
+  });
+});
+
+describe('reconcile: paging goes by the rows the query returned (b)', () => {
+  it('two corrupt rows ahead of the good ones do not end the paging when a page holds two rows', async () => {
+    const s = await setup({ maxRowsPerPass: 2 });
+    const meta = JSON.stringify({ targetType: 'item', findingKey: 'k', itemId: 'i' });
+    const insert = 'INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, created_at) VALUES (?,?,?,?,?,?,?,?,?)';
+    await s.world.db.run(insert, ['bad-state', INSPECTION, 'photo', 'media/bad-state.jpg', 'image/jpeg', meta, 'exploded', 0, 1]);
+    await s.world.db.run(insert, ['bad-path', INSPECTION, 'photo', '../../etc/passwd', 'image/jpeg', meta, 'pending', 0, 2]);
+    await s.world.store.put(photoRecord('good-1', { createdAt: 3 }));
+    await s.world.store.put(photoRecord('good-2', { createdAt: 4 }));
+    await s.world.store.put(photoRecord('good-3', { createdAt: 5 }));
+    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 3 });
+  });
+});
+
+describe('reconcile: a stored key that is not the photo\'s own is never put into a document (d)', () => {
+  it('re-uploads the photo and resolves only the key the server minted for it', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    await s.world.store.markState('p1', 'uploaded', { attempts: 0, uploadedKey: 'other-tenant/inspections/other/photos/stolen.jpg' });
+    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 1, confirmed: 1 });
+    expect(s.resolve).toHaveBeenCalledTimes(1);
+    expect(s.resolve).toHaveBeenCalledWith(INSPECTION, 'p1', `tenant-1/inspections/${INSPECTION}/photos/p1.jpg`);
+    expect(s.resolve).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'other-tenant/inspections/other/photos/stolen.jpg');
+  });
+});
+
+describe('reconcile: failures before the transfer end failed and stop the timer (I-6)', () => {
+  it('a mint that keeps failing with a network error backs off, reaches the cap as a visible failed row, and arms no more timers', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.world.engine.mintOverride = () => {
+      throw new AuthError('server_unreachable');
+    };
+    s.rec.start();
+    await s.rec.idle();
+    let fires = 0;
+    while (s.timers.pending() > 0 && fires < 30) {
+      s.clock.advance(s.timers.delays()[0] ?? 0);
+      s.timers.fireNext();
+      fires += 1;
+      await s.rec.idle();
+    }
+    expect(fires).toBe(MAX_UPLOAD_ATTEMPTS - 1);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+    expect(s.world.engine.http.calls).toHaveLength(MAX_UPLOAD_ATTEMPTS);
+    expect(s.timers.pending()).toBe(0);
     s.rec.stop();
   });
 });

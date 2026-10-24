@@ -17,6 +17,10 @@ export interface MemoryFiles extends Files {
   failReadFor(path: string): void;
   /** Every path any method was asked about, in order. */
   accessed(): string[];
+  /** Makes `exists` reject for this path with an error that is not a not-found answer (a transient stat failure). */
+  failExistsFor(path: string): void;
+  /** Sets the modification time `list` reports for this path (files default to the time they were written). */
+  setMtime(path: string, mtimeMs: number | null): void;
 }
 
 /** An in-memory `Files` for tests. */
@@ -28,12 +32,15 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
   const failingReads = new Set<string>();
   const touched: string[] = [];
   let writesFail = false;
+  const failingExists = new Set<string>();
+  const mtimes = new Map<string, number | null>();
   return {
     write: (path, data) => {
       touched.push(path);
       written.push(path);
       if (writesFail) return Promise.reject(new Error('No space left on device'));
       store.set(path, data);
+      mtimes.set(path, Date.now());
       return Promise.resolve(`file:///${path}`);
     },
     read: (path) => {
@@ -51,7 +58,17 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
     },
     exists: (path) => {
       touched.push(path);
+      if (failingExists.has(path)) return Promise.reject(new Error('I/O error while reading file metadata'));
       return Promise.resolve(store.has(path));
+    },
+    list: (directoryPath) => {
+      touched.push(directoryPath);
+      const prefix = `${directoryPath}/`;
+      return Promise.resolve(
+        [...store.keys()]
+          .filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes('/'))
+          .map((key) => ({ name: key.slice(prefix.length), mtimeMs: mtimes.get(key) ?? null })),
+      );
     },
     fileUri: (path) => {
       touched.push(path);
@@ -76,6 +93,12 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
     },
     failReadFor: (path) => {
       failingReads.add(path);
+    },
+    failExistsFor: (path) => {
+      failingExists.add(path);
+    },
+    setMtime: (path, mtimeMs) => {
+      mtimes.set(path, mtimeMs);
     },
   };
 }

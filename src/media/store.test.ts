@@ -264,7 +264,11 @@ describe('media store: get, list, objectUrl, delete', () => {
     const live = (await world.store.listRows({ kinds: ['photo'], skipGivenUpAt: 8 })).map((r) => r.pendingId);
     expect(live).toEqual(['p-0', 'p-2', 'p-3', 'p-4', 'p-5']);
     await expect(world.store.listRows({ kinds: ['video' as never] })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
-    await expect(world.store.listRows({ after: { createdAt: 1, pendingId: '../x' } })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+    // The cursor is only ever bound, and may name a corrupt row's id, so only its shape is checked.
+    await expect(world.store.listRows({ after: { createdAt: 1, pendingId: '' } })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+    await expect(world.store.listRows({ after: { createdAt: 1, pendingId: 'x'.repeat(600) } })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+    await expect(world.store.listRows({ after: { createdAt: Number.NaN, pendingId: 'x' } })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+    await expect(world.store.listRows({ after: { createdAt: 1, pendingId: '../x' } })).resolves.toEqual(expect.any(Array));
   });
 
   it('markState updates the state, attempts and uploaded key; reports whether a row matched', async () => {
@@ -289,5 +293,63 @@ describe('media store: get, list, objectUrl, delete', () => {
     expect((await world.store.get('crop-1'))?.meta).toEqual(crop.meta);
     const bad = { ...crop, pendingId: 'crop-2', meta: { findingKey: 'k' } as never };
     await expect(world.store.put(bad)).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+  });
+});
+
+describe('media store: paging counts raw rows, not valid ones (b)', () => {
+  const meta = JSON.stringify({ targetType: 'item', findingKey: 'k', itemId: 'i' });
+  const insert = 'INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, created_at) VALUES (?,?,?,?,?,?,?,?,?)';
+
+  it('a page made only of corrupt rows still has a cursor, and following it reaches the valid rows behind them', async () => {
+    const world = await createMediaWorld();
+    await world.db.run(insert, ['bad-1', INSPECTION, 'photo', 'media/bad-1.jpg', 'image/jpeg', meta, 'exploded', 0, 1]);
+    await world.db.run(insert, ['bad/2', INSPECTION, 'photo', 'media/bad-2.jpg', 'image/jpeg', meta, 'pending', 0, 2]);
+    await world.store.put(photoRecord('good-1', { createdAt: 3 }));
+    await world.store.put(photoRecord('good-2', { createdAt: 4 }));
+
+    const first = await world.store.listRowsPage({ limit: 2 });
+    expect(first.rows).toEqual([]);
+    expect(first.rawCount).toBe(2);
+    expect(first.next).toEqual({ createdAt: 2, pendingId: 'bad/2' });
+
+    const seen: string[] = [];
+    let after = first.next;
+    while (after !== null) {
+      const page = await world.store.listRowsPage({ limit: 2, after });
+      seen.push(...page.rows.map((row) => row.pendingId));
+      after = page.rawCount < 2 ? null : page.next;
+    }
+    expect(seen).toEqual(['good-1', 'good-2']);
+  });
+
+  it('control: listRows still leaves corrupt rows out and a page of valid rows reports its own last row as the cursor', async () => {
+    const world = await createMediaWorld();
+    await world.db.run(insert, ['bad-1', INSPECTION, 'photo', 'media/bad-1.jpg', 'image/jpeg', meta, 'exploded', 0, 1]);
+    await world.store.put(photoRecord('good-1', { createdAt: 3 }));
+    expect((await world.store.listRows()).map((row) => row.pendingId)).toEqual(['good-1']);
+    const page = await world.store.listRowsPage({});
+    expect(page).toMatchObject({ rawCount: 2, next: { createdAt: 3, pendingId: 'good-1' } });
+    expect(page.rows).toHaveLength(1);
+  });
+});
+
+describe('media store: onStored', () => {
+  it('is called once for a new row, not for a repeated put and not for a failed one', async () => {
+    const world = await createMediaWorld();
+    const stored: string[] = [];
+    const store = createMediaStore({ db: world.db, files: world.files, onStored: (id) => stored.push(id) });
+    await store.put(photoRecord('p1'));
+    await store.put(photoRecord('p1'));
+    expect(stored).toEqual(['p1']);
+    world.files.failWrites();
+    await expect(store.put(photoRecord('p2'))).rejects.toMatchObject({ code: 'WRITE_FAILED' });
+    expect(stored).toEqual(['p1']);
+  });
+
+  it('a throwing callback does not fail the put', async () => {
+    const world = await createMediaWorld();
+    const store = createMediaStore({ db: world.db, files: world.files, onStored: () => { throw new Error('listener'); } });
+    await expect(store.put(photoRecord('p1'))).resolves.toBeUndefined();
+    expect(await store.getRow('p1')).not.toBeNull();
   });
 });

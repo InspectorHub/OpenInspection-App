@@ -16,6 +16,7 @@ async function build(options: { origin?: string; allowInsecureHttp?: boolean } =
   const timers = createManualTimers();
   const state = { locked: false, token: SECRET_TOKEN as string | null };
   const errors: unknown[] = [];
+  const clock = createManualClock(1_000_000);
   const uploader = createNativeUploader({
     store: world.store,
     http: world.engine.http,
@@ -26,9 +27,11 @@ async function build(options: { origin?: string; allowInsecureHttp?: boolean } =
     isLocked: () => state.locked,
     clientHeaders: { 'X-Client-Platform': 'android' },
     timers,
+    clock,
+    random: () => 1,
     onError: (e) => errors.push(e),
   });
-  return { world, plugin, timers, state, errors, uploader };
+  return { world, plugin, timers, clock, state, errors, uploader };
 }
 
 const ref = (pendingId = 'p1') => ({ pendingId, inspectionId: INSPECTION });
@@ -59,14 +62,14 @@ describe('SECURITY 1: the signed url is only ever used against the pinned origin
     ['a very long url', `/api/public/uploads/photo?token=${'a'.repeat(5000)}.${'b'.repeat(20)}`],
   ];
 
-  it.each(refused)('refuses %s: nothing is uploaded and the row is untouched', async (_label, url) => {
+  it.each(refused)('refuses %s: nothing is uploaded, and the refusal costs exactly one attempt', async (_label, url) => {
     const s = await build();
     await s.world.store.put(photoRecord('p1'));
     s.world.engine.mintOverride = () => response(200, { success: true, data: { url, key: `tenant-1/inspections/${INSPECTION}/photos/p1.jpg`, expiresAt: 1 } });
     const outcome = await s.uploader.uploadDetailed(ref());
     expect(outcome).toMatchObject({ ok: false, code: 'BAD_URL' });
     expect(s.plugin.starts).toHaveLength(0);
-    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'pending', attempts: 0 });
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: 1, uploadedKey: null });
   });
 
   it.each([
@@ -370,8 +373,9 @@ describe('SECURITY 8: disk-full and unreadable files never become "uploaded"', (
     s.plugin.defaultBehavior = { kind: 'reject' };
     expect(await s.uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'FILE', retryable: true });
     expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', uploadedKey: null });
-    // Control: when the disk has room the same row uploads.
+    // Control: when the disk has room (and the backoff has passed) the same row uploads.
     s.plugin.defaultBehavior = { kind: 'complete' };
+    s.clock.advance(3_600_000);
     expect((await s.uploader.uploadDetailed(ref())).ok).toBe(true);
   });
 });

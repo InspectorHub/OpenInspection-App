@@ -173,3 +173,62 @@ describe('withDoc: the live document and the short-lived one', () => {
     await expect(resolve('insp-1', 'pend-1', 'not a key')).rejects.toMatchObject({ code: 'INVALID_RECORD' });
   });
 });
+
+/** A Db that refuses every INSERT into the update table once `armed` is set, as a full disk does. */
+function failingInsertDb(inner: Db): Db & { arm(): void } {
+  let armed = false;
+  return {
+    arm: () => {
+      armed = true;
+    },
+    execute: (sql) => inner.execute(sql),
+    query: (sql, params) => inner.query(sql, params),
+    run: (sql, params) => (armed && sql.includes('INSERT INTO ydoc_updates') ? Promise.reject(new Error('disk I/O error')) : inner.run(sql, params)),
+    transaction: (fn) => inner.transaction(fn),
+  };
+}
+
+describe('withDoc: a change that did not reach the table is never reported as resolved (M-2)', () => {
+  it('an INSERT that fails makes the resolve fail with DOC_FAILED, reports the error, and leaves the stored document untouched', async () => {
+    const inner = await createSqlJsDb();
+    await migrate(inner, 0);
+    await persistedDoc(inner, 'insp-1', (doc) => seed(doc, 'k', [pendingEntry('pend-1')]));
+    const db = failingInsertDb(inner);
+    db.arm();
+    const errors: unknown[] = [];
+    const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers(), onError: (e) => errors.push(e) }) });
+    await expect(resolve('insp-1', 'pend-1', KEY)).rejects.toMatchObject({ code: 'DOC_FAILED' });
+    expect(errors.length).toBeGreaterThan(0);
+    expect(photosOf(await reload(inner, 'insp-1'), 'k')[0]).toMatchObject({ pendingId: 'pend-1', pendingUpload: true, key: '' });
+  });
+
+  it('positive control: a healthy Db resolves and a fresh document read from the table carries the key', async () => {
+    const inner = await createSqlJsDb();
+    await migrate(inner, 0);
+    await persistedDoc(inner, 'insp-1', (doc) => seed(doc, 'k', [pendingEntry('pend-1')]));
+    const db = failingInsertDb(inner);
+    const errors: unknown[] = [];
+    const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers(), onError: (e) => errors.push(e) }) });
+    await expect(resolve('insp-1', 'pend-1', KEY)).resolves.toBe('resolved');
+    expect(errors).toEqual([]);
+    expect(photosOf(await reload(inner, 'insp-1'), 'k')[0]).toMatchObject({ key: KEY });
+  });
+
+  it('a stored state that does not match the document after the write is also DOC_FAILED', async () => {
+    const inner = await createSqlJsDb();
+    await migrate(inner, 0);
+    await persistedDoc(inner, 'insp-1', (doc) => seed(doc, 'k', [pendingEntry('pend-1')]));
+    // Swallows the insert without an error: the write "succeeds" but nothing is stored.
+    const db: Db = {
+      execute: (sql) => inner.execute(sql),
+      query: (sql, params) => inner.query(sql, params),
+      run: (sql, params) => (sql.includes('INSERT INTO ydoc_updates') ? Promise.resolve({ changes: 0 }) : inner.run(sql, params)),
+      transaction: (fn) => inner.transaction(fn),
+    };
+    const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers() }) });
+    await expect(resolve('insp-1', 'pend-1', KEY)).rejects.toMatchObject({ code: 'DOC_FAILED' });
+  });
+});

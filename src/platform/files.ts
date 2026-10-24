@@ -11,8 +11,13 @@ export interface Files {
   displayUrl(path: string): Promise<string>;
   /** The `file://` uri of the file, for native plugins that read it themselves (the background uploader). */
   fileUri(path: string): Promise<string>;
-  /** True when the file can be inspected; false when it is not there (or the plugin cannot say). */
+  /**
+   * True when the file is there; false ONLY when the platform confirmed it is not. Any other failure (permission,
+   * I/O error, a plugin that cannot answer) rejects, so a caller never mistakes "could not check" for "gone".
+   */
   exists(path: string): Promise<boolean>;
+  /** The entries directly inside a directory of the app's storage. A directory that is not there lists as empty. */
+  list(directoryPath: string): Promise<FileEntry[]>;
   /**
    * Streams chunks into one file in the OS cache directory, without holding the
    * whole payload in memory. Intended for transient files such as an export
@@ -27,6 +32,23 @@ export interface Files {
   removeCache(path: string): Promise<void>;
 }
 
+export interface FileEntry {
+  name: string;
+  /** Last modification, milliseconds since the epoch; null when the platform did not say. */
+  mtimeMs: number | null;
+}
+
+/** The plugin's error code for a missing file (Android and iOS share the `OS-PLUG-FILE-` family). */
+const NOT_FOUND_CODE = 'OS-PLUG-FILE-0008';
+
+/** True only for the plugin's own "does not exist" answer, by its code or by its fixed message text. */
+export function isNotFoundError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  if (code === NOT_FOUND_CODE) return true;
+  return typeof message === 'string' && /does not exist/i.test(message);
+}
+
 /** The subset of the Filesystem plugin the adapter uses. */
 export interface FilesystemLike {
   writeFile(options: { path: string; data: string; directory: Directory; recursive: boolean }): Promise<{ uri: string }>;
@@ -35,6 +57,7 @@ export interface FilesystemLike {
   deleteFile(options: { path: string; directory: Directory }): Promise<void>;
   getUri(options: { path: string; directory: Directory }): Promise<{ uri: string }>;
   stat(options: { path: string; directory: Directory }): Promise<unknown>;
+  readdir(options: { path: string; directory: Directory }): Promise<{ files: { name: string; mtime?: number }[] }>;
 }
 
 export interface FilesDeps {
@@ -134,8 +157,19 @@ export function createFiles(deps: FilesDeps): Files {
       try {
         await fs.stat({ path, directory });
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        if (isNotFoundError(error)) return false;
+        throw error;
+      }
+    },
+    list: async (directoryPath) => {
+      assertSafeRelativePath(directoryPath);
+      try {
+        const { files } = await fs.readdir({ path: directoryPath, directory });
+        return files.map((entry) => ({ name: entry.name, mtimeMs: typeof entry.mtime === 'number' && Number.isFinite(entry.mtime) ? entry.mtime : null }));
+      } catch (error) {
+        if (isNotFoundError(error)) return [];
+        throw error;
       }
     },
   };

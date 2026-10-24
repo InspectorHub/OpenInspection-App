@@ -49,6 +49,13 @@ function fakeFs() {
       dirLog.push(`stat:${directory}`);
       return store.has(path) ? Promise.resolve({ type: 'file', size: store.get(path)?.length ?? 0 }) : Promise.reject(new Error('File does not exist'));
     },
+    readdir: ({ path, directory }) => {
+      dirLog.push(`readdir:${directory}`);
+      const prefix = `${path}/`;
+      const names = [...store.keys()].filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes('/'));
+      if (names.length === 0) return Promise.reject(new Error('Directory does not exist'));
+      return Promise.resolve({ files: names.map((key, index) => (index === 0 ? { name: key.slice(prefix.length), mtime: 5_000 } : { name: key.slice(prefix.length) })) });
+    },
   };
   return { fs, store, calls, dirs, dirLog };
 }
@@ -128,6 +135,39 @@ describe('Files I/O', () => {
     expect(await files.exists('media/a.jpg')).toBe(true);
     expect(await files.exists('media/missing.jpg')).toBe(false);
     expect(dirLog).toEqual(['write:LIBRARY_NO_CLOUD', 'uri:LIBRARY_NO_CLOUD', 'stat:LIBRARY_NO_CLOUD', 'stat:LIBRARY_NO_CLOUD']);
+  });
+
+  it('exists: only a confirmed not-found answers false; any other stat error is thrown, never read as "gone"', async () => {
+    const failWith = (error: unknown): ReturnType<typeof make> => {
+      const f = make();
+      f.fs.stat = () => Promise.reject(error);
+      return { ...f, files: createFiles({ fs: f.fs, convertFileSrc: (u) => u }) };
+    };
+    const notFoundByMessage = failWith(new Error("'stat' failed because file at '/data/media/a.jpg' does not exist."));
+    expect(await notFoundByMessage.files.exists('media/a.jpg')).toBe(false);
+    const notFoundByCode = failWith(Object.assign(new Error('x'), { code: 'OS-PLUG-FILE-0008' }));
+    expect(await notFoundByCode.files.exists('media/a.jpg')).toBe(false);
+    const legacy = failWith(new Error('File does not exist'));
+    expect(await legacy.files.exists('media/a.jpg')).toBe(false);
+
+    await expect(failWith(new Error('I/O error')).files.exists('media/a.jpg')).rejects.toThrow('I/O error');
+    await expect(failWith(Object.assign(new Error('denied'), { code: 'OS-PLUG-FILE-0007' })).files.exists('media/a.jpg')).rejects.toThrow('denied');
+    await expect(failWith('not an error').files.exists('media/a.jpg')).rejects.toBeDefined();
+  });
+
+  it('list: names and modification times of the direct entries; a missing directory is empty; other failures are thrown', async () => {
+    const { files, fs } = make();
+    expect(await files.list('media')).toEqual([]);
+    await files.write('media/a.jpg', Uint8Array.from([1]));
+    await files.write('media/b.jpg', Uint8Array.from([1]));
+    await files.write('other/c.jpg', Uint8Array.from([1]));
+    expect(await files.list('media')).toEqual([
+      { name: 'a.jpg', mtimeMs: 5_000 },
+      { name: 'b.jpg', mtimeMs: null },
+    ]);
+    fs.readdir = () => Promise.reject(new Error('I/O error'));
+    await expect(files.list('media')).rejects.toThrow('I/O error');
+    await expect(files.list('../x')).rejects.toThrow(/path/i);
   });
 
   it('reads back exactly what was written', async () => {
