@@ -370,11 +370,16 @@ describe('one login at a time, cancel and expiry (review wave)', () => {
       const opened: string[] = [];
       let closed = 0;
       let tab = false;
+      let signalOpened: () => void = () => undefined;
+      const openedSignal = new Promise<void>((resolve) => {
+        signalOpened = resolve;
+      });
       const never = createAndroidAuthSession({
         browser: {
           open: ({ url }) => {
             opened.push(url);
             tab = true;
+            signalOpened();
             return Promise.resolve();
           },
           close: () => {
@@ -391,7 +396,7 @@ describe('one login at a time, cancel and expiry (review wave)', () => {
       const r = await rig({ authSession: never });
       vi.useFakeTimers();
       const outcome = codeOf(r.flow.signIn(r.server.origin));
-      for (let i = 0; i < 100 && opened.length === 0; i += 1) await vi.advanceTimersByTimeAsync(10);
+      await openedSignal;
       expect(opened).toHaveLength(1);
       expect(r.flow.hasPending()).toBe(true);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -437,16 +442,21 @@ describe('callbacks with an unusable state on the real Android session', () => {
     vi.useRealTimers();
   });
 
-  function realSession(timeoutMs?: number): { session: AuthSession; opened: string[]; closed: () => number; deliver(url: string): void } {
+  function realSession(timeoutMs?: number): { session: AuthSession; opened: string[]; whenOpened: Promise<void>; closed: () => number; deliver(url: string): void } {
     const urlListeners: ((e: { url: string }) => void)[] = [];
     const opened: string[] = [];
     let closed = 0;
     let tab = false;
+    let signalOpened: () => void = () => undefined;
+    const whenOpened = new Promise<void>((resolve) => {
+      signalOpened = resolve;
+    });
     const session = createAndroidAuthSession({
       browser: {
         open: ({ url }) => {
           opened.push(url);
           tab = true;
+          signalOpened();
           return Promise.resolve();
         },
         close: () => {
@@ -465,7 +475,7 @@ describe('callbacks with an unusable state on the real Android session', () => {
       },
       timeoutMs,
     });
-    return { session, opened, closed: () => closed, deliver: (url) => urlListeners.forEach((l) => l({ url })) };
+    return { session, opened, whenOpened, closed: () => closed, deliver: (url) => urlListeners.forEach((l) => l({ url })) };
   }
 
   const variants: [string, (genuine: string) => string][] = [
@@ -501,7 +511,7 @@ describe('callbacks with an unusable state on the real Android session', () => {
     const r = await rig({ authSession: real.session });
     vi.useFakeTimers();
     const outcome = codeOf(r.flow.signIn(r.server.origin));
-    for (let i = 0; i < 100 && real.opened.length === 0; i += 1) await vi.advanceTimersByTimeAsync(10);
+    await real.whenOpened;
     const genuine = await r.server.authorize(real.opened[0] ?? '');
     real.deliver(damage(genuine));
     await vi.advanceTimersByTimeAsync(59_000);

@@ -128,10 +128,15 @@ describe('callback router', () => {
     const app = fakeApp();
     const router = registerCallbackRouter(app);
     let authorizeUrl = '';
+    let signalStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
     const world = await createWorld({
       authSession: () => ({
         start: (url) => {
           authorizeUrl = url;
+          signalStarted();
           return new Promise<string>(() => undefined);
         },
         cancel: () => undefined,
@@ -141,7 +146,7 @@ describe('callback router', () => {
     router.bind(world.services.flow);
     await connectToServer(world.services, world.server.origin);
     const signedIn = world.services.flow.signIn(world.server.origin);
-    for (let i = 0; i < 50 && authorizeUrl === ''; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    await started;
     expect(authorizeUrl).not.toBe('');
     app.emit(await world.server.authorize(authorizeUrl));
     await expect(signedIn).resolves.toMatchObject({ origin: world.server.origin });

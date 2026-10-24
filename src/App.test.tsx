@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -63,7 +63,7 @@ describe('App callback routing', () => {
     const bind = vi.fn(() => unbind);
     const view = render(<App open={() => Promise.resolve(world.services)} allowInsecureHttp={false} callbacks={{ bind }} />);
     await screen.findByRole('heading', { name: 'Choose your server' });
-    expect(bind).toHaveBeenCalledWith(world.services.flow);
+    await waitFor(() => expect(bind).toHaveBeenCalledWith(world.services.flow));
     view.unmount();
     expect(unbind).toHaveBeenCalled();
   });

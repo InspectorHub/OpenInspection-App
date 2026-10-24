@@ -67,13 +67,17 @@ describe('initSecureStore install marker', () => {
     const { storage, log } = fakeStorage();
     const inner = createMemoryKeyValue();
     let reads = 0;
+    let releaseSecondRead: () => void = () => undefined;
+    const secondReadGate = new Promise<void>((resolve) => {
+      releaseSecondRead = resolve;
+    });
     const markers = {
       ...inner,
       get: async (k: string) => {
         reads += 1;
-        const delay = reads === 1 ? 1 : 40;
+        const first = reads === 1;
         const seen = await inner.get(k);
-        await new Promise((r) => setTimeout(r, delay));
+        if (!first) await secondReadGate;
         return seen;
       },
     };
@@ -81,7 +85,7 @@ describe('initSecureStore install marker', () => {
     const pendingB = initSecureStore(storage, markers);
     const a = await pendingA;
     await a.set('refresh-token', 'fresh');
-    await new Promise((r) => setTimeout(r, 60));
+    releaseSecondRead();
     const b = await pendingB;
     expect(log.filter((l) => l === 'clear')).toHaveLength(1);
     expect(await b.get('refresh-token')).toBe('fresh');

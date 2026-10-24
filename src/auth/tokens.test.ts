@@ -515,7 +515,8 @@ function gateOf(): { gate: Promise<void>; release: () => void } {
 }
 
 async function until(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 200 && !condition(); i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  const deadline = Date.now() + 15_000;
+  while (!condition() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
   expect(condition()).toBe(true);
 }
 
