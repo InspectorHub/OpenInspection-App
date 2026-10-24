@@ -12,6 +12,7 @@ import {
   assertQuarantineSource,
   migrate,
   readSchemaVersion,
+  SchemaTooNewError,
   toUpgradeStatements,
   type Migration,
 } from './schema';
@@ -115,6 +116,7 @@ describe('migrate() on the sql.js double', () => {
       ['state', 'TEXT', 1, 0],
       ['last_error', 'TEXT', 0, 0],
       ['created_at', 'INTEGER', 1, 0],
+      ['inspection_id', 'TEXT', 0, 0],
     ]);
     expect(await shape('work_package')).toEqual([
       ['inspection_id', 'TEXT', 0, 1],
@@ -136,6 +138,83 @@ describe('migrate() on the sql.js double', () => {
       "PRAGMA index_info('idx_ydoc_updates_doc')",
     );
     expect(idx.map((i) => i.name)).toEqual(['doc_name', 'id']);
+  });
+
+  it('creates exactly the expected secondary indexes', async () => {
+    await migrate(db, 0);
+    const indexes = async (table: string) =>
+      (await db.query<{ name: string; unique: number; origin: string }>(`PRAGMA index_list(${table})`))
+        .filter((i) => i.origin === 'c')
+        .map((i) => [i.name, i.unique])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    expect(await indexes('ydoc_updates')).toEqual([['idx_ydoc_updates_doc', 0]]);
+    expect(await indexes('media')).toEqual([['idx_media_inspection', 0]]);
+    expect(await indexes('outbox')).toEqual([
+      ['idx_outbox_inspection', 0],
+      ['idx_outbox_seq', 1],
+    ]);
+    expect(await indexes('resource_cache')).toEqual([['idx_resource_cache_package', 0]]);
+    expect(await indexes('device_state')).toEqual([]);
+    expect(await indexes('work_package')).toEqual([]);
+  });
+
+  describe('outbox constraints and lookups', () => {
+    const insert = (key: string, seq: number, inspectionId: string | null) =>
+      db.run(
+        'INSERT INTO outbox (idempotency_key, seq, op, payload, state, created_at, inspection_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [key, seq, 'op', '{}', 'pending', 1, inspectionId],
+      );
+    const planOf = async (sql: string) =>
+      (await db.query<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, ['i1'])).map((p) => p.detail).join(' | ');
+
+    it('accepts distinct seq values (positive control)', async () => {
+      await migrate(db, 0);
+      await insert('k1', 1, 'i1');
+      await insert('k2', 2, 'i1');
+      expect(await db.query('SELECT count(*) AS n FROM outbox')).toEqual([{ n: 2 }]);
+    });
+
+    it('rejects two rows with the same seq', async () => {
+      await migrate(db, 0);
+      await insert('k1', 1, 'i1');
+      await expect(insert('k2', 1, 'i2')).rejects.toThrow(/UNIQUE/i);
+    });
+
+    it('allows a NULL inspection_id for ops not tied to an inspection', async () => {
+      await migrate(db, 0);
+      await insert('k1', 1, null);
+      expect(await db.query('SELECT inspection_id FROM outbox')).toEqual([{ inspection_id: null }]);
+    });
+
+    it('finds outbox rows by inspection_id through the index', async () => {
+      await migrate(db, 0);
+      await insert('k1', 1, 'i1');
+      await insert('k2', 2, 'i2');
+      await insert('k3', 3, 'i1');
+      const rows = await db.query<{ idempotency_key: string }>(
+        'SELECT idempotency_key FROM outbox WHERE inspection_id = ? ORDER BY seq',
+        ['i1'],
+      );
+      expect(rows.map((r) => r.idempotency_key)).toEqual(['k1', 'k3']);
+      expect(await planOf('SELECT idempotency_key FROM outbox WHERE inspection_id = ?')).toContain(
+        'idx_outbox_inspection',
+      );
+    });
+
+    it('finds media rows by inspection_id through the index', async () => {
+      await migrate(db, 0);
+      expect(await planOf('SELECT pending_id FROM media WHERE inspection_id = ?')).toContain(
+        'idx_media_inspection',
+      );
+    });
+  });
+
+  it('can run the whole v1 statement list twice without error and keeps existing data', async () => {
+    const statements = MIGRATIONS[0]?.statements ?? [];
+    for (const s of statements) await db.execute(s);
+    await db.run('INSERT INTO device_state (key, value) VALUES (?, ?)', ['role', 'inspector']);
+    for (const s of statements) await db.execute(s);
+    expect(await db.query('SELECT key, value FROM device_state')).toEqual([{ key: 'role', value: 'inspector' }]);
   });
 
   it('round-trips a BLOB through ydoc_updates.data', async () => {
@@ -199,6 +278,40 @@ describe('migrate() on the sql.js double', () => {
       expect(await db.query('SELECT value FROM device_state WHERE key = ?', ['role'])).toEqual([{ value: 'inspector' }]);
     });
 
+    it('rolls back the schema change when a later statement of the same migration fails', async () => {
+      await migrate(db, 0);
+      const broken: Migration = {
+        toVersion: CURRENT_SCHEMA_VERSION + 1,
+        statements: ['ALTER TABLE work_package ADD COLUMN early TEXT', 'INSERT INTO no_such_table VALUES (1)'],
+      };
+      await expect(migrate(db, CURRENT_SCHEMA_VERSION, [...MIGRATIONS, broken])).rejects.toThrow();
+      expect(await readSchemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(Object.keys(await columns('work_package'))).not.toContain('early');
+    });
+
+    it('rolls back the schema change when the user_version bump itself fails', async () => {
+      await migrate(db, 0);
+      const inner = db;
+      const failingBump: Db = {
+        ...inner,
+        transaction: (fn) =>
+          inner.transaction((tx) =>
+            fn({
+              ...tx,
+              execute: (sql) =>
+                sql.startsWith('PRAGMA user_version') ? Promise.reject(new Error('bump failed')) : tx.execute(sql),
+            }),
+          ),
+      };
+      const v2: Migration = {
+        toVersion: CURRENT_SCHEMA_VERSION + 1,
+        statements: ['ALTER TABLE work_package ADD COLUMN bumped TEXT'],
+      };
+      await expect(migrate(failingBump, CURRENT_SCHEMA_VERSION, [...MIGRATIONS, v2])).rejects.toThrow('bump failed');
+      expect(await readSchemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(Object.keys(await columns('work_package'))).not.toContain('bumped');
+    });
+
     it('rolls back a failing migration and keeps the previous version', async () => {
       await migrate(db, 0);
       const broken: Migration = {
@@ -209,6 +322,40 @@ describe('migrate() on the sql.js double', () => {
       expect(await readSchemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
       expect(Object.keys(await columns('work_package'))).not.toContain('half_done');
     });
+  });
+});
+
+describe('migrate() guards', () => {
+  it('opens a database whose version equals the code version (positive control)', async () => {
+    await migrate(db, 0);
+    expect(await migrate(db, CURRENT_SCHEMA_VERSION)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it('throws SchemaTooNewError when the stored version is higher than the code knows', async () => {
+    const err = await migrate(db, CURRENT_SCHEMA_VERSION + 1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SchemaTooNewError);
+    expect((err as SchemaTooNewError).dbVersion).toBe(CURRENT_SCHEMA_VERSION + 1);
+    expect((err as SchemaTooNewError).codeVersion).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it('does not touch the database when it is too new', async () => {
+    await expect(migrate(db, CURRENT_SCHEMA_VERSION + 1)).rejects.toThrow(SchemaTooNewError);
+    expect(await db.query("SELECT name FROM sqlite_master WHERE type = 'table'")).toEqual([]);
+  });
+
+  const m = (toVersion: number): Migration => ({ toVersion, statements: ['SELECT 1'] });
+
+  it('accepts a contiguous list starting at 1 (positive control)', async () => {
+    expect(await migrate(db, 0, [m(1), m(2), m(3)])).toBe(3);
+  });
+
+  it.each([
+    ['does not start at 1', [m(2), m(3)]],
+    ['has a gap', [m(1), m(3)]],
+    ['is not sorted', [m(2), m(1)]],
+    ['has a duplicate', [m(1), m(1)]],
+  ])('throws when the migrations list %s', async (_label, list) => {
+    await expect(migrate(db, 0, list)).rejects.toThrow(/contiguous|ascending|start at 1/i);
   });
 });
 

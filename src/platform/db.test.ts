@@ -255,6 +255,71 @@ describe('Db (sql.js test double)', () => {
       expect(rows.map((r) => r.name)).toEqual(['slow']);
     });
 
+    describe('leaves no timers behind', () => {
+      const setup = async () => {
+        vi.useFakeTimers();
+        const timed = await createSqlJsDb({ deadlockTimeoutMs: 1000 });
+        await timed.execute('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+        return timed;
+      };
+
+      it('positive control: a waiter queued behind a running transaction arms a timer', async () => {
+        const timed = await setup();
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const txn = timed.transaction(() => gate);
+        await Promise.resolve();
+        const waiter = timed.run('INSERT INTO items (name) VALUES (?)', ['w']);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBe(1);
+        release();
+        await txn;
+        await waiter;
+      });
+
+      it('after a committed transaction with a queued waiter', async () => {
+        const timed = await setup();
+        const txn = timed.transaction(async (tx) => {
+          await tx.run('INSERT INTO items (name) VALUES (?)', ['a']);
+        });
+        await Promise.resolve();
+        const waiter = timed.run('INSERT INTO items (name) VALUES (?)', ['w']);
+        await txn;
+        await waiter;
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('after a rolled-back transaction with a queued waiter', async () => {
+        const timed = await setup();
+        const txn = timed.transaction(async (tx) => {
+          await tx.run('INSERT INTO items (name) VALUES (?)', ['a']);
+          throw new Error('boom');
+        });
+        const caught = expect(txn).rejects.toThrow('boom');
+        await Promise.resolve();
+        const waiter = timed.run('INSERT INTO items (name) VALUES (?)', ['w']);
+        await caught;
+        await waiter;
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('after a waiter expired', async () => {
+        const timed = await setup();
+        const txn = timed.transaction(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        });
+        await Promise.resolve();
+        const waiter = timed.run('INSERT INTO items (name) VALUES (?)', ['never']);
+        const caught = expect(waiter).rejects.toThrow(/waited more than 1000 ms/);
+        await vi.advanceTimersByTimeAsync(5000);
+        await caught;
+        await txn;
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    });
+
     it('keeps calls through the tx handle working', async () => {
       const out = await db.transaction(async (tx) => {
         await tx.run('INSERT INTO items (name) VALUES (?)', ['x']);

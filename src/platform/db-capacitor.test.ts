@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SchemaTooNewError } from './schema';
 import {
   type DbChanges,
   decodeRow,
@@ -17,6 +18,7 @@ class FakeConn implements SqliteDbConnectionLike {
   transactionStillOpen = true;
   failProbeWith: Error | null = null;
   queryRows: unknown[] = [];
+  userVersion = 0;
 
   open() {
     this.calls.push('open');
@@ -28,6 +30,7 @@ class FakeConn implements SqliteDbConnectionLike {
   }
   query(sql: string, values?: unknown[]) {
     this.calls.push(`query:${sql}:${JSON.stringify(values)}`);
+    if (sql === 'PRAGMA user_version') return Promise.resolve({ values: [{ user_version: this.userVersion }] });
     return Promise.resolve({ values: this.queryRows });
   }
   run(sql: string, values?: unknown[], tx?: boolean) {
@@ -87,6 +90,10 @@ class FakeSqlite implements SqliteConnectionLike {
     this.calls.push(`createConnection:${name}:${String(enc)}:${mode}:${String(version)}:${String(ro)}`);
     return Promise.resolve(this.conn);
   }
+  closeConnection(name: string) {
+    this.calls.push(`closeConnection:${name}`);
+    return Promise.resolve();
+  }
   addUpgradeStatement(name: string) {
     this.calls.push(`addUpgradeStatement:${name}`);
     return Promise.resolve();
@@ -116,7 +123,35 @@ describe('openCapacitorDb', () => {
       'isConnection',
       'createConnection:oi:true:secret:2:false',
     ]);
-    expect(sqlite.conn.calls).toEqual(['open']);
+    expect(sqlite.conn.calls).toEqual(['open', 'query:PRAGMA user_version:undefined']);
+  });
+
+  it('opens when the stored version equals the code version (positive control)', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = opts.version;
+    await expect(openCapacitorDb(sqlite, opts)).resolves.toBeDefined();
+    expect(sqlite.calls.some((c) => c.startsWith('closeConnection'))).toBe(false);
+  });
+
+  it('closes the connection and throws SchemaTooNewError when the stored version is higher', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = opts.version + 1;
+    const err = await openCapacitorDb(sqlite, opts).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SchemaTooNewError);
+    expect((err as SchemaTooNewError).dbVersion).toBe(opts.version + 1);
+    expect((err as SchemaTooNewError).codeVersion).toBe(opts.version);
+    expect(sqlite.calls).toContain('closeConnection:oi');
+  });
+
+  it('rejects a version lower than the highest upgrade toVersion before touching the plugin', async () => {
+    const sqlite = new FakeSqlite();
+    await expect(openCapacitorDb(sqlite, { ...opts, version: 1 })).rejects.toThrow(/version 1.*upgrade.*2/i);
+    expect(sqlite.calls).toEqual([]);
+  });
+
+  it('accepts a version above the highest upgrade toVersion', async () => {
+    const sqlite = new FakeSqlite();
+    await expect(openCapacitorDb(sqlite, { ...opts, version: 3 })).resolves.toBeDefined();
   });
 
   it('does not overwrite an existing secret and reuses an existing connection', async () => {

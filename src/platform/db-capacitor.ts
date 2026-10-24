@@ -1,6 +1,7 @@
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { Capacitor } from '@capacitor/core';
 import { createDb, type Db, type DbOptions } from './db';
+import { CURRENT_SCHEMA_VERSION, SchemaTooNewError, toUpgradeStatements } from './schema';
 
 /** The platforms the adapter distinguishes; anything that is not Android or iOS is `web`. */
 export type DbPlatform = 'android' | 'ios' | 'web';
@@ -41,11 +42,12 @@ export interface SqliteConnectionLike {
     readonly: boolean,
   ): Promise<SqliteDbConnectionLike>;
   addUpgradeStatement(database: string, upgrade: DbUpgrade[]): Promise<void>;
+  closeConnection(database: string, readonly: boolean): Promise<void>;
 }
 
 export interface OpenCapacitorDbOptions {
   name: string;
-  /** Latest schema version; must equal the highest `toVersion` in `upgrades`. */
+  /** Latest schema version; must be at least the highest `toVersion` in `upgrades`. */
   version: number;
   /** Versioned migration statements, registered before the connection is created. */
   upgrades: DbUpgrade[];
@@ -64,12 +66,20 @@ export function randomHex32(): string {
 /**
  * Opens (creating on first launch) the encrypted database and returns a `Db`.
  * The plugin manages the encryption key itself; this only provisions it once.
+ * Throws `SchemaTooNewError` (after closing the connection) when the stored
+ * schema version is higher than `version`.
  */
 export async function openCapacitorDb(
   sqlite: SqliteConnectionLike,
   options: OpenCapacitorDbOptions,
 ): Promise<Db> {
   const { name, version, upgrades } = options;
+  const highest = Math.max(0, ...upgrades.map((u) => u.toVersion));
+  if (version < highest) {
+    throw new Error(
+      `Schema version ${String(version)} is lower than the highest upgrade version ${String(highest)}`,
+    );
+  }
 
   const stored = await sqlite.isSecretStored();
   if (!stored.result) {
@@ -86,12 +96,28 @@ export async function openCapacitorDb(
     ? await sqlite.retrieveConnection(name, false)
     : await sqlite.createConnection(name, true, 'secret', version, false);
   await conn.open();
+  const storedVersion = await readUserVersion(conn);
+  if (storedVersion > version) {
+    await sqlite.closeConnection(name, false);
+    throw new SchemaTooNewError(storedVersion, version);
+  }
   return wrapConnection(conn, options.platform);
 }
 
+async function readUserVersion(conn: SqliteDbConnectionLike): Promise<number> {
+  const res = await conn.query('PRAGMA user_version');
+  const row = (res.values ?? [])[0] as { user_version?: number } | undefined;
+  return row?.user_version ?? 0;
+}
+
 /** Thin real-plugin wiring; everything above is unit-tested with fakes. */
-export function openRealCapacitorDb(options: Omit<OpenCapacitorDbOptions, 'platform'>): Promise<Db> {
+export function openRealCapacitorDb(
+  options: Omit<OpenCapacitorDbOptions, 'platform' | 'version' | 'upgrades'> &
+    Partial<Pick<OpenCapacitorDbOptions, 'version' | 'upgrades'>>,
+): Promise<Db> {
   return openCapacitorDb(new SQLiteConnection(CapacitorSQLite), {
+    version: CURRENT_SCHEMA_VERSION,
+    upgrades: toUpgradeStatements(),
     ...options,
     platform: toDbPlatform(Capacitor.getPlatform()),
   });
