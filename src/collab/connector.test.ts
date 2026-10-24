@@ -776,3 +776,384 @@ describe('what is reported', () => {
     handle.destroy();
   });
 });
+
+/** Lets every already-resolved promise chain run; the code under test has no timer or I/O in these steps. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+}
+
+/** An http port that answers only when the test says so; `pending.items[n]` answers the nth request. */
+function heldHttp(): { http: Http; pending: Signals<(response: HttpResponse) => void> } {
+  const pending = new Signals<(response: HttpResponse) => void>();
+  return {
+    http: {
+      request: () =>
+        new Promise<HttpResponse>((resolve) => {
+          pending.push(resolve);
+        }),
+    },
+    pending,
+  };
+}
+
+function ticketOf(socket: FakeSocket): string {
+  return url(socket).searchParams.get('ticket') ?? '';
+}
+
+describe('one connection per inspection', () => {
+  it('refuses a second connection for an inspection that is still connected, and says why', async () => {
+    const first = connect(world);
+    await world.socketSignal.waitFor(1);
+    expect(() => connect(world)).toThrow(/already open/);
+    await settle();
+    expect(world.sockets).toHaveLength(1);
+    expect(world.requests).toHaveLength(1);
+    first.destroy();
+  });
+
+  it('allows the next connection as soon as the first was destroyed, and another inspection at any time', async () => {
+    const first = connect(world);
+    await world.socketSignal.waitFor(1);
+    const other = connect(world, 'insp-2');
+    first.destroy();
+    const second = connect(world);
+    await world.socketSignal.waitFor(3);
+    expect(world.sockets).toHaveLength(3);
+    second.destroy();
+    other.destroy();
+  });
+});
+
+describe('an attempt that the world overtook', () => {
+  it('connects again when the network went away and came back while a ticket was being fetched', async () => {
+    const held = heldHttp();
+    world = await createWorld({ http: held.http });
+    const handle = connect(world);
+    await held.pending.waitFor(1);
+
+    world.emitOnline(false);
+    world.emitOnline(true);
+    (held.pending.items[0] as (r: HttpResponse) => void)(ticketReply('ticket-number-0001-abcdef'));
+    await held.pending.waitFor(2);
+    (held.pending.items[1] as (r: HttpResponse) => void)(ticketReply('ticket-number-0002-abcdef'));
+    await world.socketSignal.waitFor(1);
+
+    expect(world.sockets).toHaveLength(1);
+    expect(ticketOf(world.sockets[0] as FakeSocket)).toBe('ticket-number-0002-abcdef');
+    handle.destroy();
+  }, 1000);
+
+  it('connects again when the device was locked and unlocked while a token was being fetched', async () => {
+    const gateToken = new Signals<(token: string | null) => void>();
+    world.tokens.getAccessToken.mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          gateToken.push(resolve);
+        }),
+    );
+    const handle = connect(world);
+    await gateToken.waitFor(1);
+
+    world.locked = true;
+    world.connector.onLockChange();
+    await settle();
+    expect(world.statuses.items.at(-1)).toBe('locked');
+    world.locked = false;
+    world.connector.onLockChange();
+    await settle();
+    (gateToken.items[0] as (token: string | null) => void)('access-token-1');
+    await world.socketSignal.waitFor(1);
+
+    expect(world.sockets).toHaveLength(1);
+    expect(world.requests).toHaveLength(2);
+    expect(ticketOf(world.sockets[0] as FakeSocket)).toBe('ticket-number-0002-abcdef');
+    handle.destroy();
+  }, 1000);
+
+  it('opens no socket for a ticket that arrives after the network went away, and schedules nothing', async () => {
+    const held = heldHttp();
+    world = await createWorld({ http: held.http });
+    const handle = connect(world);
+    await held.pending.waitFor(1);
+
+    world.emitOnline(false);
+    (held.pending.items[0] as (r: HttpResponse) => void)(ticketReply('ticket-number-0001-abcdef'));
+    await settle();
+    expect(world.sockets).toHaveLength(0);
+    expect(world.timers.pending()).toBe(0);
+    expect(world.statuses.items.at(-1)).toBe('offline');
+    handle.destroy();
+  });
+
+  it('opens no socket for a ticket that arrives after the device was locked, and schedules nothing', async () => {
+    const held = heldHttp();
+    world = await createWorld({ http: held.http });
+    const handle = connect(world);
+    await held.pending.waitFor(1);
+
+    world.locked = true;
+    world.connector.onLockChange();
+    await settle();
+    (held.pending.items[0] as (r: HttpResponse) => void)(ticketReply('ticket-number-0001-abcdef'));
+    await settle();
+    expect(world.sockets).toHaveLength(0);
+    expect(world.timers.pending()).toBe(0);
+    expect(world.statuses.items.at(-1)).toBe('locked');
+    handle.destroy();
+  });
+});
+
+describe('no socket before the stored state is applied', () => {
+  async function worldWithHeldRead(): Promise<Signals<() => void>> {
+    const hold = new Signals<() => void>();
+    world = await createWorld({}, (real) => ({
+      ...real,
+      query: async (sql, params) => {
+        await new Promise<void>((resolve) => {
+          hold.push(resolve);
+        });
+        return real.query(sql, params);
+      },
+    }));
+    return hold;
+  }
+
+  it('ignores a network-online event while the stored state is still being read', async () => {
+    const hold = await worldWithHeldRead();
+    const handle = connect(world);
+    await hold.waitFor(1);
+
+    world.emitOnline(true);
+    await settle();
+    expect(world.requests).toHaveLength(0);
+    expect(world.sockets).toHaveLength(0);
+
+    (hold.items[0] as () => void)();
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('ignores a lock change while the stored state is still being read', async () => {
+    const hold = await worldWithHeldRead();
+    const handle = connect(world);
+    await hold.waitFor(1);
+
+    world.connector.onLockChange();
+    await settle();
+    expect(world.requests).toHaveLength(0);
+    (hold.items[0] as () => void)();
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('never connects on a document that cannot be stored: not on online, not on a lock change, and says so', async () => {
+    world = await createWorld({}, (real) => ({ ...real, query: () => Promise.reject(new Error('read failed')) }));
+    const handle = connect(world);
+    await world.statuses.waitFor(1);
+    expect(world.statuses.items).toEqual(['storage_failed']);
+
+    world.emitOnline(false);
+    world.emitOnline(true);
+    world.connector.onLockChange();
+    await settle();
+    expect(world.requests).toHaveLength(0);
+    expect(world.sockets).toHaveLength(0);
+    expect(world.timers.pending()).toBe(0);
+    handle.destroy();
+  });
+});
+
+describe('frames that cannot be read', () => {
+  const MALFORMED: [string, Uint8Array][] = [
+    ['a truncated length', Uint8Array.from([0x80])],
+    ['a sync step 2 that claims more bytes than it has', Uint8Array.from([MSG_SYNC, syncProtocol.messageYjsSyncStep2, 9])],
+    ['an update that is not an update', Uint8Array.from([MSG_SYNC, UPDATE, 4, 255, 255, 255, 255])],
+  ];
+
+  it.each(MALFORMED)('reports %s generically, drops the socket and reconnects with a new ticket', async (_name, bytes) => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+
+    expect(() => socket.serverSends(bytes)).not.toThrow();
+    expect(socket.closed).toBe(true);
+    expect(world.errors).toHaveLength(1);
+    const text = JSON.stringify(world.errors.map((e) => (e as Error).message));
+    expect(text).not.toContain('ticket-number');
+    expect(text).not.toContain(ORIGIN);
+    expect(world.timers.pending()).toBe(1);
+    expect(world.statuses.items.at(-1)).toBe('retrying');
+
+    socket.serverCloses();
+    expect(world.timers.pending()).toBe(1);
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(2);
+    expect(ticketOf(world.sockets[1] as FakeSocket)).not.toBe(ticketOf(socket));
+    handle.destroy();
+  });
+
+  it('control: a well-formed frame in the same place reports nothing and keeps the socket', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, new Y.Doc())));
+    expect(world.errors).toEqual([]);
+    expect(socket.closed).toBe(false);
+    expect(world.timers.pending()).toBe(0);
+    handle.destroy();
+  });
+});
+
+describe('a version restore in progress', () => {
+  it('does not reconnect while the document is being replaced, and reconnects once it is', async () => {
+    const deleting = new Signals<() => void>();
+    world = await createWorld({}, (real) => ({
+      ...real,
+      run: async (sql, params) => {
+        if (sql.startsWith('DELETE')) {
+          await new Promise<void>((resolve) => {
+            deleting.push(resolve);
+          });
+        }
+        return real.run(sql, params);
+      },
+    }));
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    const changesBefore = world.changes.items.length;
+
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await deleting.waitFor(1);
+    socket.serverCloses();
+    await settle();
+    expect(world.timers.pending()).toBe(0);
+    expect(world.sockets).toHaveLength(1);
+
+    (deleting.items[0] as () => void)();
+    await world.changes.waitFor(changesBefore + 1);
+    expect(world.timers.pending()).toBe(1);
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(2);
+    handle.destroy();
+  }, 1000);
+});
+
+describe('how long a reconnect may wait', () => {
+  it('never waits longer than five minutes, whatever the server asked for', async () => {
+    world.replies.push(reply(503, { error: 'busy' }, 3_600_000));
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.timers.requested()).toEqual([300_000]);
+    handle.destroy();
+  });
+
+  it('control: a request just under the cap is honoured as asked', async () => {
+    world.replies.push(reply(503, { error: 'busy' }, 299_000));
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.timers.requested()).toEqual([299_000]);
+    handle.destroy();
+  });
+});
+
+describe('purge waits for the connection to finish', () => {
+  it('closes the socket now, and deletes the rows only after a write already started has landed', async () => {
+    const log: string[] = [];
+    const insertStarted = new Signals<() => void>();
+    world = await createWorld({}, (real) => ({
+      ...real,
+      run: async (sql, params) => {
+        if (sql.startsWith('INSERT')) {
+          log.push('insert-started');
+          await new Promise<void>((resolve) => {
+            insertStarted.push(resolve);
+          });
+          const result = await real.run(sql, params);
+          log.push('insert-done');
+          return result;
+        }
+        if (sql.startsWith('DELETE')) log.push('delete');
+        return real.run(sql, params);
+      },
+    }));
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('k', 1);
+    await insertStarted.waitFor(1);
+
+    const purged = world.connector.purge('insp-1');
+    expect(socket.closed).toBe(true);
+    await barrier(world.db);
+    await settle();
+    expect(log).toEqual(['insert-started']);
+
+    (insertStarted.items[0] as () => void)();
+    await purged;
+    expect(log).toEqual(['insert-started', 'insert-done', 'delete']);
+    expect(await rows(world.db, 'results-insp-1')).toBe(0);
+  });
+});
+
+describe('a server that never accepts the upgrade', () => {
+  it('reports unreachable after five sockets in a row that never opened, and keeps retrying', async () => {
+    const handle = connect(world);
+    for (let i = 0; i < 5; i += 1) {
+      await world.socketSignal.waitFor(i + 1);
+      expect(world.statuses.items).not.toContain('unreachable');
+      (world.sockets[i] as FakeSocket).serverCloses();
+      if (i < 4) world.timers.fireNext();
+    }
+    expect(world.statuses.items.at(-1)).toBe('unreachable');
+    expect(world.timers.pending()).toBe(1);
+
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(6);
+    handle.destroy();
+  });
+
+  it('control: sockets that opened before they closed never count', async () => {
+    const handle = connect(world);
+    for (let i = 0; i < 7; i += 1) {
+      await world.socketSignal.waitFor(i + 1);
+      const socket = world.sockets[i] as FakeSocket;
+      socket.serverOpens();
+      socket.serverCloses();
+      world.timers.fireNext();
+    }
+    expect(world.statuses.items).not.toContain('unreachable');
+    handle.destroy();
+  });
+
+  it('control: a completed sync starts the count over', async () => {
+    const handle = connect(world);
+    for (let i = 0; i < 4; i += 1) {
+      await world.socketSignal.waitFor(i + 1);
+      (world.sockets[i] as FakeSocket).serverCloses();
+      world.timers.fireNext();
+    }
+    await world.socketSignal.waitFor(5);
+    const good = world.sockets[4] as FakeSocket;
+    good.serverOpens();
+    good.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, new Y.Doc())));
+    good.serverCloses();
+    world.timers.fireNext();
+    for (let i = 5; i < 9; i += 1) {
+      await world.socketSignal.waitFor(i + 1);
+      (world.sockets[i] as FakeSocket).serverCloses();
+      world.timers.fireNext();
+    }
+    expect(world.statuses.items).not.toContain('unreachable');
+    handle.destroy();
+  });
+});

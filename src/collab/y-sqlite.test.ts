@@ -437,6 +437,160 @@ describe('SqlitePersistence: compaction', () => {
   });
 });
 
+describe('SqlitePersistence: a second instance on the same document', () => {
+  async function editMany(doc: Y.Doc, total: number): Promise<void> {
+    for (let i = 0; i < total; i += 1) setKey(doc, `k${String(i)}`, i);
+  }
+
+  it('keeps rows another instance wrote after this one loaded, and merges them into its document', async () => {
+    const a = new Y.Doc();
+    const b = new Y.Doc();
+    const pa = await opened('results-a', a);
+    const pb = await opened('results-a', b);
+    setKey(b, 'from-b', 'kept');
+    await pb.flush();
+    await editMany(a, PREFERRED_TRIM_SIZE);
+    await pa.flush();
+
+    timers.fireNext();
+    await pa.flush();
+    expect(errors).toEqual([]);
+    expect(content(a)['from-b']).toBe('kept');
+
+    const restored = new Y.Doc();
+    await opened('results-a', restored);
+    expect(content(restored)['from-b']).toBe('kept');
+    expect(content(restored)).toEqual(content(a));
+  });
+
+  it('keeps a row the other instance wrote after the compaction was requested but before it ran', async () => {
+    const a = new Y.Doc();
+    const b = new Y.Doc();
+    const pa = await opened('results-a', a);
+    const pb = await opened('results-a', b);
+    await editMany(a, PREFERRED_TRIM_SIZE);
+    await pa.flush();
+
+    const hold = gate();
+    const blocker = db.transaction(async () => {
+      await hold.promise;
+    });
+    setKey(b, 'from-b', 'between');
+    timers.fireNext();
+    hold.open();
+    await blocker;
+    await pa.flush();
+    await pb.flush();
+
+    expect(errors).toEqual([]);
+    const restored = new Y.Doc();
+    await opened('results-a', restored);
+    expect(content(restored)['from-b']).toBe('between');
+    expect(content(restored)).toEqual(content(a));
+  });
+
+  it('keeps a row the other instance wrote after the compaction ran', async () => {
+    const a = new Y.Doc();
+    const b = new Y.Doc();
+    const pa = await opened('results-a', a);
+    const pb = await opened('results-a', b);
+    await editMany(a, PREFERRED_TRIM_SIZE);
+    timers.fireNext();
+    await pa.flush();
+    setKey(b, 'after', true);
+    await pb.flush();
+
+    const restored = new Y.Doc();
+    await opened('results-a', restored);
+    expect(content(restored)['after']).toBe(true);
+    expect(Object.keys(content(restored))).toHaveLength(PREFERRED_TRIM_SIZE + 1);
+  });
+
+  it('a lone instance still ends with exactly one row, and the compaction after it also does', async () => {
+    const doc = new Y.Doc();
+    const persistence = await opened('results-a', doc);
+    await editMany(doc, PREFERRED_TRIM_SIZE);
+    timers.fireNext();
+    await persistence.flush();
+    expect(await count('results-a')).toBe(1);
+
+    await editMany(doc, PREFERRED_TRIM_SIZE);
+    timers.fireNext();
+    await persistence.flush();
+    expect(await count('results-a')).toBe(1);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('SqlitePersistence: row accounting and the ready guard', () => {
+  it('stores an edit made before the stored state was applied exactly once, together with that state', async () => {
+    const seed = new Y.Doc();
+    const writer = await opened('results-a', seed);
+    setKey(seed, 'stored', 1);
+    await writer.flush();
+
+    const doc = new Y.Doc();
+    const persistence = open(db, 'results-a', doc);
+    setKey(doc, 'early', 2);
+    await persistence.whenSynced;
+    await persistence.flush();
+    expect(await count('results-a')).toBe(2);
+    expect(content(doc)).toEqual({ stored: 1, early: 2 });
+
+    const restored = new Y.Doc();
+    await opened('results-a', restored);
+    expect(content(restored)).toEqual({ stored: 1, early: 2 });
+  });
+
+  it('counts the inserts issued while a compaction waited for the connection', async () => {
+    const hold = gate();
+    const hurt = { on: true };
+    const doc = new Y.Doc();
+    const persistence = await opened(
+      'results-a',
+      doc,
+      faulty(db, { gateTransaction: hold.promise, failRun: (sql) => hurt.on && sql.startsWith('INSERT') }),
+    );
+    setKey(doc, 'lost-write', 1);
+    await persistence.flush();
+    expect(errors).toHaveLength(1);
+    hurt.on = false;
+
+    timers.fireNext();
+    setKey(doc, 'during-1', 1);
+    setKey(doc, 'during-2', 2);
+    setKey(doc, 'during-3', 3);
+    hold.open();
+    await persistence.flush();
+    expect(await count('results-a')).toBe(4);
+
+    for (let i = 0; i < PREFERRED_TRIM_SIZE - 5; i += 1) setKey(doc, `more${String(i)}`, i);
+    expect(timers.pending()).toBe(0);
+    setKey(doc, 'last', 1);
+    expect(timers.pending()).toBe(1);
+  });
+
+  it('does not compact because of a reload, and compacts on the first edit after reloading a full table', async () => {
+    const seed = new Y.Doc();
+    const updates: Uint8Array[] = [];
+    seed.on('update', (update: Uint8Array) => {
+      updates.push(update);
+    });
+    for (let i = 0; i < PREFERRED_TRIM_SIZE; i += 1) setKey(seed, `k${String(i)}`, i);
+    for (const update of updates) await db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-a', update]);
+    expect(await count('results-a')).toBe(PREFERRED_TRIM_SIZE);
+
+    const doc = new Y.Doc();
+    const persistence = await opened('results-a', doc);
+    await persistence.flush();
+    expect(timers.pending()).toBe(0);
+    expect(Object.keys(content(doc))).toHaveLength(PREFERRED_TRIM_SIZE);
+
+    setKey(doc, 'one-more', 1);
+    expect(timers.pending()).toBe(1);
+  });
+});
+
 describe('SqlitePersistence: failures are surfaced', () => {
   it('reports a failed write, and recovers by storing the whole state later', async () => {
     const hurt = { on: true };

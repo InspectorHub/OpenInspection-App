@@ -15,7 +15,7 @@ export interface LockedProps {
   reason: LockReason;
   /** The lock was evaluated again (after "Verify online"): unlocked, or locked for this or another reason. */
   onOutcome(outcome: LockOutcome): void;
-  /** The server refused the sign-in while verifying. Local data is untouched. */
+  /** The person chose to sign in again, or the server refused the session while verifying. Local data is untouched. */
   onSignInRequired(): void;
   /** Local data was cleared; the person can sign in again to the same server. */
   onCleared(): void;
@@ -159,8 +159,22 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
           {reason === 'revoked' ? `${items(waiting)} on this device ${waiting === 1 ? 'was' : 'were'} not uploaded` : `${items(waiting)} waiting to upload`}
         </p>
       )}
+      {reason === 'revoked' && <Body>Signed out by mistake? Sign in again with the same account to keep working with this data.</Body>}
       {notice && <Notice tone="bad">{notice}</Notice>}
       <div className="flex flex-col gap-3">
+        {reason === 'revoked' && (
+          <Button
+            disabled={verifying}
+            onClick={() =>
+              void latch(() => {
+                onSignInRequired();
+                return Promise.resolve();
+              })
+            }
+          >
+            Sign in again
+          </Button>
+        )}
         {canVerify && (
           <Button busy={verifying} onClick={() => void latch(verify)}>
             Verify online

@@ -8,7 +8,7 @@ import type { AppServices } from './compose';
 export type Screen =
   | { kind: 'booting' }
   | { kind: 'setup' }
-  | { kind: 'sign_in'; origin: string; relogin: boolean; notices: CompatNotice[] }
+  | { kind: 'sign_in'; origin: string; relogin: boolean; notices: CompatNotice[]; backToLock?: boolean }
   | { kind: 'signed_in'; origin: string; identity: StoredIdentity }
   /** Signed in, but the local data is held behind the lock screen. Nothing on it is deleted. */
   | { kind: 'locked'; origin: string; identity: StoredIdentity; reason: LockReason }

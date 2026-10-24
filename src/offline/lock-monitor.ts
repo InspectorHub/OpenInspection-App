@@ -90,6 +90,7 @@ export function startLockMonitor(deps: LockMonitorDeps): LockMonitor {
     const run = async (): Promise<void> => {
       if (stopped) return;
       try {
+        // A run still stale after every retry reports nothing: it neither resets nor increments the caller's failure count.
         for (let attempt = 0; attempt < MAX_STALE_RETRIES && !stopped; attempt += 1) {
           const version = lockStateVersion();
           const outcome = await evaluateAndPersist(deps.db, deps.clock.now());

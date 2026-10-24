@@ -23,6 +23,10 @@ const MSG_RESTORE = 2;
 
 const RECONNECT_BASE_MS = 400;
 const RECONNECT_MAX_MS = 30_000;
+/** The longest a server's Retry-After may hold a reconnect. The http layer accepts up to an hour; a live edit session must not wait that long. */
+const RETRY_AFTER_MAX_MS = 300_000;
+/** Sockets in a row that closed before they opened, without any sync in between, after which the server counts as unreachable. */
+const UNREACHABLE_AFTER = 5;
 /** Consecutive ticket refusals (401) tolerated before the connection stops trying on its own. */
 export const MAX_TICKET_REFUSALS = 3;
 
@@ -59,6 +63,10 @@ export type CollabStatus =
   | 'signed_out'
   /** Tickets were refused several times in a row while the session still looked valid. */
   | 'auth_rejected'
+  /** The stored state could not be read, so the document is never connected: its edits would not be saved. */
+  | 'storage_failed'
+  /** Several sockets in a row never opened and nothing synced. Still retrying, at the backoff ceiling. */
+  | 'unreachable'
   | 'closed';
 
 /** Reasons a connection stops trying until something outside it changes. */
@@ -106,6 +114,8 @@ export interface NativeCollabConnector extends FieldCollabConnector {
 
 /** A connection that is still shutting down is tracked until it has finished, so a purge can wait for it. */
 interface Entry {
+  /** False once `close` was called, even while the connection is still finishing its writes. */
+  active(): boolean;
   close(): Promise<void>;
   reevaluate(): void;
 }
@@ -124,7 +134,7 @@ function parseTicket(res: HttpResponse): string | null {
   return typeof ticket === 'string' && TICKET_PATTERN.test(ticket) ? ticket : null;
 }
 
-/** The ticket request and socket URL for the collab socket of one inspection; also what a presence socket needs. */
+/** The ticket request URL and the results-document socket URL (without its ticket) for one inspection. */
 export function collabEndpoints(origin: string, inspectionId: string): { ticket: string; socketBase: string } {
   const socketOrigin = origin.replace(/^http/, 'ws');
   return {
@@ -137,6 +147,18 @@ export function collabEndpoints(origin: string, inspectionId: string): { ticket:
  * The native `CollabConnector`: the results document is opened from SQLite first; only then, and only while
  * the device is online and not locked, a one-time ticket is fetched and a WebSocket opened to the pinned
  * origin. Every reconnect fetches a new ticket. Nothing here ever deletes stored data except `purge`.
+ *
+ * Wiring requirements for the code that composes and uses this connector:
+ *  - Pass an `onError` that tells the person their edits are not being saved. The default rethrows from a
+ *    microtask, which is a crash report, not a message. A document whose stored state cannot be read reports
+ *    the status `storage_failed` and is never connected.
+ *  - Call `purge(id)` when reconciliation reports the status `denied`, and do not `connect` that inspection
+ *    again while its purge is still awaiting: the new connection would load rows the purge is about to delete.
+ *  - Call `onLockChange()` whenever the offline lock may have changed, in particular on unlock and after a
+ *    sign-in; a connection that stopped for the lock starts again only through it.
+ *  - One live connection per inspection: `connect` throws while the previous one has not been destroyed.
+ *  - Presence is not served here. It needs its own ticketed socket path built from the pinned origin, because
+ *    `FieldUrls.presenceSocket` is synchronous and cannot carry a ticket fetched over the network.
  */
 export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabConnector {
   // One canonical origin, the same rule as the server screen; a plain-http remote origin is refused here too.
@@ -148,6 +170,11 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
 
   function open(inspectionId: string, opts: { onChange?: () => void; onSynced?: () => void }): ResultsDocHandle {
     if (!isValidInspectionId(inspectionId)) throw new RangeError('Invalid inspection id');
+    // Two live instances would each compact the same rows and each open a socket. One per inspection; a
+    // connection that was destroyed but is still finishing its writes does not count.
+    for (const other of live.get(inspectionId) ?? []) {
+      if (other.active()) throw new Error('This inspection is already open; destroy the existing connection before connecting again');
+    }
     const docName = resultsDocName(inspectionId);
     const endpoints = collabEndpoints(origin, inspectionId);
 
@@ -159,9 +186,15 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     let synced = false;
     let halt: Halt | null = null;
     let busy = false;
+    /** Something asked for a fresh attempt while one was running; the running one starts it when it ends. */
+    let rerun = false;
+    /** True once the stored state is applied. Nothing connects before it, and nothing ever does if it never is. */
+    let persisted = false;
     let generation = 0;
     let attempts = 0;
     let refusals = 0;
+    /** Sockets in a row that closed before they opened and with no sync since. */
+    let neverOpened = 0;
     let retryTimer: unknown = null;
     let closing: Promise<void> | null = null;
 
@@ -196,7 +229,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
 
     function scheduleRetry(minimumMs: number | null): void {
       if (destroyed || halt !== null || retryTimer !== null) return;
-      const delay = Math.max(reconnectDelayMs(attempts, random), minimumMs ?? 0);
+      const delay = Math.max(reconnectDelayMs(attempts, random), Math.min(minimumMs ?? 0, RETRY_AFTER_MAX_MS));
       attempts += 1;
       status('retrying');
       retryTimer = timers.setTimeout(() => {
@@ -255,21 +288,38 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     function openSocket(ticket: string): void {
       const target = `${endpoints.socketBase}?ticket=${encodeURIComponent(ticket)}`;
       let created: CollabSocket;
+      let opened = false;
       try {
         created = deps.openSocket(target, {
           open: () => {
             if (socket !== created || destroyed) return;
+            opened = true;
             status('open');
             sendStep1();
           },
           message: (data) => {
-            if (socket === created && !destroyed) onFrame(data, created);
+            if (socket !== created || destroyed) return;
+            try {
+              onFrame(data, created);
+            } catch {
+              // A frame that cannot be read says nothing about the document, and its bytes say nothing useful:
+              // report that it happened, drop this socket, and let the backoff reconnect.
+              report(new Error('A collaboration frame could not be read'));
+              dropSocket();
+              scheduleRetry(null);
+            }
           },
           close: () => {
             if (socket !== created) return;
             socket = null;
-            if (destroyed || halt !== null) return;
+            // While a restore swaps the document the socket must not come back on the old one; the restore
+            // reconnects when it is done.
+            if (destroyed || halt !== null || restoring) return;
             scheduleRetry(null);
+            if (!opened) {
+              neverOpened += 1;
+              if (neverOpened >= UNREACHABLE_AFTER) status('unreachable');
+            }
           },
         });
       } catch {
@@ -279,6 +329,23 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         return;
       }
       socket = created;
+    }
+
+    /**
+     * `syncProtocol.readSyncMessage`, except that a frame which cannot be read throws. The library version catches
+     * the error itself and only logs it, which would leave a corrupt frame looking like a good one.
+     */
+    function readSyncMessage(decoder: decoding.Decoder, reply: encoding.Encoder, from: CollabSocket): number {
+      const messageType = decoding.readVarUint(decoder);
+      if (messageType === syncProtocol.messageYjsSyncStep1) {
+        syncProtocol.readSyncStep1(decoder, reply, doc);
+      } else if (messageType === syncProtocol.messageYjsSyncStep2 || messageType === syncProtocol.messageYjsUpdate) {
+        // The socket is the transaction origin, so the forwarder does not send the server its own update back.
+        Y.applyUpdate(doc, decoding.readVarUint8Array(decoder), from);
+      } else {
+        throw new Error('Unknown sync message type');
+      }
+      return messageType;
     }
 
     function onFrame(data: Uint8Array, from: CollabSocket): void {
@@ -292,11 +359,11 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       if (kind !== MSG_SYNC) return;
       const reply = encoding.createEncoder();
       encoding.writeVarUint(reply, MSG_SYNC);
-      // The socket is the transaction origin, so the forwarder does not send the server its own update back.
-      const messageType = syncProtocol.readSyncMessage(decoder, reply, doc, from);
+      const messageType = readSyncMessage(decoder, reply, from);
       if (messageType === syncProtocol.messageYjsSyncStep1 && from.isOpen()) from.send(encoding.toUint8Array(reply));
       if (messageType === syncProtocol.messageYjsSyncStep2) {
         attempts = 0;
+        neverOpened = 0;
         if (!synced) {
           synced = true;
           opts.onChange?.();
@@ -335,12 +402,18 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         sendStep1();
       } finally {
         restoring = false;
+        // A socket that closed during the restore was not retried; do it now that the document is whole.
+        if (!destroyed && halt === null && socket === null && retryTimer === null && !busy) scheduleRetry(null);
       }
     }
 
     // ── one connection attempt ───────────────────────────────────────────────
     async function attempt(): Promise<void> {
-      if (destroyed || busy || socket !== null) return;
+      if (destroyed || !persisted || socket !== null) return;
+      if (busy) {
+        rerun = true;
+        return;
+      }
       busy = true;
       const mine = ++generation;
       const stale = (): boolean => destroyed || mine !== generation || halt !== null;
@@ -372,11 +445,21 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         if (!stale()) scheduleRetry(null);
       } finally {
         busy = false;
+        // The network or the lock changed while this attempt was waiting. Whatever it found is out of date, so
+        // start over rather than leave the connection with no socket and no timer until the next event.
+        if (rerun) {
+          rerun = false;
+          if (!destroyed && halt === null && socket === null) {
+            clearRetry();
+            void attempt();
+          }
+        }
       }
     }
 
     function restart(): void {
       attempts = 0;
+      neverOpened = 0;
       clearRetry();
       void attempt();
     }
@@ -437,7 +520,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       return closing;
     }
 
-    const entry: Entry = { close, reevaluate };
+    const entry: Entry = { active: () => !destroyed, close, reevaluate };
     const group = live.get(inspectionId) ?? new Set<Entry>();
     group.add(entry);
     live.set(inspectionId, group);
@@ -448,12 +531,15 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     const persistenceSynced = new Promise<void>((resolve) => {
       firstPersistence.whenSynced.then(
         () => {
+          persisted = true;
           resolve();
           if (destroyed) return;
           opts.onChange?.();
           void attempt();
         },
-        () => undefined,
+        () => {
+          if (!destroyed) status('storage_failed');
+        },
       );
     });
 

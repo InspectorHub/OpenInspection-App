@@ -15,9 +15,11 @@ export interface SignInProps {
   notices: CompatNotice[];
   onSignedIn(result: SignInResult): void;
   onChangeServer(): void;
+  /** Present when this screen was reached from the lock screen: returns to it, with the lock evaluated again. */
+  onBack?(): void;
 }
 
-export function SignIn({ services, origin, relogin, notices, onSignedIn, onChangeServer }: SignInProps) {
+export function SignIn({ services, origin, relogin, notices, onSignedIn, onChangeServer, onBack }: SignInProps) {
   const { flow } = services;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +78,11 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
             <Button variant="quiet" onClick={onChangeServer}>
               Use a different server
             </Button>
+            {onBack && (
+              <Button variant="quiet" onClick={onBack}>
+                Back
+              </Button>
+            )}
           </>
         )}
       </div>

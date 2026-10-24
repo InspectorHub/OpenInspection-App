@@ -85,6 +85,11 @@ export class SqlitePersistence {
   private ready = false;
   /** Rows this document has in the table, as far as this instance knows. */
   private size = 0;
+  /**
+   * The newest row id this instance has applied or knows to be covered by its document. A compaction reads the rows
+   * after it, which are the ones another instance of the same document wrote, and deletes nothing newer.
+   */
+  private appliedThrough = 0;
   /** Inserts issued so far; a compaction uses it to count the rows queued behind it. */
   private issued = 0;
   private compactionTimer: unknown = null;
@@ -167,21 +172,28 @@ export class SqlitePersistence {
     );
   }
 
+  /** Every row of this document with an id above `afterId`, oldest first, read a page at a time. */
+  private async readRowsAfter(reader: Db, afterId: number): Promise<{ updates: Uint8Array[]; lastId: number }> {
+    const updates: Uint8Array[] = [];
+    let lastId = afterId;
+    for (;;) {
+      const page = await reader.query<{ id: number; data: unknown }>(
+        'SELECT id, data FROM ydoc_updates WHERE doc_name = ? AND id > ? ORDER BY id LIMIT ?',
+        [this.docName, lastId, LOAD_PAGE_SIZE],
+      );
+      for (const row of page) updates.push(toBytes(row.data));
+      const last = page[page.length - 1];
+      if (last === undefined) break;
+      lastId = Number(last.id);
+      if (page.length < LOAD_PAGE_SIZE) break;
+    }
+    return { updates, lastId };
+  }
+
   /** Returns false when destroyed before the stored state was applied. */
   private async load(): Promise<boolean> {
     try {
-      const stored: Uint8Array[] = [];
-      let from = 0;
-      for (;;) {
-        const page = await this.db.query<{ id: number; data: unknown }>(
-          'SELECT id, data FROM ydoc_updates WHERE doc_name = ? AND id >= ? ORDER BY id LIMIT ?',
-          [this.docName, from, LOAD_PAGE_SIZE],
-        );
-        for (const row of page) stored.push(toBytes(row.data));
-        const last = page[page.length - 1];
-        if (page.length < LOAD_PAGE_SIZE || last === undefined) break;
-        from = Number(last.id) + 1;
-      }
+      const { updates: stored, lastId } = await this.readRowsAfter(this.db, 0);
       if (this.destroyed) return false;
 
       // Whatever the document already holds is not in the table yet; keep it, as the original does.
@@ -195,6 +207,7 @@ export class SqlitePersistence {
         false,
       );
       this.size = stored.length;
+      this.appliedThrough = lastId;
       this.ready = true;
       if (early.byteLength > EMPTY_UPDATE_BYTES) {
         this.insert(early);
@@ -217,25 +230,41 @@ export class SqlitePersistence {
   }
 
   /**
-   * Replaces this document's rows with one row holding its whole state. One transaction: the new row goes in
-   * first and everything older than it comes out, so a failure rolls back to the rows it started with.
+   * Replaces this document's rows with one row holding its whole state. One transaction: first the rows this
+   * instance has not applied (another instance of the same document wrote them) are merged into the document, so
+   * the snapshot covers them; then the snapshot goes in and only the rows up to the newest one merged come out. A
+   * failure rolls back to the rows it started with.
    */
   private compact(): Promise<void> {
+    // The Db runs calls in order, so an insert issued before this point runs ahead of the transaction (the row
+    // count below includes it) and one issued after runs behind it. Read here, not inside the transaction: an
+    // insert issued while the transaction was still starting would otherwise be missed.
+    const mark = this.issued;
     return this.db
       .transaction(async (tx) => {
-        // Taken inside the transaction: every insert issued before it has run, and an edit that is still
-        // queued behind it is in the document, so it is in this snapshot as well as in its own later row.
-        const mark = this.issued;
+        const { updates, lastId } = await this.readRowsAfter(tx, this.appliedThrough);
+        if (updates.length > 0) {
+          Y.transact(
+            this.doc,
+            () => {
+              for (const update of updates) Y.applyUpdate(this.doc, update);
+            },
+            this,
+            false,
+          );
+        }
+        // Taken after the merge, inside the transaction: an edit still queued behind it is in the document, so it
+        // is in this snapshot as well as in its own later row.
         const state = Y.encodeStateAsUpdate(this.doc);
         await tx.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [this.docName, state]);
-        const newest = await tx.query<{ id: number }>('SELECT MAX(id) AS id FROM ydoc_updates WHERE doc_name = ?', [this.docName]);
-        await tx.run('DELETE FROM ydoc_updates WHERE doc_name = ? AND id < ?', [this.docName, Number(newest[0]?.id)]);
+        await tx.run('DELETE FROM ydoc_updates WHERE doc_name = ? AND id <= ?', [this.docName, lastId]);
         const remaining = await tx.query<{ n: number }>('SELECT COUNT(*) AS n FROM ydoc_updates WHERE doc_name = ?', [this.docName]);
-        return { rows: Number(remaining[0]?.n), mark };
+        return { rows: Number(remaining[0]?.n), lastId };
       })
       .then(
-        ({ rows, mark }) => {
+        ({ rows, lastId }) => {
           this.size = rows + (this.issued - mark);
+          this.appliedThrough = lastId;
         },
         (error: unknown) => {
           this.fail(error);

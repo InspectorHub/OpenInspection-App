@@ -4,7 +4,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import { DAY_MS } from './lock';
-import { evaluateAndPersist, loadLockState, loadTenantName, MAX_TENANT_NAME_LENGTH, recordRefreshed, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
+import { evaluateAndPersist, loadLockState, loadTenantName, lockStateVersion, MAX_TENANT_NAME_LENGTH, recordRefreshed, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
 import { countWaitingUploads } from './waiting';
 
 const NOW = 1_800_000_000_000;
@@ -237,5 +237,40 @@ describe('countWaitingUploads', () => {
 
   it('an empty device waits for nothing', async () => {
     expect(await countWaitingUploads(db)).toBe(0);
+  });
+});
+
+describe('the write version', () => {
+  const WRITES: [string, (target: Db) => Promise<void>][] = [
+    ['recordVerified', (target) => recordVerified(target, NOW, 30)],
+    ['recordRefreshed', (target) => recordRefreshed(target, NOW)],
+    ['setRevoked', (target) => setRevoked(target)],
+  ];
+
+  it.each(WRITES)('%s moves it before the write is applied and again after, so no evaluation that overlaps the write can report', async (_name, write) => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: Db = {
+      ...db,
+      run: async (sql, params) => {
+        await held;
+        return db.run(sql, params);
+      },
+      transaction: async (fn) => {
+        await held;
+        return db.transaction(fn);
+      },
+    };
+    const start = lockStateVersion();
+    const writing = write(slow);
+    const during = lockStateVersion();
+    expect(during).toBeGreaterThan(start);
+    expect(await stored('last_verified_at')).toBeNull();
+
+    release();
+    await writing;
+    expect(lockStateVersion()).toBeGreaterThan(during);
   });
 });

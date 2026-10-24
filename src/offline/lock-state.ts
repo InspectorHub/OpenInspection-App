@@ -14,7 +14,9 @@ let writeVersion = 0;
 /**
  * Counts the writes that change what an evaluation would answer (a verification, a refresh, a
  * revocation). A caller reads it before and after an evaluation: if it moved, the answer was loaded
- * from state that has since changed and is stale.
+ * from state that has since changed and is stale. Each write moves it twice, once before its first
+ * statement and once after its last, so an evaluation that read the state before the write cannot
+ * finish unnoticed whichever side of the write it ends on.
  */
 export function lockStateVersion(): number {
   return writeVersion;
@@ -76,15 +78,19 @@ export async function touchMaxSeen(db: Db, now: number): Promise<void> {
  */
 export async function recordVerified(db: Db, now: number, offlineMaxDays: number | null): Promise<void> {
   const at = String(Math.trunc(now));
-  await db.transaction(async (tx) => {
-    await writeDeviceState(tx, 'last_verified_at', at);
-    await tx.run(RAISE_MAX_SEEN, [at]);
-    if (offlineMaxDays !== null && Number.isInteger(offlineMaxDays) && offlineMaxDays >= 0) {
-      await writeDeviceState(tx, 'offline_max_days', String(offlineMaxDays));
-    }
-    await tx.run("DELETE FROM device_state WHERE key = 'locked_reason'");
-  });
   writeVersion += 1;
+  try {
+    await db.transaction(async (tx) => {
+      await writeDeviceState(tx, 'last_verified_at', at);
+      await tx.run(RAISE_MAX_SEEN, [at]);
+      if (offlineMaxDays !== null && Number.isInteger(offlineMaxDays) && offlineMaxDays >= 0) {
+        await writeDeviceState(tx, 'offline_max_days', String(offlineMaxDays));
+      }
+      await tx.run("DELETE FROM device_state WHERE key = 'locked_reason'");
+    });
+  } finally {
+    writeVersion += 1;
+  }
 }
 
 /**
@@ -94,14 +100,22 @@ export async function recordVerified(db: Db, now: number, offlineMaxDays: number
  * the same person signs in again.
  */
 export async function recordRefreshed(db: Db, now: number): Promise<void> {
-  await writeDeviceState(db, 'last_verified_at', String(Math.trunc(now)));
   writeVersion += 1;
+  try {
+    await writeDeviceState(db, 'last_verified_at', String(Math.trunc(now)));
+  } finally {
+    writeVersion += 1;
+  }
 }
 
 /** The server definitively ended this device's access (see `tokens.onRevoked`). Idempotent. */
 export async function setRevoked(db: Db): Promise<void> {
-  await writeDeviceState(db, 'locked_reason', REVOKED_MARK);
   writeVersion += 1;
+  try {
+    await writeDeviceState(db, 'locked_reason', REVOKED_MARK);
+  } finally {
+    writeVersion += 1;
+  }
 }
 
 /** The company name shown on the revoked screen: stored text, trimmed, bounded, or null. React escapes it on render. */
