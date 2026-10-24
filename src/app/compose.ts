@@ -8,7 +8,9 @@ import { createTokenManager, type TokenManager } from '../auth/tokens';
 import { systemClock, type Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { closeRealCapacitorDb, openRealCapacitorDb } from '../platform/db-capacitor';
+import { createRealFiles, type Files } from '../platform/files';
 import { createRealSecureStore, type SecureStore } from '../platform/secure-store';
+import { recordVerified, setRevoked } from '../offline/lock-state';
 
 export type ClientPlatform = 'android' | 'ios';
 
@@ -17,6 +19,7 @@ export const DATABASE_NAME = 'inspectorhub';
 /** Everything the screens use. Built once per launch, by `composeReal` or, in tests, by `composeWith`. */
 export interface AppServices {
   db: Db;
+  files: Files;
   http: Http;
   registrar: Registrar;
   tokens: TokenManager;
@@ -30,6 +33,7 @@ export interface AppServices {
 
 export interface ComposeParts {
   db: Db;
+  files: Files;
   store: SecureStore;
   fetch: FetchLike;
   authSession: AuthSession;
@@ -41,15 +45,22 @@ export interface ComposeParts {
 
 /** The wiring, with every adapter supplied. Tests pass fakes; `composeReal` passes the device's. */
 export function composeWith(parts: ComposeParts): AppServices {
-  const { db, store, clock, platform, appVersion } = parts;
+  const { db, files, store, clock, platform, appVersion } = parts;
   const http = createHttp({
     fetch: parts.fetch,
     defaultHeaders: { 'X-Client-Platform': platform, 'X-Client-Version': appVersion },
   });
   const registrar = createRegistrar({ http, db });
-  const tokens = createTokenManager({ http, store, clock, getClientId: (origin) => loadClientId(db, origin) });
+  const tokens = createTokenManager({
+    http,
+    store,
+    clock,
+    getClientId: (origin) => loadClientId(db, origin),
+    onVerified: (event) => recordVerified(db, event.at, event.offlineMaxDays),
+    onRevoked: () => setRevoked(db),
+  });
   const flow = createLoginFlow({ http, db, registrar, tokens, authSession: parts.authSession, clock });
-  return { db, http, registrar, tokens, flow, clock, platform, appVersion, close: parts.closeDb ?? (() => Promise.resolve()) };
+  return { db, files, http, registrar, tokens, flow, clock, platform, appVersion, close: parts.closeDb ?? (() => Promise.resolve()) };
 }
 
 /** Anything that is not iOS reports as Android, which includes the browser used for development. */
@@ -90,6 +101,7 @@ export async function composeReal(adapters: RealAdapters = realAdapters): Promis
   }
   return composeWith({
     db,
+    files: createRealFiles(),
     store,
     fetch: realFetch,
     authSession: createCapacitorAuthSession(),

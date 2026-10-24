@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { registerCallbackRouter } from './app/callbacks';
 import { composeReal } from './app/compose';
+import { createCapacitorAppState } from './offline/lock-monitor';
 import './styles.css';
 import { followSystemColorScheme } from './ui/color-scheme';
 import { createSystemBarsSync } from './ui/system-bars';
@@ -16,9 +17,10 @@ followSystemColorScheme(document.documentElement, window.matchMedia('(prefers-co
 
 // Registered at start, before the database opens, so a callback that arrives early finds a listener.
 const callbacks = registerCallbackRouter(CapacitorApp);
+const appState = createCapacitorAppState(CapacitorApp);
 
 createRoot(root).render(
   <StrictMode>
-    <App open={composeReal} callbacks={callbacks} />
+    <App open={composeReal} callbacks={callbacks} appState={appState} />
   </StrictMode>,
 );

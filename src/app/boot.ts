@@ -1,4 +1,6 @@
 import { loadIdentity, parseServerUrl, type StoredIdentity } from '../auth/server-config';
+import type { LockReason } from '../offline/lock';
+import { evaluateAndPersist } from '../offline/lock-state';
 import { SchemaTooNewError } from '../platform/schema';
 import type { CompatNotice } from './compat-notice';
 import type { AppServices } from './compose';
@@ -8,12 +10,24 @@ export type Screen =
   | { kind: 'setup' }
   | { kind: 'sign_in'; origin: string; relogin: boolean; notices: CompatNotice[] }
   | { kind: 'signed_in'; origin: string; identity: StoredIdentity }
+  /** Signed in, but the local data is held behind the lock screen. Nothing on it is deleted. */
+  | { kind: 'locked'; origin: string; identity: StoredIdentity; reason: LockReason }
   | { kind: 'schema_too_new' }
   | { kind: 'open_failed' };
 
 export interface BootResult {
   services: AppServices | null;
   screen: Screen;
+}
+
+/**
+ * The screen for a device that is signed in: the work screens, or the lock screen when the offline
+ * period, the clock or a revocation says the data must stay closed. Evaluates the lock (and stores
+ * the latest time seen) without any network call.
+ */
+export async function screenForSignedIn(services: AppServices, origin: string, identity: StoredIdentity): Promise<Screen> {
+  const outcome = await evaluateAndPersist(services.db, services.clock.now());
+  return outcome.locked ? { kind: 'locked', origin, identity, reason: outcome.reason } : { kind: 'signed_in', origin, identity };
 }
 
 /**
@@ -35,7 +49,7 @@ export async function decideScreen(services: AppServices, options: { allowInsecu
   const state = await services.tokens.getState(origin);
   if (state === 'relogin_required') return { kind: 'sign_in', origin, relogin: true, notices: [] };
   const identity = await loadIdentity(services.db);
-  if (state === 'signed_in' && identity) return { kind: 'signed_in', origin, identity };
+  if (state === 'signed_in' && identity) return screenForSignedIn(services, origin, identity);
   return { kind: 'sign_in', origin, relogin: false, notices: [] };
 }
 

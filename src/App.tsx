@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { boot, type BootResult, type Screen } from './app/boot';
+import { boot, screenForSignedIn, type BootResult, type Screen } from './app/boot';
 import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
+import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
+import type { LockOutcome } from './offline/lock-state';
 import { Booting, OpenFailed, SchemaTooNew } from './ui/Blocking';
+import { Locked } from './ui/Locked';
 import { ServerSetup } from './ui/ServerSetup';
 import { SignedIn } from './ui/SignedIn';
 import { SignIn } from './ui/SignIn';
@@ -14,9 +17,21 @@ export interface AppProps {
   allowInsecureHttp?: boolean;
   /** Routes sign-in callbacks to the login flow once the app has opened. The listener behind it is registered at start. */
   callbacks?: CallbackRouter;
+  /** Foreground and background transitions; the lock is evaluated again on every return to the foreground. */
+  appState?: AppStatePort;
+  /** The timer behind the 60 second lock check; defaults to the page's own. */
+  scheduler?: Scheduler;
 }
 
-export function App({ open, allowInsecureHttp = true, callbacks }: AppProps) {
+/** Applies a lock evaluation to the current screen: only the work screens and the lock screen are affected. */
+function applyOutcome(screen: Screen, outcome: LockOutcome): Screen {
+  if (screen.kind !== 'signed_in' && screen.kind !== 'locked') return screen;
+  if (!outcome.locked) return screen.kind === 'locked' ? { kind: 'signed_in', origin: screen.origin, identity: screen.identity } : screen;
+  if (screen.kind === 'locked' && screen.reason === outcome.reason) return screen;
+  return { kind: 'locked', origin: screen.origin, identity: screen.identity, reason: outcome.reason };
+}
+
+export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const started = useRef<Promise<BootResult> | null>(null);
@@ -41,6 +56,19 @@ export function App({ open, allowInsecureHttp = true, callbacks }: AppProps) {
     return callbacks.bind(flow);
   }, [callbacks, flow]);
 
+  const lockWatched = screen.kind === 'signed_in' || screen.kind === 'locked';
+  useEffect(() => {
+    if (!services || !lockWatched) return undefined;
+    const monitor = startLockMonitor({
+      db: services.db,
+      clock: services.clock,
+      scheduler,
+      appState,
+      onOutcome: (outcome) => setScreen((current) => applyOutcome(current, outcome)),
+    });
+    return () => monitor.stop();
+  }, [services, lockWatched, scheduler, appState]);
+
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
     if (screen.kind === 'open_failed') return <OpenFailed />;
@@ -57,13 +85,11 @@ export function App({ open, allowInsecureHttp = true, callbacks }: AppProps) {
           origin={screen.origin}
           relogin={screen.relogin}
           notices={screen.notices}
-          onSignedIn={(result) =>
-            setScreen({
-              kind: 'signed_in',
-              origin: result.origin,
-              identity: { userId: result.session.userId, tenantId: result.session.tenantId, role: result.session.role },
-            })
-          }
+          onSignedIn={(result) => {
+            const identity = { userId: result.session.userId, tenantId: result.session.tenantId, role: result.session.role };
+            // Fails closed: if the lock cannot be evaluated, the data stays behind the lock screen until it can.
+            void screenForSignedIn(services, result.origin, identity).then(setScreen, () => setScreen({ kind: 'locked', origin: result.origin, identity, reason: 'expired' }));
+          }}
           onChangeServer={() => setScreen({ kind: 'setup' })}
         />
       );
@@ -74,6 +100,17 @@ export function App({ open, allowInsecureHttp = true, callbacks }: AppProps) {
           origin={screen.origin}
           identity={screen.identity}
           onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
+        />
+      );
+    case 'locked':
+      return (
+        <Locked
+          services={services}
+          origin={screen.origin}
+          reason={screen.reason}
+          onOutcome={(outcome) => setScreen((current) => applyOutcome(current, outcome))}
+          onSignInRequired={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [] })}
+          onCleared={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
         />
       );
     default:

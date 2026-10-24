@@ -9,6 +9,7 @@ import type { Db } from '../../platform/db';
 import { createSqlJsDb } from '../../platform/db-sqljs';
 import { migrate } from '../../platform/schema';
 import { composeWith, type AppServices } from '../compose';
+import { createMemoryFiles, type MemoryFiles } from './memory-files';
 import { connectToServer } from '../connect';
 
 /**
@@ -38,6 +39,7 @@ export interface World {
   services: AppServices;
   server: FakeServer;
   db: Db;
+  files: MemoryFiles;
   store: MemorySecureStore;
   clock: ManualClock;
   /** Every URL handed to `fetch`, in order, whatever answered it. */
@@ -59,11 +61,13 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   const db = await createSqlJsDb();
   await migrate(db, 0);
   const store = createMemorySecureStore();
+  const files = createMemoryFiles();
   const clock = createManualClock(9_000_000);
   const fetched: string[] = [];
   const base: FetchLike = options.fetch ?? server.fetch;
   const services = composeWith({
     db,
+    files,
     store,
     fetch: (input, init) => {
       fetched.push(input);
@@ -74,7 +78,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     platform: 'android',
     appVersion: options.appVersion ?? '1.0.0',
   });
-  return { services, server, db, store, clock, fetched };
+  return { services, server, db, files, store, clock, fetched };
 }
 
 export interface HeldAuthSession extends AuthSession {
@@ -144,6 +148,7 @@ export function restartOffline(world: World): { services: AppServices; calls: st
   const calls: string[] = [];
   const services = composeWith({
     db: world.db,
+    files: world.files,
     store: world.store,
     fetch: (input) => {
       calls.push(input);

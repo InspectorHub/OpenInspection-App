@@ -5,6 +5,7 @@ import { CALLBACK_SCHEME, parseCallbackUrl, PENDING_LOGIN_TTL_MS, REDIRECT_URI, 
 import { AuthError, isAuthError } from './errors';
 import type { Http } from './http';
 import type { Registrar } from './registration';
+import { recordVerified, setRevoked } from '../offline/lock-state';
 import { fetchSession, loadIdentity, saveIdentity, serverEndpoints, type SessionInfo } from './server-config';
 import { NATIVE_SCOPE, oauthErrorCode, parseTokenResponse, type TokenManager, type TokenResponse } from './tokens';
 
@@ -139,14 +140,21 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
       const result = await fetchSession(deps.http, origin, tokens.accessToken);
       if (result.kind === 'unauthorized') throw new AuthError('sign_in_failed');
       const { session } = result;
-      if (!ALLOWED_ROLES.includes(session.role)) throw new AuthError('session_role_not_allowed');
       const stored = await loadIdentity(deps.db);
-      if (stored && (stored.userId !== session.userId || stored.tenantId !== session.tenantId)) throw new AuthError('identity_mismatch');
+      const sameIdentity = stored !== null && stored.userId === session.userId && stored.tenantId === session.tenantId;
+      if (!ALLOWED_ROLES.includes(session.role)) {
+        // The server knows this person and refuses their role for the app. If their data is on this device,
+        // it stays but cannot be used or uploaded: the same lock a removed member gets.
+        if (sameIdentity) await setRevoked(deps.db).catch(() => undefined);
+        throw new AuthError('session_role_not_allowed');
+      }
+      if (stored && !sameIdentity) throw new AuthError('identity_mismatch');
       await deps.tokens.adopt(origin, tokens);
       try {
         if (!stored || stored.role !== session.role) {
           await saveIdentity(deps.db, { userId: session.userId, tenantId: session.tenantId, role: session.role });
         }
+        await recordVerified(deps.db, deps.clock.now(), session.offlineMaxDays);
       } catch (err) {
         await deps.tokens.signOut(origin);
         throw err;
