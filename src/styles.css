@@ -1,0 +1,26 @@
+@import 'tailwindcss';
+@import '@inspectorhub/field-ui/theme.css';
+@source "../node_modules/@inspectorhub/field-ui/dist";
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+  body {
+    @apply bg-ih-bg-app font-ih-body text-ih-fg-1;
+    -webkit-text-size-adjust: 100%;
+  }
+}
+
+/*
+ * System bars: capacitor.config.ts sets SystemBars insetsHandling to 'css', which exposes the
+ * insets as --safe-area-inset-*; env() is the fallback for a WebView that already supports it.
+ */
+@utility safe-pad {
+  padding-top: max(1.5rem, var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  padding-bottom: max(1.5rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  padding-left: max(1rem, var(--safe-area-inset-left, env(safe-area-inset-left, 0px)));
+  padding-right: max(1rem, var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
+}
