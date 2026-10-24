@@ -218,7 +218,7 @@ describe('media store: get, list, objectUrl, delete', () => {
     const meta = JSON.stringify({ targetType: 'item', findingKey: 'k', itemId: 'i' });
     await world.db.run(insert, ['bad-state', INSPECTION, 'photo', 'media/bad-state.jpg', 'image/jpeg', meta, 'exploded', 0, 5]);
     await world.db.run(insert, ['bad-path', INSPECTION, 'photo', '../../etc/passwd', 'image/jpeg', meta, 'pending', 0, 5]);
-    await world.db.run(insert, ['bad-kind', INSPECTION, 'video', 'media/bad-kind.mp4', 'video/mp4', meta, 'pending', 0, 5]);
+    await world.db.run(insert, ['bad-kind', INSPECTION, 'audio', 'media/bad-kind.jpg', 'image/jpeg', meta, 'pending', 0, 5]);
     await world.db.run(insert, ['bad-meta', INSPECTION, 'photo', 'media/bad-meta.jpg', 'image/jpeg', '{not json', 'pending', 0, 5]);
     await world.db.run(insert, ['../bad-id', INSPECTION, 'photo', 'media/../bad-id.jpg', 'image/jpeg', meta, 'pending', 0, 5]);
     // Unreadable meta does not stop the upload (the upload never reads it), so the row is listed for the uploader
@@ -263,7 +263,7 @@ describe('media store: get, list, objectUrl, delete', () => {
     await world.store.markState('p-3', 'uploading', { attempts: 8 });
     const live = (await world.store.listRows({ kinds: ['photo'], skipGivenUpAt: 8 })).map((r) => r.pendingId);
     expect(live).toEqual(['p-0', 'p-2', 'p-3', 'p-4', 'p-5']);
-    await expect(world.store.listRows({ kinds: ['video' as never] })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+    await expect(world.store.listRows({ kinds: ['audio' as never] })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
     // The cursor is only ever bound, and may name a corrupt row's id, so only its shape is checked.
     await expect(world.store.listRows({ after: { createdAt: 1, pendingId: '' } })).rejects.toMatchObject({ code: 'INVALID_RECORD' });
     await expect(world.store.listRows({ after: { createdAt: 1, pendingId: 'x'.repeat(600) } })).rejects.toMatchObject({ code: 'INVALID_RECORD' });

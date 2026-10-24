@@ -8,6 +8,22 @@ import { systemClock, type Clock } from '../platform/clock';
 import type { UploaderPluginLike } from '../platform/uploader';
 import { isValidMediaId } from './errors';
 import { isValidUploadedKey, MEDIA_CONTENT_TYPES, type MediaRow, type MediaStore } from './store';
+import {
+  clampRetryAfter,
+  failure,
+  isRecord,
+  MAX_RETRY_AFTER_MS,
+  resolveUploadUrl as resolveSignedUploadUrl,
+  type AuthedResult,
+  type Failure,
+  type KindContext,
+  type KindStrategy,
+  type UploadFailureCode,
+} from './upload-kinds';
+import { isExpectedVideoKey } from './video';
+
+export type { UploadFailureCode };
+export { MAX_RETRY_AFTER_MS };
 
 /**
  * The attempts value that marks a photo as given up on. Only a PERMANENT refusal (the server or the file says this
@@ -22,35 +38,10 @@ export const TRANSIENT_BACKOFF_BASE_MS = 15_000;
 export const TRANSIENT_BACKOFF_CAP_MS = 3_600_000;
 /** The longest one upload may stay silent before it is abandoned and counted as failed. */
 export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
-/** The longest a server's Retry-After may hold a retry. */
-export const MAX_RETRY_AFTER_MS = 300_000;
-
 const MAX_EARLY_EVENTS = 64;
 const MAX_EVENT_ID_LENGTH = 128;
-const MAX_URL_LENGTH = 4096;
 const UPLOAD_PATH = '/api/public/uploads/photo';
-const UPLOAD_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8,2048}\.[A-Za-z0-9_-]{8,512}$/;
-const UNSAFE_URL_CHARACTERS = /[\u0000- \u007f\\]/;
 const NOTIFICATION_TITLE = 'Uploading photos';
-
-/** The fixed vocabulary of upload failures. Nothing from a server, the plugin or a path is ever added to it. */
-export type UploadFailureCode =
-  | 'LOCKED'
-  | 'AUTH'
-  | 'REJECTED'
-  | 'SERVER'
-  | 'NETWORK'
-  | 'TIMEOUT'
-  | 'FILE'
-  | 'BAD_URL'
-  | 'INVALID'
-  | 'NOT_FOUND'
-  | 'UNSUPPORTED_KIND'
-  | 'UPGRADE'
-  | 'PLUGIN'
-  | 'STORE'
-  /** Every attempt is used and nothing more is remembered about why; `retry()` is the way out. */
-  | 'GIVEN_UP';
 
 export type UploadOutcome =
   | { ok: true; key: string; /** True when the row was already uploaded and nothing was sent. */ reused: boolean }
@@ -103,6 +94,8 @@ export interface NativeUploaderDeps {
   onRetry?: (pendingId: string) => void;
   /** Receives storage failures. Never receives a token, a url or a path. */
   onError?: (error: unknown) => void;
+  /** How rows of another kind than a photo (a video clip) get a destination and finish. Without it such a row is left untouched. */
+  video?: KindStrategy;
 }
 
 export interface NativeUploader extends MediaUploader {
@@ -127,17 +120,6 @@ export interface NativeUploader extends MediaUploader {
   /** Forgets the backoff memory of every photo not in `keep`, so a photo that is gone leaves nothing behind. */
   forgetExcept(keep: ReadonlySet<string>): void;
   dispose(): Promise<void>;
-}
-
-interface Failure {
-  code: UploadFailureCode;
-  retryable: boolean;
-  retryAfterMs: number | null;
-  halt: boolean;
-}
-
-function failure(code: UploadFailureCode, options: { retryable: boolean; retryAfterMs?: number | null; halt?: boolean }): Failure {
-  return { code, retryable: options.retryable, retryAfterMs: options.retryAfterMs ?? null, halt: options.halt ?? false };
 }
 
 /** What the backoff memory keeps of one photo's failures in this process. */
@@ -182,10 +164,6 @@ interface ParsedEvent {
   statusCode: number | null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /** An event is data from another process: only the three names, a bounded id and integer status are accepted. */
 function parseEvent(raw: unknown): ParsedEvent | null {
   if (!isRecord(raw)) return null;
@@ -211,23 +189,15 @@ function parseEvent(raw: unknown): ParsedEvent | null {
  * server answer merely pointed at.
  */
 export function resolveUploadUrl(origin: string, raw: unknown): string | null {
-  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_URL_LENGTH || UNSAFE_URL_CHARACTERS.test(raw)) return null;
-  let url: URL;
-  try {
-    url = new URL(raw, origin);
-  } catch {
-    return null;
-  }
-  if (url.origin !== origin || url.username !== '' || url.password !== '' || url.hash !== '') return null;
-  if (url.pathname !== UPLOAD_PATH) return null;
-  const keys = [...url.searchParams.keys()];
-  if (keys.length !== 1 || keys[0] !== 'token') return null;
-  if (!UPLOAD_TOKEN_PATTERN.test(url.searchParams.get('token') ?? '')) return null;
-  return url.href;
+  return resolveSignedUploadUrl(origin, raw, UPLOAD_PATH);
 }
 
-/** True for exactly `<tenant>/inspections/<inspection>/photos/<pendingId>.<ext>` with this row's ids and extension. */
+/**
+ * True for exactly the key this row's upload leaves: `<tenant>/inspections/<inspection>/photos/<pendingId>.<ext>` for a
+ * photo, with this row's ids and extension; a clip's own key shape (see `isExpectedVideoKey`) for a clip.
+ */
 export function isExpectedKey(key: unknown, row: MediaRow): key is string {
+  if (row.kind === 'video') return isExpectedVideoKey(key, row);
   if (!isValidUploadedKey(key)) return false;
   const parts = key.split('/');
   return (
@@ -238,10 +208,6 @@ export function isExpectedKey(key: unknown, row: MediaRow): key is string {
     parts[3] === 'photos' &&
     parts[4] === `${row.pendingId}.${MEDIA_CONTENT_TYPES[row.contentType]}`
   );
-}
-
-function clampRetryAfter(ms: number | null): number | null {
-  return ms === null ? null : Math.max(0, Math.min(ms, MAX_RETRY_AFTER_MS));
 }
 
 type StatusClass = { kind: 'success' } | { kind: 'auth' } | { kind: 'failure'; failure: Failure };
@@ -256,7 +222,7 @@ function classifyStatus(status: number): StatusClass {
   return { kind: 'failure', failure: failure('SERVER', { retryable: true }) };
 }
 
-type Minted = { ok: true; url: string; key: string } | { ok: false; failure: Failure };
+type Minted = { ok: true; url: string; key: string; sendClientHeaders: boolean } | { ok: false; failure: Failure };
 
 export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   const origin = parseServerUrl(deps.origin, { allowInsecureHttp: deps.allowInsecureHttp === true });
@@ -333,7 +299,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     }
   }
 
-  async function mint(row: MediaRow): Promise<Minted> {
+  /** An authenticated JSON POST to the pinned origin. A 401 refreshes the session once; everything else is answered, never thrown. */
+  async function authedPost(path: string, body: unknown): Promise<AuthedResult> {
     let refreshed = false;
     for (;;) {
       let token: string | null;
@@ -346,31 +313,37 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       let res: HttpResponse;
       try {
         res = await deps.http.request({
-          url: `${origin}/api/inspections/${encodeURIComponent(row.inspectionId)}/media/upload-url`,
+          url: `${origin}${path}`,
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ pendingId: row.pendingId, contentType: row.contentType }),
+          body: JSON.stringify(body),
         });
       } catch (err) {
         if (isAuthError(err) && err.code === 'server_redirected') return { ok: false, failure: failure('BAD_URL', { retryable: true }) };
         return { ok: false, failure: failure('NETWORK', { retryable: true }) };
       }
-      if (res.status === 401) {
-        if (refreshed) return { ok: false, failure: failure('AUTH', { retryable: true }) };
-        refreshed = true;
-        try {
-          const check = await deps.tokens.checkSession(origin);
-          if (check.kind === 'relogin' || check.kind === 'signed_out') return { ok: false, failure: failure('AUTH', { retryable: true, halt: true }) };
-        } catch {
-          return { ok: false, failure: failure('NETWORK', { retryable: true }) };
-        }
-        continue;
+      if (res.status !== 401) return { ok: true, res };
+      if (refreshed) return { ok: false, failure: failure('AUTH', { retryable: true }) };
+      refreshed = true;
+      try {
+        const check = await deps.tokens.checkSession(origin);
+        if (check.kind === 'relogin' || check.kind === 'signed_out') return { ok: false, failure: failure('AUTH', { retryable: true, halt: true }) };
+      } catch {
+        return { ok: false, failure: failure('NETWORK', { retryable: true }) };
       }
-      if (res.status === 200) return parseMinted(res.json, row);
-      if ([400, 403, 404, 411, 413, 415, 422].includes(res.status)) return { ok: false, failure: failure('REJECTED', { retryable: false }) };
-      if (res.status === 426) return { ok: false, failure: failure('UPGRADE', { retryable: true, halt: true }) };
-      return { ok: false, failure: failure('SERVER', { retryable: true, retryAfterMs: clampRetryAfter(res.retryAfterMs) }) };
     }
+  }
+
+  const kindContext: KindContext = { origin, post: authedPost };
+
+  async function mint(row: MediaRow): Promise<Minted> {
+    const answer = await authedPost(`/api/inspections/${encodeURIComponent(row.inspectionId)}/media/upload-url`, { pendingId: row.pendingId, contentType: row.contentType });
+    if (!answer.ok) return answer;
+    const { res } = answer;
+    if (res.status === 200) return parseMinted(res.json, row);
+    if ([400, 403, 404, 411, 413, 415, 422].includes(res.status)) return { ok: false, failure: failure('REJECTED', { retryable: false }) };
+    if (res.status === 426) return { ok: false, failure: failure('UPGRADE', { retryable: true, halt: true }) };
+    return { ok: false, failure: failure('SERVER', { retryable: true, retryAfterMs: clampRetryAfter(res.retryAfterMs) }) };
   }
 
   /**
@@ -383,11 +356,11 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     const url = resolveUploadUrl(origin, body.data.url);
     const key = body.data.key;
     if (url === null || !isExpectedKey(key, row)) return { ok: false, failure: failure('BAD_URL', { retryable: false }) };
-    return { ok: true, url, key };
+    return { ok: true, url, key, sendClientHeaders: true };
   }
 
   /** Hands the file to the plugin and waits for the one terminal event that names it. */
-  async function runUpload(row: MediaRow, url: string, options: UploadOptions): Promise<Terminal | 'start-failed'> {
+  async function runUpload(row: MediaRow, target: { url: string; sendClientHeaders: boolean; title: string }, options: UploadOptions): Promise<Terminal | 'start-failed'> {
     let filePath: string;
     try {
       filePath = await deps.store.fileUri(row);
@@ -399,14 +372,14 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     try {
       const started = await deps.plugin.startUpload({
         filePath,
-        serverUrl: url,
+        serverUrl: target.url,
         method: 'POST',
         uploadType: 'multipart',
         fileField: 'file',
         mimeType: row.contentType,
         maxRetries: 3,
-        headers: { ...clientHeaders },
-        notificationTitle: NOTIFICATION_TITLE,
+        headers: target.sendClientHeaders ? { ...clientHeaders } : {},
+        notificationTitle: target.title,
       });
       if (typeof started.id !== 'string' || started.id.length === 0 || started.id.length > MAX_EVENT_ID_LENGTH) throw new Error('invalid upload id');
       id = started.id;
@@ -483,6 +456,47 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     return null;
   }
 
+  /**
+   * The step a kind's strategy owns once the file has arrived (finalize for a clip). The key that says where the file
+   * is was written to the row before this runs, so a kill from here on resumes at this step without a second
+   * transfer. Locking after the transfer stops it here: nothing is sent for a device that is no longer allowed to.
+   */
+  async function completeWith(row: MediaRow, strategy: KindStrategy, key: string, marked: boolean): Promise<UploadOutcome> {
+    if (await locked()) return settleFailure(row, failure('LOCKED', { retryable: true, halt: true }), marked);
+    if (!marked) {
+      try {
+        if (!(await deps.store.markState(row.pendingId, 'uploading', { attempts: row.attempts }))) return toOutcome(failure('NOT_FOUND', { retryable: false }));
+      } catch (error) {
+        report(error);
+        return settleFailure(row, failure('STORE', { retryable: true }), false);
+      }
+    }
+    const done = await strategy.complete(row, key, kindContext);
+    if (!done.ok) return settleFailure(row, done.failure, true);
+    retries.delete(row.pendingId);
+    try {
+      await deps.store.markState(row.pendingId, 'uploaded', { attempts: row.attempts, uploadedKey: key });
+    } catch (error) {
+      // The server holds it; the row stays `uploading` with its key, and the next run repeats the (idempotent) step.
+      report(error);
+    }
+    return { ok: true, key, reused: false };
+  }
+
+  /** The file on disk is checked against the kind's ceiling before any request: a file that grew or was swapped is never sent. */
+  async function checkSize(row: MediaRow, strategy: KindStrategy): Promise<UploadOutcome | null> {
+    let size: number | null;
+    try {
+      size = await deps.store.fileSize(row);
+    } catch {
+      return settleFailure(row, failure('FILE', { retryable: true }), false);
+    }
+    if (size === null) return null;
+    if (size > strategy.maxBytes) return settleFailure(row, failure('TOO_LARGE', { retryable: false }), false);
+    if (size === 0) return settleFailure(row, failure('FILE', { retryable: false }), false);
+    return null;
+  }
+
   async function doUpload(ref: UploadRef, options: UploadOptions): Promise<UploadOutcome> {
     if (await locked()) return toOutcome(failure('LOCKED', { retryable: true, halt: true }));
     let row: MediaRow | null;
@@ -497,14 +511,17 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       return toOutcome(failure('NOT_FOUND', { retryable: false }));
     }
     if (row.inspectionId !== ref.inspectionId) return toOutcome(failure('INVALID', { retryable: false }));
-    if (row.kind !== 'photo') return toOutcome(failure('UNSUPPORTED_KIND', { retryable: false }));
-    // A key that is not this photo's own (a tampered row) is never reused or handed on: the photo is sent again.
+    const strategy = deps.video !== undefined && deps.video.kind === row.kind ? deps.video : undefined;
+    if (row.kind !== 'photo' && strategy === undefined) return toOutcome(failure('UNSUPPORTED_KIND', { retryable: false }));
+    // A key that is not this row's own (a tampered row) is never reused or handed on: the file is sent again.
     if (row.state === 'uploaded' && isExpectedKey(row.uploadedKey, row)) {
       retries.delete(row.pendingId);
       return { ok: true, key: row.uploadedKey, reused: true };
     }
     const held = gate(row);
     if (held !== null) return held;
+    // The file arrived in an earlier run and only the finishing step is owed: no new destination, no second transfer.
+    if (strategy !== undefined && strategy.isExpectedKey(row.uploadedKey, row)) return completeWith(row, strategy, row.uploadedKey, false);
 
     let present: boolean;
     try {
@@ -513,6 +530,10 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       return settleFailure(row, failure('FILE', { retryable: true }), false);
     }
     if (!present) return settleFailure(row, failure('FILE', { retryable: false }), false);
+    if (strategy !== undefined) {
+      const refusedSize = await checkSize(row, strategy);
+      if (refusedSize !== null) return refusedSize;
+    }
     try {
       await attach();
     } catch {
@@ -522,12 +543,12 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     let marked = false;
     let refusedOnce = false;
     for (;;) {
-      const minted = await mint(row);
+      const minted = strategy === undefined ? await mint(row) : await strategy.mint(row, kindContext);
       if (!minted.ok) return settleFailure(row, minted.failure, marked);
       // Signing out or locking while the url was being minted must not start the transfer.
       if (await locked()) return settleFailure(row, failure('LOCKED', { retryable: true, halt: true }), marked);
       if (!marked) {
-        // Starting costs no attempt: only a recorded failure does, so a process that keeps being killed cannot fail a good photo.
+        // Starting costs no attempt: only a recorded failure does, so a process that keeps being killed cannot fail a good file.
         try {
           if (!(await deps.store.markState(row.pendingId, 'uploading', { attempts: row.attempts }))) return toOutcome(failure('NOT_FOUND', { retryable: false }));
         } catch (error) {
@@ -536,7 +557,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
         }
         marked = true;
       }
-      const terminal = await runUpload(row, minted.url, options);
+      const terminal = await runUpload(row, { url: minted.url, sendClientHeaders: minted.sendClientHeaders, title: strategy?.notificationTitle ?? NOTIFICATION_TITLE }, options);
       if (terminal === 'start-failed') return settleFailure(row, failure('FILE', { retryable: true }), marked);
       if (terminal.kind === 'timeout') return settleFailure(row, failure('TIMEOUT', { retryable: true }), marked);
       if (terminal.statusCode === null) {
@@ -545,6 +566,16 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       }
       const verdict = classifyStatus(terminal.statusCode);
       if (verdict.kind === 'success' && terminal.kind === 'completed') {
+        if (strategy !== undefined) {
+          // Confirmed 2xx for THIS transfer: remember where the file is (the row stays `uploading` until the step after is done).
+          try {
+            await deps.store.markState(row.pendingId, 'uploading', { attempts: row.attempts, uploadedKey: minted.key });
+          } catch (error) {
+            // Not fatal for this run; only a kill before the step finishes would repeat the transfer.
+            report(error);
+          }
+          return completeWith(row, strategy, minted.key, true);
+        }
         retries.delete(row.pendingId);
         try {
           await deps.store.markState(row.pendingId, 'uploaded', { attempts: row.attempts, uploadedKey: minted.key });

@@ -245,3 +245,56 @@ describe('Files I/O', () => {
     expect(store.has('p.jpg')).toBe(false);
   });
 });
+
+describe('Files.writeStream and Files.size (video clips)', () => {
+  it('writes a stream into the no-backup directory in order, without holding it whole, and answers the uri', async () => {
+    const { files, store, dirLog, calls } = make();
+    async function* gen() {
+      yield Uint8Array.from([1, 2]);
+      yield Uint8Array.from([3]);
+      yield Uint8Array.from([4, 5]);
+    }
+    expect(await files.writeStream('media/v.mp4', gen())).toBe('file:///data/media/v.mp4');
+    expect(store.get('media/v.mp4')).toEqual(Uint8Array.from([1, 2, 3, 4, 5]));
+    expect(calls).toEqual(['write:media/v.mp4', 'append:media/v.mp4', 'append:media/v.mp4']);
+    expect([...new Set(dirLog)]).toEqual(['write:LIBRARY_NO_CLOUD', 'append:LIBRARY_NO_CLOUD']);
+  });
+
+  it('removes what it wrote when the stream fails after the first chunk, and keeps an older file when it fails before (control)', async () => {
+    const { files, store } = make();
+    store.set('media/v.mp4', Uint8Array.from([9]));
+    async function* early(): AsyncGenerator<Uint8Array> {
+      await Promise.resolve();
+      throw new Error('early');
+    }
+    await expect(files.writeStream('media/v.mp4', early())).rejects.toThrow('early');
+    expect(store.get('media/v.mp4')).toEqual(Uint8Array.from([9]));
+    async function* late() {
+      yield Uint8Array.from([1]);
+      throw new Error('late');
+    }
+    await expect(files.writeStream('media/v.mp4', late())).rejects.toThrow('late');
+    expect(store.has('media/v.mp4')).toBe(false);
+  });
+
+  it('refuses an unsafe path before touching the stream or the disk', async () => {
+    const { files, calls } = make();
+    let pulled = false;
+    async function* gen() {
+      pulled = true;
+      yield Uint8Array.from([1]);
+    }
+    await expect(files.writeStream('../x.mp4', gen())).rejects.toThrow(/path/i);
+    await expect(files.size('../x.mp4')).rejects.toThrow(/path/i);
+    expect(pulled).toBe(false);
+    expect(calls).toEqual([]);
+    await expect(files.writeStream('media/ok.mp4', gen())).resolves.toBe('file:///data/media/ok.mp4');
+  });
+
+  it('size answers the stat size and rejects for a missing file', async () => {
+    const { files, store } = make();
+    store.set('media/v.mp4', new Uint8Array(1234));
+    await expect(files.size('media/v.mp4')).resolves.toBe(1234);
+    await expect(files.size('media/none.mp4')).rejects.toThrow();
+  });
+});

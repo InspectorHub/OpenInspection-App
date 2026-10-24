@@ -21,6 +21,8 @@ export interface MemoryFiles extends Files {
   failExistsFor(path: string): void;
   /** Sets the modification time `list` reports for this path (files default to the time they were written). */
   setMtime(path: string, mtimeMs: number | null): void;
+  /** Makes `size` report this many bytes for the path, whatever is stored (a file that grew behind the app's back). */
+  setSize(path: string, bytes: number | null): void;
 }
 
 /** An in-memory `Files` for tests. */
@@ -34,6 +36,7 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
   let writesFail = false;
   const failingExists = new Set<string>();
   const mtimes = new Map<string, number | null>();
+  const sizes = new Map<string, number | null>();
   return {
     write: (path, data) => {
       touched.push(path);
@@ -42,6 +45,28 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
       store.set(path, data);
       mtimes.set(path, Date.now());
       return Promise.resolve(`file:///${path}`);
+    },
+    writeStream: async (path, chunks) => {
+      touched.push(path);
+      written.push(path);
+      if (writesFail) throw new Error('No space left on device');
+      const parts: Uint8Array[] = [];
+      for await (const chunk of chunks) parts.push(chunk);
+      const data = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+      let at = 0;
+      for (const part of parts) {
+        data.set(part, at);
+        at += part.length;
+      }
+      store.set(path, data);
+      mtimes.set(path, Date.now());
+      return `file:///${path}`;
+    },
+    size: (path) => {
+      touched.push(path);
+      const stored = store.get(path);
+      if (stored === undefined) return Promise.reject(new Error('File does not exist'));
+      return Promise.resolve(sizes.has(path) ? (sizes.get(path) ?? null) : stored.length);
     },
     read: (path) => {
       touched.push(path);
@@ -99,6 +124,9 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
     },
     setMtime: (path, mtimeMs) => {
       mtimes.set(path, mtimeMs);
+    },
+    setSize: (path, bytes) => {
+      sizes.set(path, bytes);
     },
   };
 }

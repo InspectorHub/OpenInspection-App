@@ -5,6 +5,14 @@ import { base64ToBytes, bytesToBase64 } from './base64';
 export interface Files {
   /** Writes `data` and returns the `file://` uri. */
   write(path: string, data: Uint8Array): Promise<string>;
+  /**
+   * Like `write`, for content that must not be held whole in memory (a video clip): the chunks are appended one
+   * at a time. A file this call began writing is removed if the stream fails after its first chunk; a file that
+   * was already there survives a stream that fails before it.
+   */
+  writeStream(path: string, chunks: AsyncIterable<Uint8Array>): Promise<string>;
+  /** The size of the file in bytes, or null when the platform did not report one. Rejects when it cannot be read, a missing file included. */
+  size(path: string): Promise<number | null>;
   read(path: string): Promise<Uint8Array>;
   remove(path: string): Promise<void>;
   /** A webview-loadable url for the file (for `<img src>`). */
@@ -56,7 +64,7 @@ export interface FilesystemLike {
   readFile(options: { path: string; directory: Directory }): Promise<{ data: string | Blob }>;
   deleteFile(options: { path: string; directory: Directory }): Promise<void>;
   getUri(options: { path: string; directory: Directory }): Promise<{ uri: string }>;
-  stat(options: { path: string; directory: Directory }): Promise<unknown>;
+  stat(options: { path: string; directory: Directory }): Promise<{ size?: number }>;
   readdir(options: { path: string; directory: Directory }): Promise<{ files: { name: string; mtime?: number }[] }>;
 }
 
@@ -96,6 +104,10 @@ export function createFiles(deps: FilesDeps): Files {
     return writeChunks(directory, path, slices(data));
   }
 
+  async function writeStream(path: string, chunks: AsyncIterable<Uint8Array>): Promise<string> {
+    return writeChunks(directory, path, chunks);
+  }
+
   async function writeCacheChunks(path: string, chunks: AsyncIterable<Uint8Array>): Promise<string> {
     return writeChunks(cacheDirectory, path, chunks);
   }
@@ -128,7 +140,13 @@ export function createFiles(deps: FilesDeps): Files {
 
   return {
     write,
+    writeStream,
     writeCacheChunks,
+    size: async (path) => {
+      assertSafeRelativePath(path);
+      const { size } = await fs.stat({ path, directory });
+      return typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : null;
+    },
     read: async (path) => {
       assertSafeRelativePath(path);
       const { data } = await fs.readFile({ path, directory });

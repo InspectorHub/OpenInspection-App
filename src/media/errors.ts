@@ -15,6 +15,8 @@ export const MEDIA_ERROR_CODES = [
   'DELETE_FAILED',
   'DOC_BUSY',
   'DOC_FAILED',
+  'TOO_LONG',
+  'DISK_FULL',
 ] as const;
 
 export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];
@@ -32,6 +34,8 @@ const MESSAGES: Record<MediaErrorCode, string> = {
   DELETE_FAILED: 'The photo file could not be removed',
   DOC_BUSY: 'The inspection is open and its document is not available',
   DOC_FAILED: 'The inspection document could not be updated',
+  TOO_LONG: 'The video is too long',
+  DISK_FULL: 'There is not enough free space on the device',
 };
 
 export class MediaError extends Error {

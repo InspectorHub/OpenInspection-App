@@ -12,20 +12,35 @@ import { isValidMediaId, MediaError } from './errors';
 
 /**
  * Content types the store accepts and the file extension each is stored under. The extension comes from
- * this table only, never from a file name. It is exactly the set the engine's signed photo upload accepts
- * (`image/jpeg`, `image/png`, `image/heic`): a type the server would refuse is not stored, so no photo can
- * sit on the device waiting for an upload that can never succeed.
+ * these tables only, never from a file name. Photos are exactly the set the engine's signed photo upload accepts
+ * (`image/jpeg`, `image/png`, `image/heic`); clips are the two of the engine's video upload types the app records
+ * (`video/mp4`, and `video/quicktime`, which the engine stores as `.mov`). A type the server would refuse is not
+ * stored, so nothing can sit on the device waiting for an upload that can never succeed.
  */
-export const MEDIA_CONTENT_TYPES = {
+export const PHOTO_CONTENT_TYPES = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/heic': 'heic',
 } as const;
 
+export const VIDEO_CONTENT_TYPES = {
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+} as const;
+
+export const MEDIA_CONTENT_TYPES = { ...PHOTO_CONTENT_TYPES, ...VIDEO_CONTENT_TYPES } as const;
+
 export type MediaContentType = keyof typeof MEDIA_CONTENT_TYPES;
+export type VideoContentType = keyof typeof VIDEO_CONTENT_TYPES;
 
 /** The engine's photo ceiling (10 MiB), checked here so an oversized photo is refused before it is written. */
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+/** The engine's clip ceiling (`MAX_VIDEO_BYTES` of its video upload route, 200 MiB). A constant: nothing the user or a server sends changes it. */
+export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+/** The longest single clip, the same 30 seconds the engine asks Stream to enforce and the web capture sheet shows. */
+export const VIDEO_MAX_SECONDS = 30;
+/** Bytes per piece when a Blob is streamed to disk. */
+export const VIDEO_CHUNK_BYTES = 1024 * 1024;
 
 /** Largest serialised `meta` accepted; an annotation node tree is the biggest legitimate one. */
 const MAX_META_CHARS = 1_000_000;
@@ -34,11 +49,42 @@ const KEY_PATTERN = /^[A-Za-z0-9_\-/.]{1,512}$/;
 /** Rows one query returns when the caller names no limit. */
 export const DEFAULT_LIST_LIMIT = 1000;
 
-export type MediaKind = PendingMediaRecord['kind'];
-const MEDIA_KINDS: readonly MediaKind[] = ['photo', 'crop', 'annotate'];
+/** The kinds of the editor's pending records, plus the clip, which the editor's store contract does not know. */
+export type MediaKind = PendingMediaRecord['kind'] | 'video';
+const MEDIA_KINDS: readonly MediaKind[] = ['photo', 'crop', 'annotate', 'video'];
 
 export function isContentType(value: string): value is MediaContentType {
   return Object.hasOwn(MEDIA_CONTENT_TYPES, value);
+}
+
+export function isVideoContentType(value: string): value is VideoContentType {
+  return Object.hasOwn(VIDEO_CONTENT_TYPES, value);
+}
+
+function isPhotoContentType(value: string): value is keyof typeof PHOTO_CONTENT_TYPES {
+  return Object.hasOwn(PHOTO_CONTENT_TYPES, value);
+}
+
+/** What the app keeps about a clip besides its bytes: where it was meant to go, and how long it is. */
+export interface VideoMeta {
+  itemId?: string;
+  durationSec?: number;
+}
+
+/** A clip as a stream of pieces, so that 200 MiB is never held in memory at once. */
+export interface VideoSource {
+  contentType: string;
+  /** The exact number of bytes `chunks()` yields. Checked on the way in, not trusted. */
+  size: number;
+  chunks(): AsyncIterable<Uint8Array>;
+}
+
+export interface VideoRecord {
+  pendingId: string;
+  inspectionId: string;
+  createdAt: number;
+  meta: VideoMeta;
+  source: VideoSource;
 }
 
 /** `media/<pendingId>.<ext>`, relative to the no-backup library directory. */
@@ -106,6 +152,14 @@ export interface RowPage {
 export interface MediaStore extends PendingMediaStore {
   /** The validated row, or null when there is none or the stored row is not one this store would have written. */
   getRow(pendingId: string): Promise<MediaRow | null>;
+  /**
+   * Stores a recorded clip: the file first (streamed, never whole in memory), then the row, with the same rules as
+   * `put` (a repeated id keeps the first file, a different inspection or kind conflicts). The editor's contract has
+   * no clip record, so `get` and `list` never return one; `getRow` and `listRows` do.
+   */
+  putVideo(rec: VideoRecord): Promise<void>;
+  /** The size of the row's file in bytes, null when the platform did not report one. Rejects when it cannot be read. */
+  fileSize(row: MediaRow): Promise<number | null>;
   /** Valid rows, oldest first. Rows that fail validation are left out, never thrown on. */
   listRows(filter?: RowFilter): Promise<MediaRow[]>;
   /**
@@ -176,15 +230,39 @@ function serializeMeta(rec: PendingMediaRecord): string {
   return json;
 }
 
+function isVideoMeta(value: unknown): value is VideoMeta {
+  if (!isRecord(value)) return false;
+  if (value.itemId !== undefined && !isText(value.itemId)) return false;
+  const { durationSec } = value;
+  return durationSec === undefined || (typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec >= 0 && durationSec <= VIDEO_MAX_SECONDS);
+}
+
+function videoMetaValid(meta: string): boolean {
+  try {
+    return isVideoMeta(JSON.parse(meta));
+  } catch {
+    return false;
+  }
+}
+
+/** True for the messages a full disk produces on Android, iOS and the web view. */
+function looksLikeFullDisk(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /no space left|ENOSPC|disk full|not enough (?:free )?space|insufficient storage|quota/i.test(message);
+}
+
 function rowFromDb(raw: Record<string, unknown>): MediaRow | null {
   const { pending_id: pendingId, inspection_id: inspectionId, kind, path, content_type: contentType, meta, state, uploaded_key: uploadedKey } = raw;
   if (!isValidMediaId(pendingId) || !isValidMediaId(inspectionId)) return null;
   if (typeof kind !== 'string' || !(MEDIA_KINDS as readonly string[]).includes(kind)) return null;
   if (typeof contentType !== 'string' || !isContentType(contentType)) return null;
+  // A clip carries a clip type and a photo an image type; a row that mixes them was not written by this store.
+  if ((kind === 'video') !== isVideoContentType(contentType)) return null;
   // The path is a function of the id and the type; a row that says anything else was not written by this store.
   const expectedPath = mediaPath(pendingId, contentType);
   if (path !== expectedPath) return null;
   if (typeof meta !== 'string' || meta.length > MAX_META_CHARS) return null;
+  if (kind === 'video' && !videoMetaValid(meta)) return null;
   try {
     assertMediaState(state);
   } catch {
@@ -216,6 +294,8 @@ function recordFromRow(row: MediaRow): PendingMediaRecord | null {
     return null;
   }
   const base = { pendingId: row.pendingId, inspectionId: row.inspectionId, blob: new Blob([], { type: row.contentType }), createdAt: row.createdAt };
+  // The editor's store contract has no clip record: a clip is reached through `getRow` and the uploader only.
+  if (row.kind === 'video') return null;
   if (row.kind === 'photo') return isPhotoMeta(meta) ? { ...base, kind: 'photo', meta } : null;
   if (row.kind === 'crop') return isCropMeta(meta) ? { ...base, kind: 'crop', meta } : null;
   return isAnnotateMeta(meta) ? { ...base, kind: 'annotate', meta } : null;
@@ -223,9 +303,27 @@ function recordFromRow(row: MediaRow): PendingMediaRecord | null {
 
 function contentTypeOf(blob: Blob): MediaContentType {
   const declared = (blob.type.split(';')[0] ?? '').trim().toLowerCase();
-  if (!isContentType(declared)) throw new MediaError('UNSUPPORTED_TYPE');
+  if (!isPhotoContentType(declared)) throw new MediaError('UNSUPPORTED_TYPE');
   return declared;
 }
+
+/** The meta of a clip as JSON, or throws INVALID_RECORD / TOO_LONG. */
+function serializeVideoMeta(meta: VideoMeta): string {
+  if (typeof meta !== 'object' || meta === null) throw new MediaError('INVALID_RECORD');
+  const { durationSec } = meta;
+  if (durationSec !== undefined) {
+    if (typeof durationSec !== 'number' || !Number.isFinite(durationSec) || durationSec < 0) throw new MediaError('INVALID_RECORD');
+    if (durationSec > VIDEO_MAX_SECONDS) throw new MediaError('TOO_LONG');
+  }
+  if (meta.itemId !== undefined && !isText(meta.itemId)) throw new MediaError('INVALID_RECORD');
+  return JSON.stringify({
+    ...(meta.itemId === undefined ? {} : { itemId: meta.itemId }),
+    ...(durationSec === undefined ? {} : { durationSec }),
+  });
+}
+
+/** Marks a failure of the clip's own source, so it is not mistaken for a failure of the disk. */
+class SourceFailure extends Error {}
 
 export function createMediaStore(deps: MediaStoreDeps): MediaStore {
   const { db, files } = deps;
@@ -283,10 +381,66 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
     }
   }
 
-  function put(rec: PendingMediaRecord): Promise<void> {
-    if (!isValidMediaId(rec.pendingId) || !isValidMediaId(rec.inspectionId)) return Promise.reject(new MediaError('INVALID_ID'));
-    const id = rec.pendingId;
-    const run = (putChain.get(id) ?? Promise.resolve()).then(() => putLocked(rec));
+  async function putVideoLocked(rec: VideoRecord): Promise<void> {
+    const metaJson = serializeVideoMeta(rec.meta);
+    if (!Number.isFinite(rec.createdAt)) throw new MediaError('INVALID_RECORD');
+    const declaredType = (rec.source.contentType.split(';')[0] ?? '').trim().toLowerCase();
+    if (!isVideoContentType(declaredType)) throw new MediaError('UNSUPPORTED_TYPE');
+    const declared = rec.source.size;
+    if (!Number.isInteger(declared) || declared < 0) throw new MediaError('INVALID_RECORD');
+    if (declared === 0) throw new MediaError('EMPTY');
+    if (declared > MAX_VIDEO_BYTES) throw new MediaError('TOO_LARGE');
+
+    const existing = await rawRow(rec.pendingId);
+    if (existing) {
+      if (existing.inspection_id === rec.inspectionId && existing.kind === 'video') return;
+      throw new MediaError('CONFLICT');
+    }
+
+    const path = mediaPath(rec.pendingId, declaredType);
+    let written = 0;
+    // The declared size is a claim: the stream is cut off the moment it delivers more than it said.
+    async function* counted(): AsyncGenerator<Uint8Array> {
+      try {
+        for await (const chunk of rec.source.chunks()) {
+          written += chunk.length;
+          if (written > declared) throw new MediaError('TOO_LARGE');
+          yield chunk;
+        }
+      } catch (error) {
+        throw error instanceof MediaError ? error : new SourceFailure();
+      }
+    }
+    try {
+      await files.writeStream(path, counted());
+    } catch (error) {
+      if (error instanceof MediaError) throw error;
+      if (error instanceof SourceFailure) throw new MediaError('READ_FAILED');
+      throw new MediaError(looksLikeFullDisk(error) ? 'DISK_FULL' : 'WRITE_FAILED');
+    }
+    if (written !== declared) {
+      await files.remove(path).catch(() => undefined);
+      throw new MediaError('READ_FAILED');
+    }
+    try {
+      await db.run(
+        `INSERT OR IGNORE INTO media (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [rec.pendingId, rec.inspectionId, 'video', path, declaredType, metaJson, 'pending', 0, null, Math.floor(rec.createdAt)],
+      );
+    } catch {
+      await files.remove(path).catch(() => undefined);
+      throw new MediaError('DB_FAILED');
+    }
+    try {
+      deps.onStored?.(rec.pendingId);
+    } catch {
+      // A failing listener must not undo a clip that is safely stored.
+    }
+  }
+
+  /** A put for an id waits for the one before it, so two puts of one id never write the file at the same time. */
+  function serialised(id: string, work: () => Promise<void>): Promise<void> {
+    const run = (putChain.get(id) ?? Promise.resolve()).then(work);
     const settled = run.then(
       () => undefined,
       () => undefined,
@@ -296,6 +450,16 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       if (putChain.get(id) === settled) putChain.delete(id);
     });
     return run;
+  }
+
+  function put(rec: PendingMediaRecord): Promise<void> {
+    if (!isValidMediaId(rec.pendingId) || !isValidMediaId(rec.inspectionId)) return Promise.reject(new MediaError('INVALID_ID'));
+    return serialised(rec.pendingId, () => putLocked(rec));
+  }
+
+  function putVideo(rec: VideoRecord): Promise<void> {
+    if (!isValidMediaId(rec.pendingId) || !isValidMediaId(rec.inspectionId)) return Promise.reject(new MediaError('INVALID_ID'));
+    return serialised(rec.pendingId, () => putVideoLocked(rec));
   }
 
   async function getRow(pendingId: string): Promise<MediaRow | null> {
@@ -357,6 +521,7 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
 
   return {
     put,
+    putVideo,
     getRow,
     listRows,
     listRowsPage,
@@ -440,5 +605,6 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
 
     fileUri: (row) => files.fileUri(row.path),
     fileExists: (row) => files.exists(row.path),
+    fileSize: (row) => files.size(row.path),
   };
 }

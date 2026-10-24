@@ -135,7 +135,7 @@ export interface FakePlugin extends UploaderPluginLike {
 }
 
 /** Plugin double. `read` maps the file uri it was handed back to bytes; `engine` receives the upload. */
-export function createFakePlugin(deps: { engine?: FakeEngine; files?: MemoryFiles; idPrefix?: string }): FakePlugin {
+export function createFakePlugin(deps: { engine?: { receive(serverUrl: string, bytes: Uint8Array, mimeType: string): number }; files?: MemoryFiles; idPrefix?: string }): FakePlugin {
   const listeners = new Set<(event: UploaderEventLike) => void>();
   const waiters: { n: number; resolve: () => void }[] = [];
   const prefix = deps.idPrefix ?? 'up';
@@ -149,7 +149,7 @@ export function createFakePlugin(deps: { engine?: FakeEngine; files?: MemoryFile
     if (status === undefined) {
       const path = options.filePath.replace(/^file:\/\/\//, '');
       const bytes = deps.files ? deps.files.bytes(path) : undefined;
-      status = deps.engine && bytes ? deps.engine.receive(options.serverUrl, bytes) : 200;
+      status = deps.engine && bytes ? deps.engine.receive(options.serverUrl, bytes, options.mimeType) : 200;
     }
     plugin.emit({ name: 'completed', id, eventId: `ev-${id}`, payload: { statusCode: status } });
   };

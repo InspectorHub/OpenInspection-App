@@ -2,9 +2,11 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import type { AppStatePort } from '../offline/lock-monitor';
 import type { Clock } from '../platform/clock';
 import type { Network } from '../platform/network';
+import { MediaError } from './errors';
 import { isExpectedKey, MAX_UPLOAD_ATTEMPTS, type NativeUploader } from './native-uploader';
 import type { ResolveResult } from './pending-doc';
-import type { MediaRow, MediaStore } from './store';
+import type { MediaKind, MediaRow, MediaStore } from './store';
+import { videoRefFromKey, type ResolveVideo } from './video';
 
 export type { ResolveResult };
 
@@ -40,6 +42,17 @@ export interface ReconcileDeps {
   store: MediaStore;
   uploader: Pick<NativeUploader, 'uploadDetailed' | 'attach' | 'isActive' | 'retryAt' | 'forgetExcept'>;
   resolvePending: ResolvePending;
+  /**
+   * The document step of a clip. Without it a clip is released right after the server holds it. A throw keeps the
+   * file and the row and is retried with a growing wait. `missing` does not keep a clip: the pool row that
+   * `finalize` created is the server's reference to it, which a photo does not have until its entry is resolved.
+   */
+  resolveVideo?: ResolveVideo;
+  /**
+   * The kinds of rows this reconciler works on, default photos only. A kind the uploader was not given a strategy for
+   * must not be listed: it would be left untouched every run.
+   */
+  kinds?: readonly MediaKind[];
   /** True when the offline lock holds or the device is revoked. A check that throws counts as locked. */
   isLocked(): boolean | Promise<boolean>;
   /**
@@ -119,6 +132,7 @@ interface RunReport {
 
 export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
   const timers = deps.timers ?? realTimers;
+  const kinds: readonly MediaKind[] = deps.kinds !== undefined && deps.kinds.length > 0 ? deps.kinds : ['photo'];
   const concurrency = Math.max(1, Math.min(Math.floor(deps.concurrency ?? DEFAULT_CONCURRENCY), MAX_CONCURRENCY));
   const maxRows = Math.max(1, Math.floor(deps.maxRowsPerPass ?? DEFAULT_MAX_ROWS_PER_PASS));
   /** Uploaded photos whose pending entry was not in the document: when to look again, and how often it was not. */
@@ -170,19 +184,28 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     noteWake(run, deps.clock.now() + Math.min(DOC_RETRY_BASE_MS * 2 ** Math.min(failures - 1, 20), DOC_RETRY_CAP_MS));
   }
 
+  /** The document step of the row's kind. */
+  function resolveDocument(row: MediaRow, key: string): Promise<ResolveResult> {
+    if (row.kind !== 'video') return deps.resolvePending(row.inspectionId, row.pendingId, key);
+    const ref = videoRefFromKey(key, row.inspectionId);
+    if (ref === null) return Promise.reject(new MediaError('INVALID_RECORD'));
+    return deps.resolveVideo ? deps.resolveVideo(row.inspectionId, row.pendingId, ref) : Promise.resolve('resolved');
+  }
+
   /**
-   * Document first, then the local copy: the file is never removed before the document holds the server key.
-   * Returns true when the photo is fully done (document updated, row and file removed).
+   * Document first, then the local copy: the file is never removed before the document holds the server key
+   * (for a clip: before the server holds the finalized clip and the document step, when wired, has run).
+   * Returns true when the file is fully done (document updated, row and file removed).
    */
   async function finish(row: MediaRow, key: string, run: RunReport): Promise<boolean> {
     let resolved: ResolveResult;
     try {
-      resolved = await deps.resolvePending(row.inspectionId, row.pendingId, key);
+      resolved = await resolveDocument(row, key);
     } catch (error) {
       noteDocFailure(row, run, error);
       return false;
     }
-    if (resolved === 'missing') {
+    if (resolved === 'missing' && row.kind !== 'video') {
       // Nothing is deleted: the entry may not have been written yet, or the photo was removed in the editor.
       docFailures.delete(row.pendingId);
       const misses = (missing.get(row.pendingId)?.misses ?? 0) + 1;
@@ -311,7 +334,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
       try {
         listed = await deps.store.listRowsPage({
           states: LIVE_STATES,
-          kinds: ['photo'],
+          kinds,
           skipGivenUpAt: MAX_UPLOAD_ATTEMPTS,
           limit: maxRows,
           ...(after ? { after } : {}),

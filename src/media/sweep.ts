@@ -14,7 +14,7 @@ export const MIN_PLAUSIBLE_MTIME_MS = 1e12;
 
 const MEDIA_DIRECTORY = 'media';
 /** The only names the store writes: `<pendingId>.<ext>`. Anything else in the directory is left alone. */
-const MEDIA_FILE_PATTERN = /^([A-Za-z0-9_-]{1,64})\.(?:jpg|png|heic)$/;
+const MEDIA_FILE_PATTERN = /^([A-Za-z0-9_-]{1,64})\.(?:jpg|png|heic|mp4|mov)$/;
 
 export interface SweepDeps {
   db: Db;
