@@ -17,8 +17,12 @@ async function* chunks(): AsyncGenerator<Uint8Array> {
   yield new Uint8Array(1000).fill(7);
 }
 
-function sanitizeMessage(message: string): string {
-  return message.replace(/media\/diag-[A-Za-z0-9._-]+/g, '<path>').replace(/[^\x20-\x7e]/g, '?').slice(0, 80);
+/** Longest platform error text the detail carries; the plugin's messages run past 80 characters. */
+export const STAT_MESSAGE_LIMIT = 200;
+
+/** Replaces the diagnostic file path, turns anything non-printable into `?`, and bounds the length. */
+export function sanitizeMessage(message: string): string {
+  return message.replace(/media\/diag-[A-Za-z0-9._-]+/g, '<path>').replace(/[^\x20-\x7e]/g, '?').slice(0, STAT_MESSAGE_LIMIT);
 }
 
 async function removeQuietly(ctx: DiagContext, path: string): Promise<void> {

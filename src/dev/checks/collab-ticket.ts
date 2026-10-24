@@ -17,7 +17,7 @@ function ticketFrom(json: unknown): string | null {
 
 export const collabTicket: CheckDef = {
   ...def,
-  hint: 'Requests a collaboration ticket the way the connector does, then opens the WebSocket for up to 8 s. A local dev server answers 404 for the socket; that is expected there.',
+  hint: 'Requests a collaboration ticket the way the connector does, then opens the WebSocket for up to 8 s. The detail reports only whether the socket opened and the close code it ended with; it does not interpret them.',
   run: (ctx) =>
     guarded(def, async () => {
       if (ctx.origin === null) return needsSignIn(def);
@@ -43,7 +43,7 @@ export const collabTicket: CheckDef = {
       let socket: string;
       if (probe.threw !== null) socket = `ws=constructor_threw error=${probe.threw}`;
       else if (probe.opened) socket = `ws=open close=${probe.closeCode === null ? 'none' : String(probe.closeCode)}`;
-      else socket = `ws=not_available_locally close=${probe.closeCode === null ? 'none_within_8s' : String(probe.closeCode)}`;
+      else socket = `ws=not_opened close=${probe.closeCode === null ? 'none_within_8s' : String(probe.closeCode)}`;
       return pass(def, `ticket=ok ${statusText} ${socket} ms=${String(services.clock.now() - started)}`);
     }),
 };

@@ -3,7 +3,7 @@ import { seedLocalData, rowCounts } from '../app/test-support/world';
 import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
-import { DAY_MS } from './lock';
+import { CLOCK_SKEW_TOLERANCE_MS, DAY_MS } from './lock';
 import { evaluateAndPersist, loadLockState, loadTenantName, lockStateVersion, MAX_TENANT_NAME_LENGTH, recordRefreshed, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
 import { countWaitingUploads } from './waiting';
 
@@ -106,6 +106,77 @@ describe('recordVerified', () => {
     await recordVerified(db, NOW, 30);
     expect((await loadLockState(db)).revoked).toBe(false);
     expect(await stored('locked_reason')).toBeNull();
+  });
+});
+
+describe('recordVerified re-anchors the clock reference from a server date', () => {
+  const FORTY_DAYS = 40 * DAY_MS;
+
+  async function lockedByClock(): Promise<void> {
+    await recordVerified(db, NOW, 30);
+    await evaluateAndPersist(db, NOW + FORTY_DAYS);
+    expect(await evaluateAndPersist(db, NOW)).toEqual({ locked: true, reason: 'clock' });
+  }
+
+  it('a server date that matches the corrected device clock lowers max_seen_time to now and unlocks, leaving rows alone', async () => {
+    await seedLocalData(db);
+    await lockedByClock();
+    const before = await rowCounts(db);
+    await recordVerified(db, NOW, 30, NOW + 1000);
+    expect(await stored('max_seen_time')).toBe(String(NOW));
+    expect(await stored('last_verified_at')).toBe(String(NOW));
+    expect(await evaluateAndPersist(db, NOW)).toEqual({ locked: false });
+    expect(await rowCounts(db)).toEqual(before);
+  });
+
+  it('a date exactly at the tolerance re-anchors, one millisecond beyond it does not', async () => {
+    await lockedByClock();
+    await recordVerified(db, NOW, 30, NOW + CLOCK_SKEW_TOLERANCE_MS + 1);
+    expect(await stored('max_seen_time')).toBe(String(NOW + FORTY_DAYS));
+    await recordVerified(db, NOW, 30, NOW - CLOCK_SKEW_TOLERANCE_MS);
+    expect(await stored('max_seen_time')).toBe(String(NOW));
+  });
+
+  it.each([
+    ['one hour ahead of the device', NOW + 3_600_000],
+    ['one hour behind the device', NOW - 3_600_000],
+    ['missing (null)', null],
+    ['not a number', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+  ])('a server date that is %s never re-anchors', async (_label, serverDateMs) => {
+    await lockedByClock();
+    await recordVerified(db, NOW, 30, serverDateMs);
+    expect(await stored('max_seen_time')).toBe(String(NOW + FORTY_DAYS));
+    expect(await evaluateAndPersist(db, NOW)).toEqual({ locked: true, reason: 'clock' });
+  });
+
+  it('omitting the server date behaves as before: the latest time seen only rises', async () => {
+    await lockedByClock();
+    await recordVerified(db, NOW, 30);
+    expect(await stored('max_seen_time')).toBe(String(NOW + FORTY_DAYS));
+  });
+
+  it('a device clock wrongly in the future, then corrected, recovers with a matching server date', async () => {
+    await recordVerified(db, NOW, 30);
+    await evaluateAndPersist(db, NOW + FORTY_DAYS);
+    expect(await evaluateAndPersist(db, NOW + 1000)).toEqual({ locked: true, reason: 'clock' });
+    await recordVerified(db, NOW + 1000, 30, NOW + 2000);
+    expect(await evaluateAndPersist(db, NOW + 1000)).toEqual({ locked: false });
+  });
+
+  it('a revoked device is un-revoked by the session-confirmed path exactly as before, and the re-anchor applies with it', async () => {
+    await lockedByClock();
+    await setRevoked(db);
+    await recordVerified(db, NOW, 30, NOW);
+    expect((await loadLockState(db)).revoked).toBe(false);
+    expect(await stored('max_seen_time')).toBe(String(NOW));
+  });
+
+  it('the other writers still never lower it', async () => {
+    await lockedByClock();
+    await touchMaxSeen(db, NOW);
+    await recordRefreshed(db, NOW);
+    expect(await stored('max_seen_time')).toBe(String(NOW + FORTY_DAYS));
   });
 });
 

@@ -146,7 +146,10 @@ export interface SessionInfo {
   offlineMaxDays: number;
 }
 
-export type SessionResult = { kind: 'ok'; session: SessionInfo } | { kind: 'unauthorized' };
+export type SessionResult =
+  /** `serverDateMs` is the `Date` header of this very response (epoch ms), or null when absent or unparseable. */
+  | { kind: 'ok'; session: SessionInfo; serverDateMs: number | null }
+  | { kind: 'unauthorized' };
 
 /** `GET /api/client/session` with a Bearer token (no cookies, no credentials mode). */
 export async function fetchSession(http: Http, origin: string, accessToken: string): Promise<SessionResult> {
@@ -165,7 +168,7 @@ export async function fetchSession(http: Http, origin: string, accessToken: stri
   if (res.status !== 200 || !userId || !tenantId || role === undefined || typeof days !== 'number' || !Number.isInteger(days) || days < 0) {
     throw new AuthError('server_response_invalid');
   }
-  return { kind: 'ok', session: { userId, tenantId, role, offlineMaxDays: days } };
+  return { kind: 'ok', session: { userId, tenantId, role, offlineMaxDays: days }, serverDateMs: res.serverDateMs };
 }
 
 export async function loadClientId(db: Db, origin: string): Promise<string | null> {

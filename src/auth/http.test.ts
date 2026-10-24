@@ -143,3 +143,16 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter(null)).toBeNull();
   });
 });
+
+describe('http wrapper: the server Date header', () => {
+  const request = (headers: Record<string, string>) =>
+    createHttp({ fetch: () => Promise.resolve(new Response('{}', { status: 200, headers })) }).request({ url: `${ORIGIN}/a`, method: 'GET' });
+
+  it('exposes a valid Date header as epoch milliseconds', async () => {
+    expect((await request({ date: 'Wed, 21 Oct 2026 07:28:00 GMT' })).serverDateMs).toBe(Date.UTC(2026, 9, 21, 7, 28, 0));
+  });
+
+  it.each([['no header', {}], ['an unparseable header', { date: 'yesterday-ish' }], ['an empty header', { date: '' }]])('is null for %s', async (_label, headers) => {
+    expect((await request(headers)).serverDateMs).toBeNull();
+  });
+});

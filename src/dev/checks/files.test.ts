@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AppServices } from '../../app/compose';
 import { createDiagRig } from '../test-support';
-import { filesCheck } from './files';
+import { filesCheck, sanitizeMessage, STAT_MESSAGE_LIMIT } from './files';
 
 describe('files', () => {
   it('passes, reports the mtime unit and the raw missing-file answer, and removes what it wrote', async () => {
@@ -61,5 +61,20 @@ describe('files', () => {
     });
     const result = await filesCheck.run(rig.ctx);
     expect(result).toMatchObject({ ok: false, detail: 'threw TypeError' });
+  });
+});
+
+describe('sanitizeMessage', () => {
+  it('replaces the diagnostic path and keeps a message of 150 characters whole (the old 80 would have cut it)', () => {
+    const message = `File does not exist: media/diag-ab12.bin ${'x'.repeat(110)}`;
+    const out = sanitizeMessage(message);
+    expect(STAT_MESSAGE_LIMIT).toBe(200);
+    expect(out).toBe(`File does not exist: <path> ${'x'.repeat(110)}`);
+    expect(out.length).toBeGreaterThan(80);
+  });
+
+  it('control: a longer message is cut at the limit, and non-printable characters become ?', () => {
+    expect(sanitizeMessage('y'.repeat(500))).toHaveLength(200);
+    expect(sanitizeMessage('a\u00e9b')).toBe('a?b');
   });
 });

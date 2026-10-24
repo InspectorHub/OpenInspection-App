@@ -38,14 +38,14 @@ const CLEAR_DESCRIPTION =
   'This permanently removes the inspections, photos and changes that have not been uploaded from this device. This cannot be undone.';
 
 const CLOCK_STILL_BEHIND =
-  'Your date and time are still earlier than the app has already seen. Correct them in your device settings, then verify again.';
+  'Your date or time still looks wrong to the app or the server. Correct them in your device settings, then verify again.';
 
 function reasonText(reason: LockReason, company: string): string {
   switch (reason) {
     case 'expired':
       return 'This device has been offline longer than your company allows. Connect to the internet and verify to keep working. Nothing on this device has been deleted.';
     case 'clock':
-      return 'The date or time on this device is earlier than the app has already seen. Correct them in your device settings, then verify online. Nothing on this device has been deleted.';
+      return 'The date or time on this device does not match what the app has already seen. Correct them in your device settings (automatic date and time works best). Once the clock is right and this device is online, verify online and the app unlocks. Nothing on this device has been deleted.';
     case 'revoked':
       return `This data belongs to ${company}. Export it and give it to your company, or clear it from this device.`;
   }

@@ -38,6 +38,11 @@ export interface Files {
   writeCacheChunks(path: string, chunks: AsyncIterable<Uint8Array>): Promise<string>;
   /** Deletes a file previously created with `writeCacheChunks`. */
   removeCache(path: string): Promise<void>;
+  /**
+   * The entries directly inside the OS cache directory (its root). A directory that is not there lists as
+   * empty; any other failure rejects. Used to find temp files other components leave behind.
+   */
+  listCache(): Promise<FileEntry[]>;
 }
 
 export interface FileEntry {
@@ -138,6 +143,16 @@ export function createFiles(deps: FilesDeps): Files {
     }
   }
 
+  async function readEntries(path: string, target: Directory): Promise<FileEntry[]> {
+    try {
+      const { files } = await fs.readdir({ path, directory: target });
+      return files.map((entry) => ({ name: entry.name, mtimeMs: typeof entry.mtime === 'number' && Number.isFinite(entry.mtime) ? entry.mtime : null }));
+    } catch (error) {
+      if (isNotFoundError(error)) return [];
+      throw error;
+    }
+  }
+
   return {
     write,
     writeStream,
@@ -182,14 +197,9 @@ export function createFiles(deps: FilesDeps): Files {
     },
     list: async (directoryPath) => {
       assertSafeRelativePath(directoryPath);
-      try {
-        const { files } = await fs.readdir({ path: directoryPath, directory });
-        return files.map((entry) => ({ name: entry.name, mtimeMs: typeof entry.mtime === 'number' && Number.isFinite(entry.mtime) ? entry.mtime : null }));
-      } catch (error) {
-        if (isNotFoundError(error)) return [];
-        throw error;
-      }
+      return readEntries(directoryPath, directory);
     },
+    listCache: () => readEntries('', cacheDirectory),
   };
 }
 

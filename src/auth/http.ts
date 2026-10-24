@@ -24,6 +24,12 @@ export interface HttpResponse {
   retryAfterMs: number | null;
   /** The `X-Client-Upgrade` header, when the server sent one. */
   upgrade: string | null;
+  /**
+   * The response `Date` header as epoch milliseconds, or null when it is absent or does not parse.
+   * Only the offline lock's clock re-anchor reads it (see `recordVerified`), and only after checking it
+   * against the device clock; it is never used as a time source on its own.
+   */
+  serverDateMs: number | null;
 }
 
 export interface Http {
@@ -57,6 +63,13 @@ export function safeUrlForLog(url: string): string {
   } catch {
     return '[unparseable url]';
   }
+}
+
+/** The `Date` header as epoch ms, or null when absent, empty or not a date. */
+export function parseServerDate(value: string | null): number | null {
+  if (value === null || value.trim() === '') return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /** Delta-seconds only; an HTTP-date would need the server's clock, which is never trusted. */
@@ -166,6 +179,7 @@ export function createHttp(deps: HttpDeps): Http {
           json: parseJson(text),
           retryAfterMs: parseRetryAfter(response.headers.get('retry-after')),
           upgrade,
+          serverDateMs: parseServerDate(response.headers.get('date')),
         };
       } finally {
         clearTimeout(timer);

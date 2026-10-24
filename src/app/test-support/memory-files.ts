@@ -23,6 +23,14 @@ export interface MemoryFiles extends Files {
   setMtime(path: string, mtimeMs: number | null): void;
   /** Makes `size` report this many bytes for the path, whatever is stored (a file that grew behind the app's back). */
   setSize(path: string, bytes: number | null): void;
+  /** Puts a file in the (flat) cache directory with the modification time `listCache` will report. */
+  seedCache(name: string, mtimeMs: number | null): void;
+  /** Names currently in the cache directory. */
+  cacheNames(): string[];
+  /** Makes `removeCache` reject for this name. */
+  failRemoveCacheFor(name: string): void;
+  /** Makes `listCache` reject. */
+  failListCache(): void;
 }
 
 /** An in-memory `Files` for tests. */
@@ -37,6 +45,9 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
   const failingExists = new Set<string>();
   const mtimes = new Map<string, number | null>();
   const sizes = new Map<string, number | null>();
+  const cache = new Map<string, number | null>();
+  const failingCacheRemoval = new Set<string>();
+  let cacheListFails = false;
   return {
     write: (path, data) => {
       touched.push(path);
@@ -105,7 +116,23 @@ export function createMemoryFiles(initial: Record<string, Uint8Array> = {}): Mem
     },
     accessed: () => [...touched],
     writeCacheChunks: (path) => Promise.resolve(`file:///cache/${path}`),
-    removeCache: () => Promise.resolve(),
+    removeCache: (path) => {
+      if (failingCacheRemoval.has(path)) return Promise.reject(new Error('Unable to delete file'));
+      cache.delete(path);
+      return Promise.resolve();
+    },
+    listCache: () =>
+      cacheListFails ? Promise.reject(new Error('Unable to list cache')) : Promise.resolve([...cache.entries()].map(([name, mtimeMs]) => ({ name, mtimeMs }))),
+    seedCache: (name, mtimeMs) => {
+      cache.set(name, mtimeMs);
+    },
+    cacheNames: () => [...cache.keys()],
+    failRemoveCacheFor: (name) => {
+      failingCacheRemoval.add(name);
+    },
+    failListCache: () => {
+      cacheListFails = true;
+    },
     paths: () => [...store.keys()],
     bytes: (path) => store.get(path),
     removeCalls: () => [...removed],

@@ -25,7 +25,7 @@ export function jpegBlob(seed = 1, length = 64, type = 'image/jpeg'): Blob {
 
 export function response(status: number, body?: unknown, extra: Partial<HttpResponse> = {}): HttpResponse {
   const text = body === undefined ? '' : JSON.stringify(body);
-  return { status, headers: new Headers(), text, json: body, retryAfterMs: null, upgrade: null, ...extra };
+  return { status, headers: new Headers(), text, json: body, retryAfterMs: null, upgrade: null, serverDateMs: null, ...extra };
 }
 
 export interface RecordingHttp extends Http {

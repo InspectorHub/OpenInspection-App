@@ -51,13 +51,14 @@ describe('collab-ticket', () => {
     expect(rig.ports.sockets[0]).toContain(`/api/inspections/insp-1/collab/ws?ticket=${TICKET}`);
   });
 
-  it('reports a socket that never opens as not available locally', async () => {
+  it('reports a socket that did not open neutrally, with its close code', async () => {
     const server = withTicketServer(200, { success: true, data: { ticket: TICKET } });
     const rig = await createDiagRig({ wrap: server.wrap });
     rig.ports.socketProbe = { opened: false, closeCode: 1006, threw: null };
     const result = await collabTicket.run(rig.ctx);
     expect(result.ok).toBe(true);
-    expect(result.detail).toContain('ws=not_available_locally close=1006');
+    expect(result.detail).toContain('ws=not_opened close=1006');
+    expect(result.detail).not.toContain('not_available_locally');
   });
 
   it('reports a constructor that throws by its error name only', async () => {

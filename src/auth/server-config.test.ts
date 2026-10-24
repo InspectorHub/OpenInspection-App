@@ -167,9 +167,17 @@ describe('fetchSession', () => {
     fetch.mockResolvedValueOnce(new Response(JSON.stringify({ success: true, data: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 } }), { status: 200 }));
     fetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
     const http = createHttp({ fetch });
-    expect(await fetchSession(http, 'https://oi.example.com', 'tok')).toEqual({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 } });
+    expect(await fetchSession(http, 'https://oi.example.com', 'tok')).toEqual({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 }, serverDateMs: null });
     expect(new Headers(fetch.mock.calls[0]?.[1].headers).get('authorization')).toBe('Bearer tok');
     expect(await fetchSession(http, 'https://oi.example.com', 'tok')).toEqual({ kind: 'unauthorized' });
+  });
+
+  it('carries the Date header of the same response, and null when it does not parse', async () => {
+    const body = JSON.stringify({ success: true, data: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 } });
+    const dated: FetchLike = () => Promise.resolve(new Response(body, { status: 200, headers: { date: 'Wed, 21 Oct 2026 07:28:00 GMT' } }));
+    expect(await fetchSession(createHttp({ fetch: dated }), 'https://oi.example.com', 'tok')).toMatchObject({ kind: 'ok', serverDateMs: Date.UTC(2026, 9, 21, 7, 28, 0) });
+    const garbled: FetchLike = () => Promise.resolve(new Response(body, { status: 200, headers: { date: 'soon' } }));
+    expect(await fetchSession(createHttp({ fetch: garbled }), 'https://oi.example.com', 'tok')).toMatchObject({ kind: 'ok', serverDateMs: null });
   });
 
   it('rejects a body that is not a session', async () => {

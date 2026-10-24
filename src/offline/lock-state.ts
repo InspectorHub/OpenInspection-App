@@ -1,6 +1,6 @@
 import { writeDeviceState } from '../auth/server-config';
 import type { Db } from '../platform/db';
-import { evaluateLock, type LockInput, type LockReason } from './lock';
+import { CLOCK_SKEW_TOLERANCE_MS, evaluateLock, type LockInput, type LockReason } from './lock';
 
 /** Longest company name the lock screen will show; the name is server-supplied text. */
 export const MAX_TENANT_NAME_LENGTH = 80;
@@ -66,23 +66,29 @@ export async function touchMaxSeen(db: Db, now: number): Promise<void> {
  * learn it (a refresh), which keeps the stored limit. A value that is not an integer of at least 1
  * is not stored over a good one; a server that really says 0 is stored, and locks.
  *
- * `last_verified_at` becomes `now`, but `max_seen_time` only ever rises. So verifying while the
- * device clock is still behind the latest time seen does NOT unlock a clock lock: `now` is still
- * more than the tolerance behind `max_seen_time`, the next evaluation says 'clock' again, and the
- * screen tells the user to correct the date and time. Online verification proves the server
- * accepts this device; it cannot prove that the local clock is right, and the clock is the
- * thing the lock is protecting.
+ * `last_verified_at` becomes `now`. `max_seen_time` normally only rises, so verifying while the device
+ * clock is still behind the latest time seen does not unlock a clock lock by itself.
+ *
+ * The one exception is a verification the server vouches for. The offline guard exists to stop
+ * OFFLINE use past the period; a successful online session confirmation already proves the server
+ * accepts this device. When `serverDateMs` (the `Date` header of that very session response) is a
+ * finite number within `CLOCK_SKEW_TOLERANCE_MS` of `now`, the device clock is demonstrably right,
+ * so `max_seen_time` is re-anchored to `now` even if that lowers it. This is the only place it may
+ * decrease. A missing, unparseable or skewed server date never re-anchors, so a wrong device clock
+ * cannot poison the reference in either direction. Nothing in the local data is touched.
  *
  * This is the session-confirmed path: the session endpoint (or a sign-in for the same identity) has
  * just accepted this device, so it also clears a revocation. A refresh alone does not; see `recordRefreshed`.
  */
-export async function recordVerified(db: Db, now: number, offlineMaxDays: number | null): Promise<void> {
+export async function recordVerified(db: Db, now: number, offlineMaxDays: number | null, serverDateMs: number | null = null): Promise<void> {
   const at = String(Math.trunc(now));
+  const reanchor = serverDateMs !== null && Number.isFinite(serverDateMs) && Number.isFinite(now) && Math.abs(serverDateMs - now) <= CLOCK_SKEW_TOLERANCE_MS;
   writeVersion += 1;
   try {
     await db.transaction(async (tx) => {
       await writeDeviceState(tx, 'last_verified_at', at);
-      await tx.run(RAISE_MAX_SEEN, [at]);
+      if (reanchor) await writeDeviceState(tx, 'max_seen_time', at);
+      else await tx.run(RAISE_MAX_SEEN, [at]);
       if (offlineMaxDays !== null && Number.isInteger(offlineMaxDays) && offlineMaxDays >= 0) {
         await writeDeviceState(tx, 'offline_max_days', String(offlineMaxDays));
       }

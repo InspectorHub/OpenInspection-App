@@ -35,7 +35,7 @@ describe('uploader-photo', () => {
 
   it('control: when the mint fails no native upload starts and the detail says so', async () => {
     const rig = await createDiagRig();
-    rig.engine.mintOverride = () => ({ status: 500, headers: new Headers(), text: '', json: undefined, retryAfterMs: null, upgrade: null });
+    rig.engine.mintOverride = () => ({ status: 500, headers: new Headers(), text: '', json: undefined, retryAfterMs: null, upgrade: null, serverDateMs: null });
     const result = await uploaderPhoto.run(rig.ctx);
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('mint=not_reached native_started=0');

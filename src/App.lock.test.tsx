@@ -209,7 +209,7 @@ describe('leaving the locked screen', () => {
     render(<App open={() => Promise.resolve(world.services)} allowInsecureHttp={false} scheduler={fakeScheduler()} />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Verify online' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/still earlier than the app has already seen/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still looks wrong/i);
     expect(screen.getByRole('heading', { name: 'Check your date and time' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
   });

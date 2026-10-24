@@ -79,7 +79,7 @@ function ticketReply(ticket: string, extra: Record<string, unknown> = {}): HttpR
 }
 
 function reply(status: number, json: unknown, retryAfterMs: number | null = null): HttpResponse {
-  return { status, headers: new Headers(), text: JSON.stringify(json), json, retryAfterMs, upgrade: null };
+  return { status, headers: new Headers(), text: JSON.stringify(json), json, retryAfterMs, upgrade: null, serverDateMs: null };
 }
 
 function frame(write: (encoder: encoding.Encoder) => void): Uint8Array {

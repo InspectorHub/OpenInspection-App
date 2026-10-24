@@ -154,7 +154,7 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
         if (!stored || stored.role !== session.role) {
           await saveIdentity(deps.db, { userId: session.userId, tenantId: session.tenantId, role: session.role });
         }
-        await recordVerified(deps.db, deps.clock.now(), session.offlineMaxDays);
+        await recordVerified(deps.db, deps.clock.now(), session.offlineMaxDays, result.serverDateMs);
       } catch (err) {
         await deps.tokens.signOut(origin);
         throw err;

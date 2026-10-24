@@ -4,7 +4,7 @@ import { evaluateAndPersist } from './lock-state';
 
 export type VerifyResult =
   | { kind: 'unlocked' }
-  /** The server answered but the device is still locked (a clock that is still behind, or a revocation). */
+  /** The server answered but the device is still locked (a clock the server does not confirm, or a revocation). */
   | { kind: 'locked'; reason: LockReason }
   /** The sign-in was refused. Local data stays; the person signs in again. */
   | { kind: 'sign_in_required' }
@@ -14,7 +14,10 @@ export type VerifyResult =
  * The lock screen's "Verify online": asks the server whether it still accepts this device, ignoring
  * any backoff because a person asked. The auth layer records the verification itself (see
  * `tokens.onVerified`); this only re-evaluates afterwards, so the answer comes from the same rules
- * as every other trigger and a clock that is still behind stays locked.
+ * as every other trigger. A session-confirmed verification whose server `Date` agrees with the device
+ * clock re-anchors the clock reference (see `recordVerified`), so correcting a wrong date and then
+ * verifying online unlocks the device without clearing local data; with no agreeing server date a
+ * clock lock stays.
  *
  * A refused refresh is `sign_in_required`, never revoked: the server answers it the same way for a
  * removed member, a role change and a password change.

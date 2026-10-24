@@ -65,6 +65,7 @@ describe('what the lock screen shows', () => {
     view(world, 'clock');
     expect(await screen.findByRole('heading', { name: 'Check your date and time' })).toBeInTheDocument();
     expect(screen.getByText(/Correct them in your device settings/i)).toBeInTheDocument();
+    expect(screen.getByText(/once the clock is right and this device is online/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Verify online' })).toBeInTheDocument();
   });
 
@@ -124,7 +125,7 @@ describe('Verify online', () => {
     const { onOutcome } = view(world, 'clock');
     await userEvent.setup().click(await screen.findByRole('button', { name: 'Verify online' }));
     await waitFor(() => expect(onOutcome).toHaveBeenCalledWith({ locked: true, reason: 'clock' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/still earlier than the app has already seen/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still looks wrong/i);
   });
 
   it('offline: says so, keeps the screen, and the button works again', async () => {

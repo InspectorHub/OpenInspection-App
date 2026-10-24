@@ -32,7 +32,9 @@ function usableDays(days: number): boolean {
  * Precedence when more than one reason applies: revoked, then clock, then expired.
  * - revoked is a definitive server answer and also removes the verify and upload paths, so it must win.
  * - clock beats expired because its fix differs (correct the date and time, then verify) and a wound-back
- *   clock makes the elapsed time meaningless.
+ *   clock makes the elapsed time meaningless. Only a successful online session confirmation whose
+ *   server date agrees with the device clock lowers the stored reference again (`recordVerified`); this
+ *   function never does.
  *
  * Inputs that cannot be trusted lock rather than guess:
  * - no verification time (null or not a number) is 'expired': a signed-in device always has one, so its

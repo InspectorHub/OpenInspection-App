@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { decideScreen } from '../app/boot';
 import { connectToServer } from '../app/connect';
 import { createSignedInWorld, createWorld, restartOffline, rowCounts, seedLocalData, type World } from '../app/test-support/world';
-import { DAY_MS } from './lock';
+import { CLOCK_SKEW_TOLERANCE_MS, DAY_MS } from './lock';
 import { evaluateAndPersist, loadLockState } from './lock-state';
 import { verifyOnline } from './verify-online';
 
@@ -274,5 +274,105 @@ describe('verify online', () => {
     await verifyOnline(world.services, world.server.origin);
     const after = await rowCounts(world.db);
     for (const table of ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package']) expect(after[table]).toBe(before[table]);
+  });
+});
+
+describe('verify online re-anchors the clock reference only when the server vouches for the device clock', () => {
+  const FORTY_DAYS = 40 * DAY_MS;
+
+  /** A good session answer carrying the given `Date` header (null: no such header). */
+  function sessionDated(date: string | null, userId = 'user-1'): () => Response {
+    return () => {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (date !== null) headers.Date = date;
+      return new Response(JSON.stringify({ success: true, data: { userId, tenantId: 'tenant-1', role: 'inspector', offlineMaxDays: 30 } }), { status: 200, headers });
+    };
+  }
+
+  function httpDate(world: World, offsetMs = 0): string {
+    return new Date(world.clock.now() + offsetMs).toUTCString();
+  }
+
+  /** The device clock jumped 40 days ahead and came back: locked as 'clock' for the whole gap. */
+  async function jumpForwardAndBack(): Promise<World> {
+    const world = await createSignedInWorld();
+    await seedLocalData(world.db);
+    world.clock.advance(FORTY_DAYS);
+    await evaluateAndPersist(world.db, world.clock.now());
+    world.clock.set(START);
+    expect(await evaluateAndPersist(world.db, world.clock.now())).toEqual({ locked: true, reason: 'clock' });
+    return world;
+  }
+
+  it('a server date matching the corrected clock unlocks, re-anchors, and leaves every local row alone', async () => {
+    const world = await jumpForwardAndBack();
+    const before = await rowCounts(world.db);
+    world.server.queue('/api/client/session', sessionDated(httpDate(world)));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'unlocked' });
+    const state = await loadLockState(world.db);
+    expect(state.maxSeenTime).toBe(START);
+    expect(state.lastVerifiedAt).toBe(START);
+    expect(await rowCounts(world.db)).toEqual(before);
+    expect(await evaluateAndPersist(world.db, world.clock.now())).toEqual({ locked: false });
+  });
+
+  it.each([
+    ['one hour ahead of the device', (w: World) => httpDate(w, 3_600_000)],
+    ['one hour behind the device', (w: World) => httpDate(w, -3_600_000)],
+    ['just beyond the tolerance', (w: World) => httpDate(w, CLOCK_SKEW_TOLERANCE_MS + 1000)],
+    ['unparseable', () => 'not a date'],
+    ['missing', () => null],
+  ])('a server date that is %s does not re-anchor: the device stays locked as clock', async (_label, dateFor) => {
+    const world = await jumpForwardAndBack();
+    world.server.queue('/api/client/session', sessionDated(dateFor(world)));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'locked', reason: 'clock' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(START + FORTY_DAYS);
+  });
+
+  it('a refresh-only success never re-anchors', async () => {
+    const world = await jumpForwardAndBack();
+    expect((await world.services.tokens.refresh(world.server.origin, { ignoreBackoff: true })).kind).toBe('ok');
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(START + FORTY_DAYS);
+    expect(await evaluateAndPersist(world.db, world.clock.now())).toEqual({ locked: true, reason: 'clock' });
+  });
+
+  it('a device clock wrongly in the future and then corrected recovers without clearing local data', async () => {
+    const world = await createSignedInWorld();
+    world.clock.advance(FORTY_DAYS);
+    await evaluateAndPersist(world.db, world.clock.now());
+    world.clock.set(START + 60_000);
+    expect(await evaluateAndPersist(world.db, world.clock.now())).toEqual({ locked: true, reason: 'clock' });
+    world.server.queue('/api/client/session', sessionDated(httpDate(world)));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'unlocked' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(START + 60_000);
+  });
+
+  it('a same-identity sign-in with a matching server date re-anchors too', async () => {
+    const world = await jumpForwardAndBack();
+    world.server.queue('/api/client/session', sessionDated(httpDate(world)));
+    await world.services.flow.signIn(world.server.origin);
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(START);
+    expect(await evaluateAndPersist(world.db, world.clock.now())).toEqual({ locked: false });
+  });
+
+  it('a revoked device re-anchors nothing until the session or a same-identity sign-in accepts it', async () => {
+    const world = await jumpForwardAndBack();
+    world.server.queue('/api/client/session', unauthorized);
+    world.server.queue('/api/client/session', unauthorized);
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'locked', reason: 'revoked' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(START + FORTY_DAYS);
+    world.server.queue('/api/client/session', sessionDated(httpDate(world)));
+    await world.services.flow.signIn(world.server.origin);
+    const state = await loadLockState(world.db);
+    expect(state.revoked).toBe(false);
+    expect(state.maxSeenTime).toBe(START);
+  });
+
+  it('offline guard intact: with no network, rewinding the clock still locks as clock and nothing is re-anchored', async () => {
+    const world = await jumpForwardAndBack();
+    const offline = restartOffline(world);
+    expect(await verifyOnline(offline.services, world.server.origin)).toEqual({ kind: 'retry', cause: 'offline' });
+    expect(await decideScreen(offline.services, SECURE)).toMatchObject({ kind: 'locked', reason: 'clock' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(START + FORTY_DAYS);
   });
 });

@@ -1,3 +1,4 @@
+import { Directory } from '@capacitor/filesystem';
 import { describe, expect, it } from 'vitest';
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { assertSafeRelativePath, createFiles, type FilesystemLike, WRITE_SLICE_BYTES } from './files';
@@ -296,5 +297,29 @@ describe('Files.writeStream and Files.size (video clips)', () => {
     store.set('media/v.mp4', new Uint8Array(1234));
     await expect(files.size('media/v.mp4')).resolves.toBe(1234);
     await expect(files.size('media/none.mp4')).rejects.toThrow();
+  });
+});
+
+describe('listCache', () => {
+  it('lists the root of the cache directory, tolerates a missing mtime, and treats a missing directory as empty', async () => {
+    const { fs, files } = make();
+    const seen: { path: string; directory: string }[] = [];
+    fs.readdir = ({ path, directory }) => {
+      seen.push({ path, directory });
+      return Promise.resolve({ files: [{ name: 'upload-123456.tmp', mtime: 1_700_000_000_000 }, { name: 'other.bin' }] });
+    };
+    expect(await files.listCache()).toEqual([
+      { name: 'upload-123456.tmp', mtimeMs: 1_700_000_000_000 },
+      { name: 'other.bin', mtimeMs: null },
+    ]);
+    expect(seen).toEqual([{ path: '', directory: Directory.Cache }]);
+    fs.readdir = () => Promise.reject(Object.assign(new Error('File does not exist'), { code: 'OS-PLUG-FILE-0008' }));
+    expect(await files.listCache()).toEqual([]);
+  });
+
+  it('control: any other listing failure rejects instead of reading as an empty cache', async () => {
+    const { fs, files } = make();
+    fs.readdir = () => Promise.reject(new Error('I/O error'));
+    await expect(files.listCache()).rejects.toThrow('I/O error');
   });
 });
