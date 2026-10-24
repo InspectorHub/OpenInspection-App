@@ -643,3 +643,100 @@ describe('storage and backoff edges', () => {
     expect((await short.manager.checkSession(short.origin, { ignoreBackoff: true })).kind).toBe('ok');
   });
 });
+
+describe('adopt and signOut are ordered, and adopts of one origin are serialised', () => {
+  /** A manager whose store holds every `set` at its own gate, in call order. */
+  function gatedSets(): { m: TokenManager; gates: (() => void)[]; setsStarted: () => number } {
+    const gates: (() => void)[] = [];
+    let started = 0;
+    const slowStore: MemorySecureStore = {
+      ...r.store,
+      set: async (key, value) => {
+        started += 1;
+        await new Promise<void>((resolve) => gates.push(resolve));
+        await r.store.set(key, value);
+      },
+    };
+    const m = createTokenManager({ http: createHttp({ fetch: r.server.fetch }), store: slowStore, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    return { m, gates, setsStarted: () => started };
+  }
+
+  it('positive control: adopt alone stores the token and sets the access token', async () => {
+    const { m, gates, setsStarted } = gatedSets();
+    const fresh = await issueTokens(r.server, r.clientId);
+    const adopting = m.adopt(r.origin, fresh);
+    await until(() => setsStarted() === 1);
+    gates[0]?.();
+    await adopting;
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBe(fresh.refreshToken);
+    expect(await m.getAccessToken(r.origin)).toBe(fresh.accessToken);
+  });
+
+  it('a sign-out begun while adopt is writing leaves nothing stored, nothing signed in, and the new grant revoked', async () => {
+    const { m, gates, setsStarted } = gatedSets();
+    const fresh = await issueTokens(r.server, r.clientId);
+    const adopting = m.adopt(r.origin, fresh);
+    await until(() => setsStarted() === 1);
+    const signingOut = m.signOut(r.origin);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    gates[0]?.();
+    await adopting.catch(() => undefined);
+    await signingOut;
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBeUndefined();
+    expect(await m.getState(r.origin)).toBe('signed_out');
+    expect(await m.getAccessToken(r.origin)).toBeNull();
+    const revoked = r.server.requests.filter((x) => x.path === '/oauth/token' && !x.form.grant_type).map((x) => x.form.token);
+    expect(revoked).toContain(fresh.refreshToken);
+  });
+
+  it('two overlapping adopts: the older write cannot land last', async () => {
+    const { m, gates, setsStarted } = gatedSets();
+    const older = await issueTokens(r.server, r.clientId);
+    const newer = await issueTokens(r.server, r.clientId);
+    const first = m.adopt(r.origin, older);
+    await until(() => setsStarted() === 1);
+    const second = m.adopt(r.origin, newer);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Let the newer write finish first if both are writing at once; a serialised manager has only one open.
+    if (setsStarted() === 2) {
+      gates[1]?.();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      gates[0]?.();
+    } else {
+      gates[0]?.();
+      await until(() => setsStarted() === 2);
+      gates[1]?.();
+    }
+    await Promise.all([first, second]);
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBe(newer.refreshToken);
+    expect(await m.getAccessToken(r.origin)).toBe(newer.accessToken);
+  });
+});
+
+describe('a stale session check after a new sign-in', () => {
+  it('answers retry, not signed_out, when a new adopt overtook it; signed_out stays for a sign-out (control)', async () => {
+    const { gate, release } = gateOf();
+    let sessionCalls = 0;
+    const fetchWith: FetchLike = async (url, init) => {
+      if (new URL(url).pathname === '/api/client/session') {
+        sessionCalls += 1;
+        if (sessionCalls === 1) return new Response('{}', { status: 401 });
+        if (sessionCalls === 2) {
+          await gate;
+          return new Response('{}', { status: 401 });
+        }
+      }
+      return r.server.fetch(url, init);
+    };
+    const m = createTokenManager({ http: createHttp({ fetch: fetchWith }), store: r.store, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await until(() => sessionCalls === 2);
+    const fresh = await issueTokens(r.server, r.clientId);
+    await m.adopt(r.origin, fresh);
+    release();
+    expect(await check).toMatchObject({ kind: 'retry' });
+    expect(await m.getState(r.origin)).toBe('signed_in');
+    expect(await m.getAccessToken(r.origin)).toBe(fresh.accessToken);
+  });
+});

@@ -15,8 +15,11 @@ export interface AuthSession {
   /**
    * Resolves with the callback URL. Rejects `sign_in_cancelled` after `cancel()`,
    * `sign_in_expired` when no callback arrives within the time limit, and
-   * `sign_in_in_progress` when a login is already waiting. A callback URL that `accept` refuses is
-   * ignored as if it had never arrived: the login keeps waiting and the browser stays open.
+   * `sign_in_in_progress` when a login is already waiting. A callback URL that `accept` refuses
+   * (including one with a missing, repeated or mismatched `state`) is ignored as if it had never
+   * arrived, not reported as an error: the login keeps waiting and the browser stays open until a
+   * genuine callback, `cancel()` or the time limit ends it. Dismissing the tab alone does not end the
+   * login, so the UI must offer a cancel affordance that calls `cancel()` (`LoginFlow.cancel()`).
    */
   start(url: string, callbackScheme: string, accept?: (callbackUrl: string) => boolean): Promise<string>;
   /** Ends the waiting login as cancelled and closes the browser. No effect when nothing is waiting. */
@@ -166,7 +169,11 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
           end(p, 'sign_in_expired');
         }, timeoutMs);
         ensureListeners()
-          .then(() => deps.browser.open({ url }))
+          .then(() => {
+            // A cancel or the time limit may have ended this login while the listeners were registering.
+            if (pending === p) return deps.browser.open({ url });
+            return undefined;
+          })
           .catch(() => {
             if (pending !== p) return;
             settle(p);

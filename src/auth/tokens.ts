@@ -24,7 +24,9 @@ export type RetryReason =
   | 'upgrade_required'
   | 'malformed'
   | 'storage'
-  | 'backoff';
+  | 'backoff'
+  /** A newer sign-in replaced the session this check was looking at; ask again. */
+  | 'superseded';
 
 export type RefreshResult =
   | { kind: 'ok'; accessToken: string; expiresAt: number }
@@ -32,7 +34,7 @@ export type RefreshResult =
   | { kind: 'signed_out' }
   | { kind: 'retry'; reason: RetryReason; retryAfterMs: number };
 
-export type FailureClass = { kind: 'relogin' } | { kind: 'retry'; reason: Exclude<RetryReason, 'network' | 'timeout' | 'storage' | 'backoff'>; retryAfterMs: number | null };
+export type FailureClass = { kind: 'relogin' } | { kind: 'retry'; reason: Exclude<RetryReason, 'network' | 'timeout' | 'storage' | 'backoff' | 'superseded'>; retryAfterMs: number | null };
 
 /** The OAuth `error` code of an error body, or null. Never the description. */
 export function oauthErrorCode(text: string): string | null {
@@ -155,6 +157,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   const relogin = new Set<string>();
   /** Origins whose sign-out has started and not yet finished (a count, so overlapping sign-outs nest). */
   const signingOut = new Map<string, number>();
+  /** How many sign-outs have begun for an origin, ever: a check that started earlier knows it was signed out. */
+  const signOutEpochs = new Map<string, number>();
   /** Origins whose sign-in is storing its token; settles once the write finished or failed. */
   const adopting = new Map<string, Promise<void>>();
   const backoff = new Map<string, { until: number; attempt: number }>();
@@ -166,6 +170,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     generations.set(origin, generationOf(origin) + 1);
   };
   const isSigningOut = (origin: string): boolean => (signingOut.get(origin) ?? 0) > 0;
+  const signOutEpochOf = (origin: string): number => signOutEpochs.get(origin) ?? 0;
   /** True when the flight that started at `generation` has been overtaken by a sign-out or a new sign-in. */
   const superseded = (origin: string, generation: number): boolean => generationOf(origin) !== generation || isSigningOut(origin);
 
@@ -301,6 +306,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
 
   async function checkWith(origin: string, accessToken: string): Promise<SessionCheck> {
     const generation = generationOf(origin);
+    const epoch = signOutEpochOf(origin);
     try {
       const result = await fetchSession(deps.http, origin, accessToken);
       if (result.kind === 'ok') return result;
@@ -309,7 +315,10 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       const second = await fetchSession(deps.http, origin, again.accessToken);
       if (second.kind === 'ok') return second;
       // A sign-out (finished or not) or a new sign-in during the awaits above makes this verdict stale.
-      if (superseded(origin, generation)) return { kind: 'signed_out' };
+      // The two differ: after a sign-out the user is signed out; after a new sign-in the answer is not
+      // known yet, and the user who just signed in must not be told they are signed out.
+      if (signOutEpochOf(origin) !== epoch || isSigningOut(origin)) return { kind: 'signed_out' };
+      if (generationOf(origin) !== generation) return { kind: 'retry', reason: 'superseded', retryAfterMs: 0 };
       relogin.add(origin);
       if (activeOrigin === origin) access = null;
       return { kind: 'relogin' };
@@ -325,7 +334,10 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       // finish (it stores nothing and revokes what it rotated) before the new token is written.
       bumpGeneration(origin);
       const running = flights.get(origin);
+      // Adopts of one origin run one after another, so an older write can never land after a newer one.
+      const earlier = adopting.get(origin);
       const write = (async (): Promise<void> => {
+        await earlier;
         await running?.catch(() => undefined);
         try {
           await deps.store.set(refreshTokenKey(origin), tokens.refreshToken);
@@ -360,9 +372,13 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       // The marker goes up before the first await and comes down only after the remove, so no refresh can
       // read the key, post it and store a rotated token in the gap.
       signingOut.set(origin, (signingOut.get(origin) ?? 0) + 1);
+      signOutEpochs.set(origin, signOutEpochOf(origin) + 1);
       bumpGeneration(origin);
       let stored: string | null;
       try {
+        // A sign-in that is still writing its token finishes first, so the remove below takes it too and
+        // the revoke covers its grant: nothing may be stored after sign-out has returned.
+        await adopting.get(origin);
         await flights.get(origin)?.catch(() => undefined);
         const key = refreshTokenKey(origin);
         stored = await deps.store.get(key).catch(() => null);

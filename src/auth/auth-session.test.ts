@@ -11,7 +11,7 @@ interface Fakes {
   app: AppLike & { listeners: number; open(url: string): void };
 }
 
-function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolean } = {}): Fakes {
+function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolean; appListenerGate?: Promise<void> } = {}): Fakes {
   let browserListenerFailures = options.browserListenerFailsOnce ? 1 : 0;
   const finishedListeners = new Set<() => void>();
   const urlListeners = new Set<(e: { url: string }) => void>();
@@ -43,9 +43,10 @@ function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolea
     get listeners() {
       return urlListeners.size;
     },
-    addListener: (_event: 'appUrlOpen', cb: (e: { url: string }) => void) => {
+    addListener: async (_event: 'appUrlOpen', cb: (e: { url: string }) => void) => {
+      await options.appListenerGate;
       urlListeners.add(cb);
-      return Promise.resolve({ remove: () => Promise.resolve(void urlListeners.delete(cb)) });
+      return { remove: () => Promise.resolve(void urlListeners.delete(cb)) };
     },
     open: (url: string) => {
       for (const cb of [...urlListeners]) cb({ url });
@@ -294,5 +295,54 @@ describe('Android auth session (Custom Tab)', () => {
     expect(await codeOf(session.start('javascript:alert(1)', SCHEME))).toBe('sign_in_failed');
     expect(await codeOf(session.start('file:///etc/passwd', SCHEME))).toBe('sign_in_failed');
     expect(f.browser.opened).toEqual([]);
+  });
+
+  describe('a login that ends while the listeners are still being registered', () => {
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    it('cancel() before registration resolves: the browser is never opened afterwards', async () => {
+      const g = gate();
+      const f = fakes({ appListenerGate: g.promise });
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+      const outcome = codeOf(session.start(AUTH_URL, SCHEME));
+      await vi.advanceTimersByTimeAsync(0);
+      session.cancel();
+      expect(await outcome).toBe('sign_in_cancelled');
+      g.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.browser.opened).toEqual([]);
+    });
+
+    it('the time limit firing before registration resolves: the browser is never opened afterwards', async () => {
+      const g = gate();
+      const f = fakes({ appListenerGate: g.promise });
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app, timeoutMs: 1_000 });
+      const outcome = codeOf(session.start(AUTH_URL, SCHEME));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcome).toBe('sign_in_expired');
+      g.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.browser.opened).toEqual([]);
+    });
+
+    it('positive control: without a cancel the browser opens once registration resolves', async () => {
+      const g = gate();
+      const f = fakes({ appListenerGate: g.promise });
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+      const pending = session.start(AUTH_URL, SCHEME);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.browser.opened).toEqual([]);
+      g.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.browser.opened).toEqual([AUTH_URL]);
+      f.app.open(CALLBACK);
+      await pending;
+    });
   });
 });

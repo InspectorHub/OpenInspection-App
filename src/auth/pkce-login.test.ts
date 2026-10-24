@@ -428,6 +428,83 @@ describe('a callback delivered through handleCallback while signIn waits', () =>
   });
 });
 
+describe('callbacks with an unusable state on the real Android session', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function realSession(timeoutMs?: number): { session: AuthSession; opened: string[]; closed: () => number; deliver(url: string): void } {
+    const urlListeners: ((e: { url: string }) => void)[] = [];
+    const opened: string[] = [];
+    let closed = 0;
+    const session = createAndroidAuthSession({
+      browser: {
+        open: ({ url }) => {
+          opened.push(url);
+          return Promise.resolve();
+        },
+        close: () => {
+          closed += 1;
+          return Promise.resolve();
+        },
+        addListener: () => Promise.resolve({ remove: () => Promise.resolve() }),
+      },
+      app: {
+        addListener: (_event, listener) => {
+          urlListeners.push(listener);
+          return Promise.resolve({ remove: () => Promise.resolve() });
+        },
+      },
+      timeoutMs,
+    });
+    return { session, opened, closed: () => closed, deliver: (url) => urlListeners.forEach((l) => l({ url })) };
+  }
+
+  const variants: [string, (genuine: string) => string][] = [
+    [
+      'missing state',
+      (genuine) => {
+        const url = new URL(genuine);
+        url.searchParams.delete('state');
+        return url.toString();
+      },
+    ],
+    ['duplicated state', (genuine) => `${genuine}&state=${new URL(genuine).searchParams.get('state') ?? ''}`],
+  ];
+
+  it.each(variants)('%s is ignored: the tab stays open, a genuine callback afterwards succeeds', async (_name, damage) => {
+    const real = realSession();
+    const r = await rig({ authSession: real.session });
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    while (real.opened.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    const genuine = await r.server.authorize(real.opened[0] ?? '');
+    real.deliver(damage(genuine));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(0);
+    expect(real.closed()).toBe(0);
+    expect(r.flow.hasPending()).toBe(true);
+    real.deliver(genuine);
+    expect(await outcome).toBe('resolved');
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(1);
+  });
+
+  it.each(variants)('%s does not keep the login alive past the time limit', async (_name, damage) => {
+    const real = realSession(60_000);
+    const r = await rig({ authSession: real.session });
+    vi.useFakeTimers();
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    for (let i = 0; i < 100 && real.opened.length === 0; i += 1) await vi.advanceTimersByTimeAsync(10);
+    const genuine = await r.server.authorize(real.opened[0] ?? '');
+    real.deliver(damage(genuine));
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(r.flow.hasPending()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await outcome).toBe('sign_in_expired');
+    expect(real.closed()).toBe(1);
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(0);
+  });
+});
+
 describe('a hostile callback with the wrong state does not consume the pending login', () => {
   function withState(callback: string, state: string): string {
     const url = new URL(callback);
@@ -542,6 +619,56 @@ describe('registration retry (P1)', () => {
     expect(r.server.count('/oauth/register')).toBe(2);
     expect(r.started).toHaveLength(2);
     expect(r.store.entries()[refreshTokenKey(r.server.origin)]).toBeDefined();
+  });
+
+  it('a cancel that lands while the stale client id is being forgotten stops the second attempt from opening the browser', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let forgetting = false;
+    const r = await rig({
+      wrapRegistrar: (real) => ({
+        ...real,
+        forget: async (origin) => {
+          forgetting = true;
+          await gate;
+          return real.forget(origin);
+        },
+      }),
+    });
+    r.server.queue('/oauth/token', invalidClient);
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    while (!forgetting) await new Promise((resolve) => setTimeout(resolve, 1));
+    r.flow.cancel();
+    release();
+    expect(await outcome).toBe('sign_in_cancelled');
+    expect(r.started).toHaveLength(1);
+    expect(r.flow.hasPending()).toBe(false);
+  });
+
+  it('positive control: the same gated forget without a cancel retries and opens the browser a second time', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let forgetting = false;
+    const r = await rig({
+      wrapRegistrar: (real) => ({
+        ...real,
+        forget: async (origin) => {
+          forgetting = true;
+          await gate;
+          return real.forget(origin);
+        },
+      }),
+    });
+    r.server.queue('/oauth/token', invalidClient);
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    while (!forgetting) await new Promise((resolve) => setTimeout(resolve, 1));
+    release();
+    expect(await outcome).toBe('resolved');
+    expect(r.started).toHaveLength(2);
   });
 
   it('gives up after one retry', async () => {

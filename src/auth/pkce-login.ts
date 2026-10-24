@@ -81,7 +81,7 @@ interface Pending {
   deliver(url: string): void;
 }
 
-/** One pass of the login; `cancelled` is set by the UI's cancel, wherever the pass has got to. */
+/** One login, retries included; `cancelled` is set by the UI's cancel, wherever the login has got to. */
 interface Attempt {
   cancelled: boolean;
 }
@@ -177,16 +177,6 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
     return exchange(p, code);
   }
 
-  async function attempt(origin: string): Promise<SignInResult> {
-    const mine: Attempt = { cancelled: false };
-    current = mine;
-    try {
-      return await runAttempt(origin, mine);
-    } finally {
-      if (current === mine) current = null;
-    }
-  }
-
   async function runAttempt(origin: string, mine: Attempt): Promise<SignInResult> {
     let verifier: string;
     let challenge: string;
@@ -230,15 +220,23 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
   }
 
   async function run(origin: string): Promise<SignInResult> {
-    for (let retried = false; ; retried = true) {
-      try {
-        return await attempt(origin);
-      } catch (err) {
-        pending = null;
-        if (!(err instanceof ClientRejected)) throw err;
-        if (retried) throw new AuthError('registration_failed');
-        await deps.registrar.forget(origin);
+    // One record for the whole login, retry included: a cancel between two attempts must not be lost.
+    const mine: Attempt = { cancelled: false };
+    current = mine;
+    try {
+      for (let retried = false; ; retried = true) {
+        try {
+          return await runAttempt(origin, mine);
+        } catch (err) {
+          pending = null;
+          if (!(err instanceof ClientRejected)) throw err;
+          if (retried) throw new AuthError('registration_failed');
+          await deps.registrar.forget(origin);
+          if (mine.cancelled) throw new AuthError('sign_in_cancelled');
+        }
       }
+    } finally {
+      if (current === mine) current = null;
     }
   }
 
