@@ -151,7 +151,10 @@ export function collabEndpoints(origin: string, inspectionId: string): { ticket:
  * Wiring requirements for the code that composes and uses this connector:
  *  - Pass an `onError` that tells the person their edits are not being saved. The default rethrows from a
  *    microtask, which is a crash report, not a message. A document whose stored state cannot be read reports
- *    the status `storage_failed` and is never connected.
+ *    the status `storage_failed` and is never connected. That status is sticky: every later status of the same
+ *    connection (offline, locked, retrying, synced) is reported as `storage_failed` too, until the connection is
+ *    destroyed, so a UI keyed on the latest status keeps warning that edits are not being saved. A failed write
+ *    is not fatal (it is retried and reported through `onError`), so it does not set it.
  *  - Call `purge(id)` when reconciliation reports the status `denied`, and do not `connect` that inspection
  *    again while its purge is still awaiting: the new connection would load rows the purge is about to delete.
  *  - Call `onLockChange()` whenever the offline lock may have changed, in particular on unlock and after a
@@ -198,9 +201,32 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     let retryTimer: unknown = null;
     let closing: Promise<void> | null = null;
 
+    /** Set when the stored state could not be read; from then on no other status is reported but `closed`. */
+    let storageFailed = false;
+
     const status = (value: CollabStatus): void => {
-      deps.onStatus?.(inspectionId, value);
+      deps.onStatus?.(inspectionId, storageFailed && value !== 'closed' ? 'storage_failed' : value);
     };
+
+    function failStorage(): void {
+      if (destroyed) return;
+      storageFailed = true;
+      status('storage_failed');
+    }
+
+    /** Runs a consumer callback so that an exception in it can never change what the connection does. */
+    function notify(callback: (() => void) | undefined): void {
+      try {
+        callback?.();
+      } catch {
+        report(new Error('A collaboration callback failed'));
+      }
+    }
+
+    /** Frames that arrived while a version restore was replacing the document; processed in order after the swap. */
+    let queued: { data: Uint8Array; from: CollabSocket }[] = [];
+    /** Counts lock evaluations; only the answer to the latest one is applied. */
+    let lockEvaluation = 0;
 
     // ── local update forwarder ──────────────────────────────────────────────
     const forward = (update: Uint8Array, updateOrigin: unknown): void => {
@@ -299,15 +325,12 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
           },
           message: (data) => {
             if (socket !== created || destroyed) return;
-            try {
-              onFrame(data, created);
-            } catch {
-              // A frame that cannot be read says nothing about the document, and its bytes say nothing useful:
-              // report that it happened, drop this socket, and let the backoff reconnect.
-              report(new Error('A collaboration frame could not be read'));
-              dropSocket();
-              scheduleRetry(null);
+            // The document is being replaced: an answer now would come from the one being thrown away.
+            if (restoring) {
+              queued.push({ data, from: created });
+              return;
             }
+            handleFrame(data, created);
           },
           close: () => {
             if (socket !== created) return;
@@ -331,21 +354,33 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       socket = created;
     }
 
-    /**
-     * `syncProtocol.readSyncMessage`, except that a frame which cannot be read throws. The library version catches
-     * the error itself and only logs it, which would leave a corrupt frame looking like a good one.
-     */
-    function readSyncMessage(decoder: decoding.Decoder, reply: encoding.Encoder, from: CollabSocket): number {
-      const messageType = decoding.readVarUint(decoder);
-      if (messageType === syncProtocol.messageYjsSyncStep1) {
-        syncProtocol.readSyncStep1(decoder, reply, doc);
-      } else if (messageType === syncProtocol.messageYjsSyncStep2 || messageType === syncProtocol.messageYjsUpdate) {
-        // The socket is the transaction origin, so the forwarder does not send the server its own update back.
-        Y.applyUpdate(doc, decoding.readVarUint8Array(decoder), from);
-      } else {
-        throw new Error('Unknown sync message type');
+    /** A frame that cannot be read says nothing about the document: report it, drop the socket, let the backoff reconnect. */
+    function handleFrame(data: Uint8Array, from: CollabSocket): void {
+      try {
+        onFrame(data, from);
+      } catch {
+        report(new Error('A collaboration frame could not be read'));
+        dropSocket();
+        // A restore reconnects when it is done.
+        if (!restoring) scheduleRetry(null);
       }
-      return messageType;
+    }
+
+    /**
+     * Applies an update the way `syncProtocol.readSyncMessage` does, with one difference in what is thrown. A
+     * malformed update throws to the caller, which drops the socket. An exception from a Yjs observer or an
+     * `update` listener (the update IS applied by then) says nothing about the frame: it is reported on its own
+     * and the sync carries on. The two are told apart by decoding the same bytes again, which only the
+     * malformed case fails.
+     */
+    function applyRemoteUpdate(update: Uint8Array, from: CollabSocket): void {
+      try {
+        // The socket is the transaction origin, so the forwarder does not send the server its own update back.
+        Y.applyUpdate(doc, update, from);
+      } catch {
+        Y.decodeUpdate(update);
+        report(new Error('A collaboration update handler failed'));
+      }
     }
 
     function onFrame(data: Uint8Array, from: CollabSocket): void {
@@ -357,19 +392,33 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         return;
       }
       if (kind !== MSG_SYNC) return;
-      const reply = encoding.createEncoder();
-      encoding.writeVarUint(reply, MSG_SYNC);
-      const messageType = readSyncMessage(decoder, reply, from);
-      if (messageType === syncProtocol.messageYjsSyncStep1 && from.isOpen()) from.send(encoding.toUint8Array(reply));
+      // Decode first: everything that throws before the update is applied is a frame that cannot be read.
+      const messageType = decoding.readVarUint(decoder);
+      if (
+        messageType !== syncProtocol.messageYjsSyncStep1 &&
+        messageType !== syncProtocol.messageYjsSyncStep2 &&
+        messageType !== syncProtocol.messageYjsUpdate
+      ) {
+        throw new Error('Unknown sync message type');
+      }
+      const payload = decoding.readVarUint8Array(decoder);
+      if (messageType === syncProtocol.messageYjsSyncStep1) {
+        const reply = encoding.createEncoder();
+        encoding.writeVarUint(reply, MSG_SYNC);
+        syncProtocol.writeSyncStep2(reply, doc, payload);
+        if (from.isOpen()) from.send(encoding.toUint8Array(reply));
+        return;
+      }
+      applyRemoteUpdate(payload, from);
       if (messageType === syncProtocol.messageYjsSyncStep2) {
         attempts = 0;
         neverOpened = 0;
         if (!synced) {
           synced = true;
-          opts.onChange?.();
+          notify(opts.onChange);
         }
         status('synced');
-        opts.onSynced?.();
+        notify(opts.onSynced);
       }
     }
 
@@ -395,15 +444,33 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         if (destroyed) return;
         doc = new Y.Doc();
         persistence = new SqlitePersistence(deps.db, docName, doc, { onError: report, timers });
+        persistence.whenSynced.then(undefined, failStorage);
         doc.on('update', forward);
         oldDoc.destroy();
         synced = false;
-        opts.onChange?.();
+        notify(opts.onChange);
         sendStep1();
       } finally {
         restoring = false;
+        drainQueued();
         // A socket that closed during the restore was not retried; do it now that the document is whole.
         if (!destroyed && halt === null && socket === null && retryTimer === null && !busy) scheduleRetry(null);
+      }
+    }
+
+    /** Processes the frames held back during a restore, in order, on the new document. Frames of a dead socket are dropped. */
+    function drainQueued(): void {
+      const batch = queued;
+      queued = [];
+      for (let i = 0; i < batch.length; i += 1) {
+        if (destroyed) return;
+        if (restoring) {
+          // Another restore started inside this batch: what is left waits for it.
+          queued = [...batch.slice(i), ...queued];
+          return;
+        }
+        const item = batch[i];
+        if (item && socket === item.from) handleFrame(item.data, item.from);
       }
     }
 
@@ -419,12 +486,15 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       const stale = (): boolean => destroyed || mine !== generation || halt !== null;
       try {
         let locked: boolean;
+        const evaluation = ++lockEvaluation;
         try {
           locked = await deps.isLocked();
         } catch {
           locked = true;
         }
         if (destroyed) return;
+        // A lock event evaluated while this was waiting; its answer is newer and starts over if need be.
+        if (evaluation !== lockEvaluation) return;
         if (locked) {
           stop('locked');
           return;
@@ -482,12 +552,13 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       if (destroyed) return;
       void (async () => {
         let locked: boolean;
+        const evaluation = ++lockEvaluation;
         try {
           locked = await deps.isLocked();
         } catch {
           locked = true;
         }
-        if (destroyed) return;
+        if (destroyed || evaluation !== lockEvaluation) return;
         if (locked) {
           generation += 1;
           dropSocket();
@@ -534,12 +605,10 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
           persisted = true;
           resolve();
           if (destroyed) return;
-          opts.onChange?.();
+          notify(opts.onChange);
           void attempt();
         },
-        () => {
-          if (!destroyed) status('storage_failed');
-        },
+        failStorage,
       );
     });
 

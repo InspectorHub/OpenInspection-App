@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { boot, screenForSignedIn, type BootResult, type Screen } from './app/boot';
-import { loadIdentity } from './auth/server-config';
+import { loadIdentity, type StoredIdentity } from './auth/server-config';
 import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
@@ -39,9 +39,20 @@ function applyOutcome(screen: Screen, outcome: LockOutcome): Screen {
  * Leaves the sign-in screen for the lock screen. The lock is evaluated again from what is stored, so a
  * revocation that no session-confirmed sign-in has cleared brings the lock screen back, never the work screen.
  */
-async function backToLock(services: AppServices, origin: string, setScreen: (screen: Screen) => void): Promise<void> {
-  const identity = await loadIdentity(services.db);
-  if (identity === null) return;
+async function backToLock(services: AppServices, origin: string, held: StoredIdentity, setScreen: (screen: Screen) => void): Promise<void> {
+  let identity: StoredIdentity | null;
+  try {
+    identity = await loadIdentity(services.db);
+  } catch {
+    // The stored identity cannot be read: fail closed to the lock screen the person came from.
+    setScreen({ kind: 'locked', origin, identity: held, reason: 'expired' });
+    return;
+  }
+  if (identity === null) {
+    // No identity is stored any more, so there is no lock to return to; a plain sign-in is the only way on.
+    setScreen({ kind: 'sign_in', origin, relogin: false, notices: [] });
+    return;
+  }
   setScreen(await screenForSignedIn(services, origin, identity).catch((): Screen => ({ kind: 'locked', origin, identity, reason: 'expired' })));
 }
 
@@ -115,7 +126,14 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             void screenForSignedIn(services, result.origin, identity).then(setScreen, () => setScreen({ kind: 'locked', origin: result.origin, identity, reason: 'expired' }));
           }}
           onChangeServer={() => setScreen({ kind: 'setup' })}
-          onBack={screen.backToLock ? () => void backToLock(services, screen.origin, setScreen) : undefined}
+          onBack={
+            screen.backToLock
+              ? () => {
+                  const held = screen.backToLock;
+                  if (held) void backToLock(services, screen.origin, held, setScreen);
+                }
+              : undefined
+          }
         />
       );
     case 'signed_in':
@@ -134,7 +152,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
           origin={screen.origin}
           reason={screen.reason}
           onOutcome={(outcome) => setScreen((current) => applyOutcome(current, outcome))}
-          onSignInRequired={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: true })}
+          onSignInRequired={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: screen.identity })}
           onCleared={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
         />
       );

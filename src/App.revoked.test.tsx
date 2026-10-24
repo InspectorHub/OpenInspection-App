@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, configure, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { createSignedInWorld, rowCounts, seedLocalData, type World } from './app/test-support/world';
 import { setRevoked } from './offline/lock-state';
@@ -87,5 +87,47 @@ describe('a revoked device signs in again', () => {
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+  });
+});
+
+describe('Back from the sign-in screen when the stored identity cannot be used', () => {
+  async function openSignInWithBack(): Promise<{ world: World; user: ReturnType<typeof userEvent.setup> }> {
+    const world = await openRevoked();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    await screen.findByRole('button', { name: 'Back' });
+    return { world, user };
+  }
+
+  it('an identity that is gone: Back leaves the dead end for a sign-in screen without Back, and reveals no data', async () => {
+    const { world, user } = await openSignInWithBack();
+    await world.db.run("DELETE FROM device_state WHERE key = 'user_id'");
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    });
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
+  });
+
+  it('an identity read that throws: the lock screen with no unhandled rejection', async () => {
+    const { world, user } = await openSignInWithBack();
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', record);
+    const realQuery = world.db.query.bind(world.db);
+    const spy = vi.spyOn(world.db, 'query').mockImplementation((sql, params) => (sql.includes("'user_id'") ? Promise.reject(new Error('read failed')) : realQuery(sql, params)));
+    try {
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+      expect(await screen.findByRole('heading', { name: 'Verification needed' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+      spy.mockRestore();
+    }
   });
 });

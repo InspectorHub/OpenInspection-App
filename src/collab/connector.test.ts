@@ -1157,3 +1157,273 @@ describe('a server that never accepts the upgrade', () => {
     handle.destroy();
   });
 });
+
+describe('storage_failed is sticky', () => {
+  async function storageFailedWorld(): Promise<ReturnType<typeof connect>> {
+    world = await createWorld({}, (real) => ({ ...real, query: () => Promise.reject(new Error('read failed')) }));
+    const handle = connect(world);
+    await world.statuses.waitFor(1);
+    expect(world.statuses.items).toEqual(['storage_failed']);
+    return handle;
+  }
+
+  it('keeps reporting it through offline, online and lock events until the connection is destroyed', async () => {
+    const handle = await storageFailedWorld();
+    world.emitOnline(false);
+    world.emitOnline(true);
+    world.locked = true;
+    world.connector.onLockChange();
+    await settle();
+    world.locked = false;
+    world.connector.onLockChange();
+    await settle();
+    expect(world.statuses.items.length).toBeGreaterThan(1);
+    expect(new Set(world.statuses.items)).toEqual(new Set(['storage_failed']));
+    handle.destroy();
+    expect(world.statuses.items.at(-1)).toBe('closed');
+  });
+
+  it('control: a healthy connection still reports offline, locked and the rest as they happen', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    world.emitOnline(false);
+    expect(world.statuses.items.at(-1)).toBe('offline');
+    world.locked = true;
+    world.connector.onLockChange();
+    await vi.waitFor(() => {
+      expect(world.statuses.items.at(-1)).toBe('locked');
+    });
+    expect(world.statuses.items).not.toContain('storage_failed');
+    handle.destroy();
+  });
+});
+
+describe('an exception from a document observer is not a corrupt frame', () => {
+  async function openWithObserver(throws: boolean): Promise<{ handle: ReturnType<typeof connect>; socket: FakeSocket }> {
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').observe(() => {
+      if (throws) throw new Error('observer boom with secret-detail');
+    });
+    return { handle, socket };
+  }
+
+  function remoteStep2(): Uint8Array {
+    const remote = new Y.Doc();
+    remote.getMap<unknown>('m').set('k', 'v');
+    return frame((e) => syncProtocol.writeSyncStep2(e, remote));
+  }
+
+  it('keeps the socket, still turns synced, resets the backoff and reports one generic error', async () => {
+    const { handle, socket } = await openWithObserver(true);
+    expect(() => socket.serverSends(remoteStep2())).not.toThrow();
+    expect(socket.closed).toBe(false);
+    expect(handle.doc.getMap<unknown>('m').get('k')).toBe('v');
+    expect(handle.synced()).toBe(true);
+    expect(world.statuses.items.at(-1)).toBe('synced');
+    expect(world.timers.pending()).toBe(0);
+    expect(world.errors).toHaveLength(1);
+    expect((world.errors[0] as Error).message).toBe('A collaboration update handler failed');
+
+    socket.serverCloses();
+    expect(world.timers.requested()).toEqual([400]);
+    handle.destroy();
+  });
+
+  it('does not loop: a second throwing update is one more report and still no reconnect', async () => {
+    const { handle, socket } = await openWithObserver(true);
+    socket.serverSends(remoteStep2());
+    const more = new Y.Doc();
+    more.getMap<unknown>('m').set('k2', 'v2');
+    socket.serverSends(frame((e) => syncProtocol.writeUpdate(e, Y.encodeStateAsUpdate(more))));
+    expect(world.errors).toHaveLength(2);
+    expect(socket.closed).toBe(false);
+    expect(world.sockets).toHaveLength(1);
+    expect(world.timers.pending()).toBe(0);
+    handle.destroy();
+  });
+
+  it('control: a healthy observer reports nothing', async () => {
+    const { handle, socket } = await openWithObserver(false);
+    socket.serverSends(remoteStep2());
+    expect(world.errors).toEqual([]);
+    expect(handle.synced()).toBe(true);
+    handle.destroy();
+  });
+});
+
+describe('a version restore: frames that arrive while it is in progress', () => {
+  async function heldRestoreWorld(failReadsAfterClear = false): Promise<{ deleting: Signals<() => void> }> {
+    const deleting = new Signals<() => void>();
+    let failReads = false;
+    world = await createWorld({}, (real) => ({
+      ...real,
+      query: (sql, params) => (failReads ? Promise.reject(new Error('read failed')) : real.query(sql, params)),
+      run: async (sql, params) => {
+        if (sql.startsWith('DELETE')) {
+          if (failReadsAfterClear) failReads = true;
+          await new Promise<void>((resolve) => {
+            deleting.push(resolve);
+          });
+        }
+        return real.run(sql, params);
+      },
+    }));
+    return { deleting };
+  }
+
+  it('answers a server step 1 from the restored document, never from the one being thrown away', async () => {
+    const { deleting } = await heldRestoreWorld();
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('stale', 1);
+    const changesBefore = world.changes.items.length;
+
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await deleting.waitFor(1);
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep1(e, new Y.Doc())));
+    expect(socket.sent.filter((m) => messageKind(m) === syncProtocol.messageYjsSyncStep2)).toHaveLength(0);
+
+    (deleting.items[0] as () => void)();
+    await world.changes.waitFor(changesBefore + 1);
+    const replies = socket.sent.filter((m) => messageKind(m) === syncProtocol.messageYjsSyncStep2);
+    expect(replies).toHaveLength(1);
+    const check = new Y.Doc();
+    const decoder = decoding.createDecoder(replies[0] as Uint8Array);
+    decoding.readVarUint(decoder);
+    syncProtocol.readSyncMessage(decoder, encoding.createEncoder(), check, null);
+    expect(check.getMap<unknown>('m').get('stale')).toBeUndefined();
+    handle.destroy();
+  }, 1000);
+
+  it('processes the queued frames in their order after the swap', async () => {
+    const { deleting } = await heldRestoreWorld();
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    const changesBefore = world.changes.items.length;
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await deleting.waitFor(1);
+    const restored = new Y.Doc();
+    restored.getMap<unknown>('m').set('restored', true);
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, restored)));
+    expect(handle.synced()).toBe(false);
+    (deleting.items[0] as () => void)();
+    await world.changes.waitFor(changesBefore + 1);
+    expect(handle.doc.getMap<unknown>('m').get('restored')).toBe(true);
+    expect(handle.synced()).toBe(true);
+    handle.destroy();
+  }, 1000);
+
+  it('a replacement document whose stored state cannot be read keeps reporting storage_failed', async () => {
+    const { deleting } = await heldRestoreWorld(true);
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    const changesBefore = world.changes.items.length;
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await deleting.waitFor(1);
+    (deleting.items[0] as () => void)();
+    await world.changes.waitFor(changesBefore + 1);
+    await vi.waitFor(() => {
+      expect(world.statuses.items.at(-1)).toBe('storage_failed');
+    });
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, new Y.Doc())));
+    expect(world.statuses.items.at(-1)).toBe('storage_failed');
+    handle.destroy();
+  }, 1000);
+
+  it('a malformed frame that arrives during the restore schedules no reconnect until the restore is done', async () => {
+    const { deleting } = await heldRestoreWorld();
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    const changesBefore = world.changes.items.length;
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await deleting.waitFor(1);
+    socket.serverSends(Uint8Array.from([0x80]));
+    expect(world.timers.pending()).toBe(0);
+    (deleting.items[0] as () => void)();
+    await world.changes.waitFor(changesBefore + 1);
+    expect(world.timers.pending()).toBe(1);
+    expect(world.errors).toHaveLength(1);
+    handle.destroy();
+  }, 1000);
+});
+
+describe('consumer callbacks never decide what the connection does', () => {
+  it('a throwing onChange after the stored state is applied still starts the first attempt, and is reported generically', async () => {
+    const handle = world.connector.connect('insp-1', {
+      onChange: () => {
+        throw new Error('consumer boom with secret-detail');
+      },
+    });
+    await world.socketSignal.waitFor(1);
+    expect(world.errors).toHaveLength(1);
+    expect((world.errors[0] as Error).message).toBe('A collaboration callback failed');
+    handle.destroy();
+  });
+
+  it('a throwing onSynced does not drop the socket or keep the status from turning synced', async () => {
+    const handle = world.connector.connect('insp-1', {
+      onSynced: () => {
+        throw new Error('consumer boom');
+      },
+    });
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, new Y.Doc())));
+    expect(socket.closed).toBe(false);
+    expect(handle.synced()).toBe(true);
+    expect(world.statuses.items.at(-1)).toBe('synced');
+    expect(world.errors).toHaveLength(1);
+    handle.destroy();
+  });
+});
+
+describe('only the latest lock evaluation counts', () => {
+  it('a stale "locked" answer that resolves after the unlock evaluation does not halt the connection', async () => {
+    const answers: ((locked: boolean) => void)[] = [];
+    let script: (() => boolean | Promise<boolean>)[] = [];
+    world = await createWorld({
+      isLocked: () => {
+        const next = script.shift();
+        return next ? next() : false;
+      },
+    });
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+
+    script = [
+      () =>
+        new Promise<boolean>((resolve) => {
+          answers.push(resolve);
+        }),
+      () => false,
+    ];
+    world.connector.onLockChange();
+    world.connector.onLockChange();
+    await settle();
+    expect(answers).toHaveLength(1);
+    (answers[0] as (locked: boolean) => void)(true);
+    await settle();
+    expect(socket.closed).toBe(false);
+    expect(world.statuses.items).not.toContain('locked');
+    handle.destroy();
+  });
+});
