@@ -1,5 +1,5 @@
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
-import { type Db, joinedTransactionHandle, SerialQueue } from './db';
+import { createDb, type Db } from './db';
 
 /**
  * In-memory SQLite (sql.js) implementing `Db`. Used by unit tests so storage
@@ -8,7 +8,6 @@ import { type Db, joinedTransactionHandle, SerialQueue } from './db';
 export async function createSqlJsDb(): Promise<Db> {
   const SQL = await initSqlJs();
   const raw = new SQL.Database();
-  const queue = new SerialQueue();
 
   const ops: Pick<Db, 'execute' | 'query' | 'run'> = {
     execute: (sql) => {
@@ -24,23 +23,21 @@ export async function createSqlJsDb(): Promise<Db> {
     },
   };
 
-  return {
-    execute: (sql) => queue.run(() => ops.execute(sql)),
-    query: <T>(sql: string, params?: unknown[]) => queue.run(() => ops.query<T>(sql, params)),
-    run: (sql, params) => queue.run(() => ops.run(sql, params)),
-    transaction: <T>(fn: (tx: Db) => Promise<T>) =>
-      queue.run(async () => {
-        raw.run('BEGIN');
-        try {
-          const out = await fn(joinedTransactionHandle(ops));
-          raw.run('COMMIT');
-          return out;
-        } catch (err) {
-          raw.run('ROLLBACK');
-          throw err;
-        }
-      }),
-  };
+  return createDb({
+    statements: () => ops,
+    begin: () => {
+      raw.run('BEGIN');
+      return Promise.resolve();
+    },
+    commit: () => {
+      raw.run('COMMIT');
+      return Promise.resolve();
+    },
+    rollback: () => {
+      raw.run('ROLLBACK');
+      return Promise.resolve();
+    },
+  });
 }
 
 function toSqlValues(params: unknown[] | undefined): SqlValue[] {

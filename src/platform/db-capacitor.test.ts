@@ -12,6 +12,10 @@ import {
 class FakeConn implements SqliteDbConnectionLike {
   calls: string[] = [];
   failRunWith: Error | null = null;
+  failRollbackWith: Error | null = null;
+  /** What the plugin reports after a failed rollback. */
+  transactionStillOpen = true;
+  failProbeWith: Error | null = null;
   queryRows: unknown[] = [];
 
   open() {
@@ -41,7 +45,13 @@ class FakeConn implements SqliteDbConnectionLike {
   }
   rollbackTransaction() {
     this.calls.push('rollback');
+    if (this.failRollbackWith) return Promise.reject(this.failRollbackWith);
     return Promise.resolve<DbChanges>({});
+  }
+  isTransactionActive() {
+    this.calls.push('isTransactionActive');
+    if (this.failProbeWith) return Promise.reject(this.failProbeWith);
+    return Promise.resolve({ result: this.transactionStillOpen });
   }
 }
 
@@ -85,6 +95,7 @@ class FakeSqlite implements SqliteConnectionLike {
 
 const opts = {
   name: 'oi',
+  platform: 'android' as const,
   version: 2,
   upgrades: [
     { toVersion: 1, statements: ['A'] },
@@ -128,7 +139,7 @@ describe('openCapacitorDb', () => {
 describe('wrapConnection', () => {
   it('passes transaction=false to run and execute inside a manual transaction, and commits', async () => {
     const conn = new FakeConn();
-    const db = wrapConnection(conn);
+    const db = wrapConnection(conn, 'android');
     await db.transaction(async (tx) => {
       await tx.run('INSERT 1', [1]);
       await tx.execute('DDL');
@@ -138,7 +149,7 @@ describe('wrapConnection', () => {
 
   it('uses the plugin default transaction handling outside a manual transaction', async () => {
     const conn = new FakeConn();
-    const db = wrapConnection(conn);
+    const db = wrapConnection(conn, 'android');
     await db.run('INSERT 1', [1]);
     expect(conn.calls).toEqual(['run:INSERT 1:[1]:undefined']);
   });
@@ -146,14 +157,14 @@ describe('wrapConnection', () => {
   it('rolls back explicitly and rethrows when a statement fails', async () => {
     const conn = new FakeConn();
     conn.failRunWith = new Error('constraint');
-    const db = wrapConnection(conn);
+    const db = wrapConnection(conn, 'android');
     await expect(db.transaction((tx) => tx.run('INSERT', []))).rejects.toThrow('constraint');
     expect(conn.calls).toEqual(['begin', 'run:INSERT:[]:false', 'rollback']);
   });
 
   it('rolls back and rethrows when the callback throws', async () => {
     const conn = new FakeConn();
-    const db = wrapConnection(conn);
+    const db = wrapConnection(conn, 'android');
     await expect(db.transaction(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     expect(conn.calls).toEqual(['begin', 'rollback']);
     expect(conn.calls).not.toContain('commit');
@@ -162,7 +173,7 @@ describe('wrapConnection', () => {
   it('maps run results and decodes BLOB columns to Uint8Array', async () => {
     const conn = new FakeConn();
     conn.queryRows = [{ id: 1, data: [0, 1, 255], tags: 'x' }];
-    const db = wrapConnection(conn);
+    const db = wrapConnection(conn, 'android');
     expect(await db.run('INSERT', [])).toEqual({ changes: 1, lastId: 7 });
     const rows = await db.query<{ data: Uint8Array }>('SELECT');
     expect(rows[0]?.data).toEqual(Uint8Array.from([0, 1, 255]));
@@ -170,7 +181,7 @@ describe('wrapConnection', () => {
 
   it('serialises a plain query behind an open transaction', async () => {
     const conn = new FakeConn();
-    const db = wrapConnection(conn);
+    const db = wrapConnection(conn, 'android');
     const order: string[] = [];
     const t = db.transaction(async (tx) => {
       await tx.run('IN-TX', []);
@@ -186,12 +197,28 @@ describe('wrapConnection', () => {
 });
 
 describe('BLOB parameter encoding', () => {
-  it('encodes Uint8Array as the Buffer JSON shape', () => {
-    expect(encodeParams([Uint8Array.from([1, 2, 3])])).toEqual([{ type: 'Buffer', data: [1, 2, 3] }]);
+  it('android: encodes Uint8Array as the Buffer JSON shape', () => {
+    expect(encodeParams([Uint8Array.from([1, 2, 3])], 'android')).toEqual([{ type: 'Buffer', data: [1, 2, 3] }]);
+  });
+
+  it('ios: encodes Uint8Array as an index-keyed dictionary of integers', () => {
+    expect(encodeParams([Uint8Array.from([9, 0, 255])], 'ios')).toEqual([{ '0': 9, '1': 0, '2': 255 }]);
+    expect(encodeParams([new Uint8Array(0)], 'ios')).toEqual([{}]);
+  });
+
+  it('web: refuses BLOB parameters deterministically, but still binds plain values', () => {
+    expect(() => encodeParams([Uint8Array.from([1])], 'web')).toThrow(/BLOB.*web/);
+    expect(encodeParams(['a', 1], 'web')).toEqual(['a', 1]);
   });
 
   it('leaves other values alone and maps undefined/boolean', () => {
-    expect(encodeParams(['a', 5, null, undefined, true, false])).toEqual(['a', 5, null, null, 1, 0]);
+    expect(encodeParams(['a', 5, null, undefined, true, false], 'android')).toEqual(['a', 5, null, null, 1, 0]);
+  });
+
+  it('wrapConnection applies the platform to run parameters', async () => {
+    const conn = new FakeConn();
+    await wrapConnection(conn, 'ios').run('INSERT', [Uint8Array.from([5, 6])]);
+    expect(conn.calls).toEqual(['run:INSERT:[{"0":5,"1":6}]:undefined']);
   });
 
   it('decodes only all-byte arrays and keeps other values', () => {
@@ -201,5 +228,77 @@ describe('BLOB parameter encoding', () => {
       c: [300],
       d: null,
     });
+  });
+});
+
+describe('transaction safety (capacitor adapter)', () => {
+  it('throws instead of deadlocking when the outer db is used inside a transaction', async () => {
+    const conn = new FakeConn();
+    const db = wrapConnection(conn, 'android');
+    await expect(
+      db.transaction(async () => {
+        await db.query('INNER');
+      }),
+    ).rejects.toThrow(/inside (its own|a) transaction/i);
+    expect(conn.calls).toEqual(['begin', 'rollback']);
+    await db.run('AFTER', []);
+    expect(conn.calls).toContain('run:AFTER:[]:undefined');
+  });
+
+  it('positive control: the tx handle works inside the same transaction', async () => {
+    const conn = new FakeConn();
+    const db = wrapConnection(conn, 'android');
+    await db.transaction(async (tx) => {
+      await tx.query('VIA-TX');
+    });
+    expect(conn.calls).toEqual(['begin', 'query:VIA-TX:undefined', 'commit']);
+  });
+
+  it('never commits when a nested transaction failed and the outer swallowed it', async () => {
+    const conn = new FakeConn();
+    const db = wrapConnection(conn, 'android');
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.run('OUTER', []);
+        await tx
+          .transaction(async (inner) => {
+            await inner.run('INNER', []);
+            throw new Error('inner failed');
+          })
+          .catch(() => undefined);
+      }),
+    ).rejects.toThrow(/nested transaction failed/i);
+    expect(conn.calls).not.toContain('commit');
+    expect(conn.calls).toContain('rollback');
+  });
+
+  it('a failed rollback rethrows the original error and poisons the connection', async () => {
+    const conn = new FakeConn();
+    conn.failRollbackWith = new Error('rollback boom');
+    const db = wrapConnection(conn, 'android');
+    await expect(db.transaction(() => Promise.reject(new Error('original')))).rejects.toThrow('original');
+    const before = conn.calls.length;
+    await expect(db.run('NEXT', [])).rejects.toThrow(/unusable|poisoned/i);
+    await expect(db.transaction(async () => undefined)).rejects.toThrow(/unusable|poisoned/i);
+    expect(conn.calls.length).toBe(before);
+  });
+
+  it('poisons when the plugin cannot say whether a transaction is still open', async () => {
+    const conn = new FakeConn();
+    conn.failRollbackWith = new Error('rollback boom');
+    conn.failProbeWith = new Error('probe boom');
+    const db = wrapConnection(conn, 'android');
+    await expect(db.transaction(() => Promise.reject(new Error('original')))).rejects.toThrow('original');
+    await expect(db.query('NEXT')).rejects.toThrow(/unusable|poisoned/i);
+  });
+
+  it('does not poison when the failed rollback only means the plugin already ended the transaction', async () => {
+    const conn = new FakeConn();
+    conn.failRollbackWith = new Error('no transaction');
+    conn.transactionStillOpen = false;
+    const db = wrapConnection(conn, 'android');
+    await expect(db.transaction(() => Promise.reject(new Error('original')))).rejects.toThrow('original');
+    conn.failRollbackWith = null;
+    await expect(db.run('NEXT', [])).resolves.toEqual({ changes: 1, lastId: 7 });
   });
 });

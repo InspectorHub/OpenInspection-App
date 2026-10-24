@@ -114,4 +114,37 @@ describe('Db (sql.js test double)', () => {
       { name: 't2' },
     ]);
   });
+
+  it('throws instead of deadlocking when the outer db is used inside a transaction', async () => {
+    await expect(
+      db.transaction(async () => {
+        await db.query('SELECT 1');
+      }),
+    ).rejects.toThrow(/inside (its own|a) transaction/i);
+    await db.run('INSERT INTO items (name) VALUES (?)', ['after']);
+    expect(await db.query('SELECT name FROM items')).toEqual([{ name: 'after' }]);
+  });
+
+  it('positive control: the tx handle reads inside its own transaction', async () => {
+    const out = await db.transaction(async (tx) => {
+      await tx.run('INSERT INTO items (name) VALUES (?)', ['in']);
+      return tx.query('SELECT name FROM items');
+    });
+    expect(out).toEqual([{ name: 'in' }]);
+  });
+
+  it('commits nothing when a nested transaction failed and the outer swallowed it', async () => {
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['outer']);
+        await tx
+          .transaction(async (inner) => {
+            await inner.run('INSERT INTO items (name) VALUES (?)', ['inner']);
+            throw new Error('inner failed');
+          })
+          .catch(() => undefined);
+      }),
+    ).rejects.toThrow(/nested transaction failed/i);
+    expect(await db.query('SELECT * FROM items')).toEqual([]);
+  });
 });

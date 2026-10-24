@@ -26,7 +26,23 @@ const INSTALL_MARKER_VALUE = '1';
  * so a missing marker means "fresh install": clear every stale keychain item,
  * then write the marker. A present marker means a normal launch: keep items.
  */
-export async function initSecureStore(storage: SecureStorageLike, markers: KeyValue): Promise<SecureStore> {
+export function initSecureStore(storage: SecureStorageLike, markers: KeyValue): Promise<SecureStore> {
+  const existing = initialising.get(storage);
+  if (existing) return existing;
+  const started = runInit(storage, markers);
+  initialising.set(storage, started);
+  started.catch(() => initialising.delete(storage));
+  return started;
+}
+
+/**
+ * One initialisation per storage object: concurrent callers share it, so a
+ * second caller can never run the fresh-install wipe after the first one has
+ * already written. A failed initialisation is forgotten so it can be retried.
+ */
+const initialising = new WeakMap<SecureStorageLike, Promise<SecureStore>>();
+
+async function runInit(storage: SecureStorageLike, markers: KeyValue): Promise<SecureStore> {
   const marker = await markers.get(INSTALL_MARKER_KEY);
   if (marker === null) {
     await storage.clear();

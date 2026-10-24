@@ -62,4 +62,28 @@ describe('initSecureStore install marker', () => {
     await store.remove('k');
     expect(await store.get('k')).toBeNull();
   });
+
+  it('concurrent initialisation wipes at most once and never after a write', async () => {
+    const { storage, log } = fakeStorage();
+    const inner = createMemoryKeyValue();
+    let reads = 0;
+    const markers = {
+      ...inner,
+      get: async (k: string) => {
+        reads += 1;
+        const delay = reads === 1 ? 1 : 40;
+        const seen = await inner.get(k);
+        await new Promise((r) => setTimeout(r, delay));
+        return seen;
+      },
+    };
+    const pendingA = initSecureStore(storage, markers);
+    const pendingB = initSecureStore(storage, markers);
+    const a = await pendingA;
+    await a.set('refresh-token', 'fresh');
+    await new Promise((r) => setTimeout(r, 60));
+    const b = await pendingB;
+    expect(log.filter((l) => l === 'clear')).toHaveLength(1);
+    expect(await b.get('refresh-token')).toBe('fresh');
+  });
 });

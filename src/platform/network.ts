@@ -24,6 +24,9 @@ export function createNetwork(plugin: NetworkPluginLike): Network {
       const pending = plugin.addListener('networkStatusChange', (status) => {
         if (active) cb(status.connected);
       });
+      // A listener that failed to register delivers nothing; it must not surface
+      // as an unhandled rejection.
+      pending.catch(() => undefined);
       return () => {
         active = false;
         void pending.then((handle) => handle.remove()).catch(() => undefined);

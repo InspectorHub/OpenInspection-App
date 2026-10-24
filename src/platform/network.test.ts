@@ -67,4 +67,25 @@ describe('createNetwork', () => {
     expect(seen).toEqual([]);
     expect(f.listenerCount()).toBe(0);
   });
+
+  it('does not raise an unhandled rejection when addListener fails', async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', record);
+    try {
+      const plugin: NetworkPluginLike = {
+        getStatus: () => Promise.resolve({ connected: true }),
+        addListener: () => Promise.reject(new Error('bridge down')),
+      };
+      const off = createNetwork(plugin).onChange(() => undefined);
+      await settle();
+      await settle();
+      expect(unhandled).toEqual([]);
+      expect(() => off()).not.toThrow();
+      await settle();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+    }
+  });
 });

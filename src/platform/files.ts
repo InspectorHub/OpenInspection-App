@@ -9,8 +9,18 @@ export interface Files {
   remove(path: string): Promise<void>;
   /** A webview-loadable url for the file (for `<img src>`). */
   displayUrl(path: string): Promise<string>;
-  /** Streams chunks into one file without holding the whole payload in memory. */
+  /**
+   * Streams chunks into one file in the OS cache directory, without holding the
+   * whole payload in memory. Intended for transient files such as an export
+   * archive handed to the share sheet, which can contain unencrypted personal
+   * data: the caller must delete it with `removeCache` once sharing is done.
+   * If the stream fails after the first chunk, the partly written file is removed
+   * (an existing file at the same path is overwritten by then); if it fails
+   * before the first chunk, nothing is touched.
+   */
   writeCacheChunks(path: string, chunks: AsyncIterable<Uint8Array>): Promise<string>;
+  /** Deletes a file previously created with `writeCacheChunks`. */
+  removeCache(path: string): Promise<void>;
 }
 
 /** The subset of the Filesystem plugin the adapter uses. */
@@ -51,28 +61,39 @@ export function assertSafeRelativePath(path: string): void {
 
 export function createFiles(deps: FilesDeps): Files {
   const directory = Directory.LibraryNoCloud;
+  const cacheDirectory = Directory.Cache;
   const { fs } = deps;
 
   async function write(path: string, data: Uint8Array): Promise<string> {
-    return writeCacheChunks(path, slices(data));
+    return writeChunks(directory, path, slices(data));
   }
 
   async function writeCacheChunks(path: string, chunks: AsyncIterable<Uint8Array>): Promise<string> {
+    return writeChunks(cacheDirectory, path, chunks);
+  }
+
+  async function writeChunks(
+    target: Directory,
+    path: string,
+    chunks: AsyncIterable<Uint8Array>,
+  ): Promise<string> {
     assertSafeRelativePath(path);
     let uri: string | null = null;
     try {
       for await (const chunk of chunks) {
         const data = bytesToBase64(chunk);
         if (uri === null) {
-          uri = (await fs.writeFile({ path, data, directory, recursive: true })).uri;
+          uri = (await fs.writeFile({ path, data, directory: target, recursive: true })).uri;
         } else {
-          await fs.appendFile({ path, data, directory });
+          await fs.appendFile({ path, data, directory: target });
         }
       }
-      uri ??= (await fs.writeFile({ path, data: '', directory, recursive: true })).uri;
+      uri ??= (await fs.writeFile({ path, data: '', directory: target, recursive: true })).uri;
       return uri;
     } catch (err) {
-      await fs.deleteFile({ path, directory }).catch(() => undefined);
+      // Only a file this call began writing is removed; a pre-existing file survives
+      // a stream that fails before its first chunk.
+      if (uri !== null) await fs.deleteFile({ path, directory: target }).catch(() => undefined);
       throw err;
     }
   }
@@ -84,6 +105,10 @@ export function createFiles(deps: FilesDeps): Files {
       assertSafeRelativePath(path);
       const { data } = await fs.readFile({ path, directory });
       return typeof data === 'string' ? base64ToBytes(data) : new Uint8Array(await data.arrayBuffer());
+    },
+    removeCache: async (path) => {
+      assertSafeRelativePath(path);
+      await fs.deleteFile({ path, directory: cacheDirectory });
     },
     remove: async (path) => {
       assertSafeRelativePath(path);
