@@ -137,7 +137,7 @@ export async function rowCounts(db: Db): Promise<Record<string, number>> {
 /** One row in every data table a sign-out must leave alone. */
 export async function seedLocalData(db: Db): Promise<void> {
   await db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['inspection-1', new Uint8Array([1, 2, 3])]);
-  await db.run('INSERT INTO resource_cache (key, etag, body, fetched_at) VALUES (?, ?, ?, ?)', ['k', 'e', '{}', 1]);
+  await db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at) VALUES (?, ?, ?, ?, ?)', ['t%3Au', 'k', 'e', '{}', 1]);
   await db.run('INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', ['m1', 'i1', 'photo', '/p', 'image/jpeg', '{}', 'pending', 1]);
   await db.run('INSERT INTO outbox (idempotency_key, seq, op, payload, state, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['o1', 1, 'save', '{}', 'pending', 1]);
   await db.run('INSERT INTO work_package (inspection_id, refreshed_at) VALUES (?, ?)', ['i1', 1]);

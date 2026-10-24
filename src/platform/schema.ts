@@ -26,11 +26,13 @@ export const MIGRATIONS: readonly Migration[] = [
     statements: [
       'CREATE TABLE IF NOT EXISTS device_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
       `CREATE TABLE IF NOT EXISTS resource_cache (
-        key TEXT PRIMARY KEY,
+        account_key TEXT NOT NULL,
+        key TEXT NOT NULL,
         etag TEXT,
         body TEXT NOT NULL,
         fetched_at INTEGER NOT NULL,
-        package_id TEXT
+        package_id TEXT,
+        PRIMARY KEY (account_key, key)
       )`,
       `CREATE TABLE IF NOT EXISTS ydoc_updates (
         doc_name TEXT NOT NULL,
@@ -60,10 +62,16 @@ export const MIGRATIONS: readonly Migration[] = [
         state TEXT NOT NULL,
         last_error TEXT,
         created_at INTEGER NOT NULL,
-        inspection_id TEXT
+        inspection_id TEXT,
+        registry_version INTEGER NOT NULL DEFAULT 1,
+        tenant_id TEXT,
+        user_id TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER
       )`,
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_seq ON outbox(seq)',
       'CREATE INDEX IF NOT EXISTS idx_outbox_inspection ON outbox(inspection_id)',
+      'CREATE INDEX IF NOT EXISTS idx_outbox_state_next ON outbox(state, next_at)',
       `CREATE TABLE IF NOT EXISTS work_package (
         inspection_id TEXT PRIMARY KEY,
         report_id TEXT,
@@ -71,7 +79,22 @@ export const MIGRATIONS: readonly Migration[] = [
         scheduled_at INTEGER,
         completed INTEGER NOT NULL DEFAULT 0,
         refreshed_at INTEGER NOT NULL,
-        quarantine_source TEXT
+        quarantine_source TEXT,
+        server_confirmed INTEGER NOT NULL DEFAULT 1,
+        tenant_id TEXT,
+        user_id TEXT,
+        purging INTEGER NOT NULL DEFAULT 0,
+        package_gen INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS ydoc_sync (
+        doc_name TEXT PRIMARY KEY,
+        covered_state BLOB,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS lease (
+        name TEXT PRIMARY KEY,
+        holder TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
       )`,
     ],
   },
@@ -164,6 +187,7 @@ export const DEVICE_STATE_KEYS = [
   'sync_days',
   'locked_reason',
   'install_marker',
+  'outbox_seq',
 ] as const;
 
 /** Families of per-server keys: the key is the prefix followed by a non-empty suffix. */
@@ -191,6 +215,37 @@ export type MediaState = (typeof MEDIA_STATES)[number];
  */
 export const OUTBOX_STATES = ['pending', 'failed', 'orphaned'] as const;
 export type OutboxState = (typeof OUTBOX_STATES)[number];
+
+/**
+ * Fixed vocabulary of `outbox.last_error`. Only these strings are ever stored or shown: the text of a
+ * server answer never reaches the row, the log or the screen.
+ *
+ * `failed` rows carry a permanent code and wait for a person (retry or discard). `pending` rows may carry a
+ * transient code (`network`, `server_error`, `rate_limited`, `in_flight`, `target_not_visible`) that only says
+ * why the last attempt did not finish; they are retried by the replayer on their own. `orphaned` rows carry
+ * `target_gone`.
+ */
+export const OUTBOX_ERROR_CODES = [
+  'corrupt_payload',
+  'unknown_op',
+  'unknown_registry_version',
+  'validation_failed',
+  'holiday_blocked',
+  'inspection_cancelled',
+  'quota_refused',
+  'conflict',
+  'id_conflict',
+  'key_reused',
+  'rejected',
+  'unexpected_response',
+  'network',
+  'server_error',
+  'rate_limited',
+  'in_flight',
+  'target_not_visible',
+  'target_gone',
+] as const;
+export type OutboxErrorCode = (typeof OUTBOX_ERROR_CODES)[number];
 
 /** `work_package.quarantine_source`; NULL means the inspection is not quarantined. */
 export const QUARANTINE_SOURCES = ['reconcile_missing'] as const;

@@ -8,7 +8,7 @@ const MAX_RETRY_AFTER_MS = 3_600_000;
 
 export interface HttpRequest {
   url: string;
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH';
   headers?: Record<string, string>;
   body?: string;
   timeoutMs?: number;

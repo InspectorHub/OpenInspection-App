@@ -1,0 +1,575 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "OpenInspection Native Contract",
+    "version": "native-contract",
+    "x-source-sha256": "51cceb0874d965d16d49b3a5f1dd88c22191127c04c5d304b612d668ab488eff"
+  },
+  "paths": {
+    "/api/inspections": {
+      "post": {
+        "operationId": "createInspection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInspection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay of a create that named an inspection the caller may open (an owner or manager, or someone assigned to it); nothing new was created, and any step an interrupted first attempt did not reach is completed from this request (roster entry, client and people links, services and their prices, automation notices, audit entry, report and results row)"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "ID_CONFLICT: the supplied id already belongs to a record the caller may not open: one outside this workspace, or an inspection in it the caller is not assigned to. The answer is the same for both, so it does not reveal which"
+          },
+          "503": {
+            "description": "The inspection was saved but its primary report could not be created. Retry the same request; the replay completes the create. (Any other step that fails answers 500, and the same retry applies when a client-generated id was sent.)"
+          }
+        }
+      }
+    },
+    "/api/inspections/{id}": {
+      "patch": {
+        "operationId": "patchInspection",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "550e8400-e29b-41d4-a716-446655440000",
+              "description": "Inspection id."
+            },
+            "required": true,
+            "description": "Inspection id.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInspection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "A refused patch: a dangling soft reference (DB-16); status:cancelled, which only POST /{id}/cancel may write (#78); or any status change on an already-cancelled inspection, which only POST /{id}/uncancel may make (#81)"
+          }
+        }
+      }
+    },
+    "/api/inspections/{id}/complete": {
+      "post": {
+        "operationId": "completeInspection",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Inspection id."
+            },
+            "required": true,
+            "description": "Inspection id.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The inspection is cancelled. Bring it back with POST /{id}/uncancel first (#81)."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateInspection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "example": "550e8400-e29b-41d4-a716-446655440000",
+            "description": "Client-generated identifier (opaque, safe characters only); repeating a create with the same id returns the existing inspection"
+          },
+          "propertyAddress": {
+            "type": "string",
+            "minLength": 5,
+            "example": "123 Main St, Anytown",
+            "description": "Street address of the property to inspect (at least 5 characters)."
+          },
+          "clientName": {
+            "type": "string",
+            "minLength": 1,
+            "default": "Private Client",
+            "example": "John Doe",
+            "description": "Client name; defaults to Private Client when omitted."
+          },
+          "clientEmail": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  ""
+                ]
+              },
+              {
+                "nullable": true
+              }
+            ],
+            "example": "john@example.com",
+            "description": "Client email address; an empty string is treated as no email."
+          },
+          "clientPhone": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 30,
+            "example": "(555) 123-4567",
+            "description": "Client phone number. Up to 30 characters."
+          },
+          "templateId": {
+            "type": "string",
+            "minLength": 1,
+            "example": "550e8400-e29b-41d4-a716-446655440002",
+            "description": "Id of the inspection template to build the inspection from."
+          },
+          "inspectorId": {
+            "type": "string",
+            "minLength": 1,
+            "example": "550e8400-e29b-41d4-a716-446655440001",
+            "description": "Inspector (users.id) to assign to the inspection."
+          },
+          "date": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2024-03-20T10:00:00Z",
+            "description": "Scheduled date and time as an ISO 8601 datetime."
+          },
+          "referredByAgentId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "example": "550e8400-e29b-41d4-a716-446655440003",
+            "description": "Contact id of the agent who referred the job."
+          },
+          "sellingAgentId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "example": "550e8400-e29b-41d4-a716-446655440004",
+            "description": "Contact id of the selling-side agent; recorded as a person on the inspection rather than as an inspection column."
+          },
+          "addressPlaceId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Place identifier returned by the address autocomplete that supplied the geocoded fields. 1-200 characters."
+          },
+          "addressStreet": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "description": "Street line of the geocoded address. Up to 200 characters."
+          },
+          "addressCity": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 100,
+            "description": "City of the geocoded address. Up to 100 characters."
+          },
+          "addressState": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 10,
+            "description": "State or region code of the geocoded address. Up to 10 characters."
+          },
+          "addressZip": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 20,
+            "description": "Postal code of the geocoded address. Up to 20 characters."
+          },
+          "addressCounty": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 100,
+            "description": "County of the geocoded address. Up to 100 characters."
+          },
+          "addressLat": {
+            "type": "number",
+            "nullable": true,
+            "minimum": -90,
+            "maximum": 90,
+            "description": "Latitude of the geocoded address, from -90 to 90."
+          },
+          "addressLng": {
+            "type": "number",
+            "nullable": true,
+            "minimum": -180,
+            "maximum": 180,
+            "description": "Longitude of the geocoded address, from -180 to 180."
+          },
+          "propertyType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "single_family",
+              "multi_unit",
+              "commercial",
+              null
+            ],
+            "example": "commercial",
+            "description": "What kind of property is being inspected. Decides report tier, PCA block, Building Profile preset and the per-unit editor surface. Omit for unclassified. One of: single_family, multi_unit, commercial."
+          },
+          "serviceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Legacy flat service-id list. Kept for backward compat. When serviceSelections is also present, serviceSelections takes precedence for per-row price overrides; any serviceId listed here but absent from serviceSelections is linked without a priceOverride."
+          },
+          "serviceSelections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "serviceId": {
+                  "type": "string",
+                  "description": "Service catalog id to link to the inspection."
+                },
+                "priceOverrideCents": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Per-line price override in cents. Omit to use the catalog price. Integer cents, at least 0."
+                }
+              },
+              "required": [
+                "serviceId"
+              ]
+            },
+            "description": "IA-1: Richer service list that carries optional per-row price overrides. Superset of serviceIds."
+          },
+          "client": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Client full name."
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "description": "Client email — used to deduplicate against the contacts table."
+              },
+              "phone": {
+                "type": "string",
+                "description": "Client phone number."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "description": "IA-1: When present, upserts a contact row and links it as client_contact_id."
+          },
+          "agentContactId": {
+            "type": "string",
+            "description": "IA-1: Existing contacts.id to link as referred_by_agent_id."
+          },
+          "newAgent": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Agent full name."
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "description": "Agent email — used to deduplicate against the contacts table."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "description": "IA-1: When present, upserts a contact row of type=agent and links it as referred_by_agent_id."
+          },
+          "discountCodeId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Id of the discount code applied to the job, or null."
+          },
+          "discountAmount": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Discount applied to the job, in cents, or null. Integer."
+          },
+          "price": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Inspection price in cents. Integer, at least 0."
+          },
+          "paymentRequired": {
+            "type": "boolean",
+            "example": false,
+            "description": "Overrides the company policy: when true the inspection is gated on payment. Omit to inherit the company setting."
+          },
+          "agreementRequired": {
+            "type": "boolean",
+            "example": false,
+            "description": "Overrides the company policy: when true the inspection is gated on a signed agreement. Omit to inherit the company setting."
+          }
+        },
+        "required": [
+          "propertyAddress",
+          "templateId"
+        ],
+        "description": "Inspection details; an optional client-generated id makes a repeated create return the existing inspection"
+      },
+      "UpdateInspection": {
+        "type": "object",
+        "properties": {
+          "propertyAddress": {
+            "type": "string",
+            "minLength": 5,
+            "example": "123 Main St, Anytown",
+            "description": "New street address of the property (at least 5 characters)."
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              }
+            ],
+            "example": "2024-03-20T10:00:00Z",
+            "description": "New date: ISO datetime or bare YYYY-MM-DD (calendar drag). Moves the scheduled instant with it, preserving tenant wall-clock time."
+          },
+          "inspectorId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "example": "550e8400-e29b-41d4-a716-446655440001",
+            "description": "Assigned inspector (users.id) — must be a member of the caller's tenant; null unassigns."
+          },
+          "price": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 450,
+            "description": "Inspection price in cents. Integer, at least 0."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "scheduled",
+              "confirmed",
+              "completed",
+              "cancelled"
+            ],
+            "example": "completed",
+            "description": "New lifecycle status of the inspection. One of: requested, scheduled, confirmed, completed, cancelled."
+          },
+          "paymentRequired": {
+            "type": "boolean",
+            "example": false,
+            "description": "When true the inspection is gated on payment."
+          },
+          "agreementRequired": {
+            "type": "boolean",
+            "example": false,
+            "description": "When true the inspection is gated on a signed agreement."
+          },
+          "propertyType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "single_family",
+              "multi_unit",
+              "commercial",
+              null
+            ],
+            "example": "commercial",
+            "description": "Reclassify the property. Decides report tier, PCA block, Building Profile preset and the per-unit editor surface. Moving off commercial hides commercial data without deleting it; null clears the classification. One of: single_family, multi_unit, commercial."
+          },
+          "yearBuilt": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1800,
+            "maximum": 2100,
+            "example": 1990,
+            "description": "Year the property was built, from 1800 to 2100; null clears it. Integer between 1800 and 2100."
+          },
+          "sqft": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "example": 1800,
+            "description": "Floor area in square feet; null clears it. Integer, at least 0."
+          },
+          "foundationType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "basement",
+              "slab",
+              "crawlspace",
+              "other",
+              null
+            ],
+            "description": "Foundation type of the property; null clears it. One of: basement, slab, crawlspace, other."
+          },
+          "bedrooms": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "example": 3,
+            "description": "Number of bedrooms; null clears it. Integer, at least 0."
+          },
+          "bathrooms": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 20,
+            "example": 2.5,
+            "description": "Number of bathrooms, halves allowed; null clears it. Between 0 and 20."
+          },
+          "lotSize": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 50,
+            "example": "0.25 acres",
+            "description": "Free-text lot size, for example 0.25 acres; null clears it. Up to 50 characters."
+          },
+          "unit": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 50,
+            "description": "Unit or suite identifier within the property; null clears it. Up to 50 characters."
+          },
+          "county": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 100,
+            "description": "County of the property; null clears it. Up to 100 characters."
+          },
+          "closingDate": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "example": "2026-07-15",
+            "description": "Closing date of the property sale (YYYY-MM-DD); null clears it."
+          },
+          "referenceNumber": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 64,
+            "example": "REF-2026-0142",
+            "description": "External order or reference number for the job; null clears it. Up to 64 characters."
+          },
+          "referralSource": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 100,
+            "example": "Realtor",
+            "description": "Free-text label for the referral channel; null clears it. Up to 100 characters."
+          },
+          "referredByContactId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Contact who referred this job. Any contact, not only agents; distinct from referral_source, which is the channel."
+          },
+          "profileOverride": {
+            "type": "string",
+            "nullable": true,
+            "example": "meridian",
+            "description": "Per-inspection appearance profile override (built-in profile id); NULL inherits"
+          },
+          "badgeLayoutOverride": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "strip",
+              "inline",
+              null
+            ],
+            "example": "inline",
+            "description": "Per-inspection credential badge layout override; NULL inherits the profile. One of: strip, inline."
+          },
+          "reportPhotoColumns": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 4,
+            "example": 2,
+            "description": "Per-inspection report photo grid columns (1-4); NULL inherits the profile. Integer between 1 and 4."
+          },
+          "coverPhotoId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "example": "tenant/insp/itemId_uuid.jpg",
+            "description": "Report cover photo — the R2 key of a photo belonging to this inspection (attached item photo or pool photo); null clears it."
+          },
+          "requireDefectFieldsOverride": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "none",
+              "location",
+              "trade",
+              "both",
+              null
+            ],
+            "description": "Per-inspection override of which defect fields the publish gate requires; null inherits the tenant default. One of: none, location, trade, both."
+          },
+          "autoSignOnPublish": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the inspector signature is auto-applied when the report is published."
+          },
+          "templateId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "example": "550e8400-e29b-41d4-a716-446655440002",
+            "description": "Template assigned to this inspection (free-text template id)."
+          },
+          "depositRequiredCents": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "example": 9000,
+            "description": "Deposit owed on this order, in integer cents. Setting it marks the order as operator-overridden; null clears the override. Integer cents, at least 0."
+          }
+        }
+      }
+    }
+  }
+}

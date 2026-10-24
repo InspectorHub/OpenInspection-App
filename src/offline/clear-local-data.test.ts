@@ -16,7 +16,7 @@ beforeEach(async () => {
 
 async function seed(): Promise<void> {
   await db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['i1', new Uint8Array([1])]);
-  await db.run('INSERT INTO resource_cache (key, etag, body, fetched_at) VALUES (?, ?, ?, ?)', ['k', 'e', '{}', 1]);
+  await db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at) VALUES (?, ?, ?, ?, ?)', ['t%3Au', 'k', 'e', '{}', 1]);
   await db.run('INSERT INTO outbox (idempotency_key, seq, op, payload, state, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['o1', 1, 'save', '{}', 'pending', 1]);
   await db.run('INSERT INTO work_package (inspection_id, refreshed_at) VALUES (?, ?)', ['i1', 1]);
   for (const [id, path] of [

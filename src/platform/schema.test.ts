@@ -70,12 +70,14 @@ describe('migrate() on the sql.js double', () => {
     );
     expect(tables.map((t) => t.name)).toEqual([
       'device_state',
+      'lease',
       'media',
       'outbox',
       'resource_cache',
       'work_package',
       'ydoc_updates',
-    ]);
+      'ydoc_sync',
+    ].sort());
   });
 
   it('creates every table and column with the expected types', async () => {
@@ -88,7 +90,8 @@ describe('migrate() on the sql.js double', () => {
       ['value', 'TEXT', 1, 0],
     ]);
     expect(await shape('resource_cache')).toEqual([
-      ['key', 'TEXT', 0, 1],
+      ['account_key', 'TEXT', 1, 1],
+      ['key', 'TEXT', 1, 2],
       ['etag', 'TEXT', 0, 0],
       ['body', 'TEXT', 1, 0],
       ['fetched_at', 'INTEGER', 1, 0],
@@ -120,6 +123,11 @@ describe('migrate() on the sql.js double', () => {
       ['last_error', 'TEXT', 0, 0],
       ['created_at', 'INTEGER', 1, 0],
       ['inspection_id', 'TEXT', 0, 0],
+      ['registry_version', 'INTEGER', 1, 0],
+      ['tenant_id', 'TEXT', 0, 0],
+      ['user_id', 'TEXT', 0, 0],
+      ['attempts', 'INTEGER', 1, 0],
+      ['next_at', 'INTEGER', 0, 0],
     ]);
     expect(await shape('work_package')).toEqual([
       ['inspection_id', 'TEXT', 0, 1],
@@ -129,10 +137,40 @@ describe('migrate() on the sql.js double', () => {
       ['completed', 'INTEGER', 1, 0],
       ['refreshed_at', 'INTEGER', 1, 0],
       ['quarantine_source', 'TEXT', 0, 0],
+      ['server_confirmed', 'INTEGER', 1, 0],
+      ['tenant_id', 'TEXT', 0, 0],
+      ['user_id', 'TEXT', 0, 0],
+      ['purging', 'INTEGER', 1, 0],
+      ['package_gen', 'INTEGER', 1, 0],
+    ]);
+    expect(await shape('ydoc_sync')).toEqual([
+      ['doc_name', 'TEXT', 0, 1],
+      ['covered_state', 'BLOB', 0, 0],
+      ['updated_at', 'INTEGER', 1, 0],
+    ]);
+    expect(await shape('lease')).toEqual([
+      ['name', 'TEXT', 0, 1],
+      ['holder', 'TEXT', 1, 0],
+      ['expires_at', 'INTEGER', 1, 0],
     ]);
     expect((await columns('media')).attempts?.dflt_value).toBe('0');
     expect((await columns('work_package')).pinned?.dflt_value).toBe('0');
     expect((await columns('work_package')).completed?.dflt_value).toBe('0');
+    expect((await columns('work_package')).server_confirmed?.dflt_value).toBe('1');
+    expect((await columns('work_package')).purging?.dflt_value).toBe('0');
+    expect((await columns('work_package')).package_gen?.dflt_value).toBe('0');
+    expect((await columns('outbox')).registry_version?.dflt_value).toBe('1');
+    expect((await columns('outbox')).attempts?.dflt_value).toBe('0');
+  });
+
+  it('keys the resource cache per account: the same key under two accounts is two rows', async () => {
+    await migrate(db, 0);
+    const insert = 'INSERT INTO resource_cache (account_key, key, body, fetched_at) VALUES (?, ?, ?, ?)';
+    await db.run(insert, ['t1:u1', 'GET /api/inspections', '[]', 1]);
+    await db.run(insert, ['t1:u2', 'GET /api/inspections', '[1]', 1]);
+    expect(await db.query('SELECT count(*) AS n FROM resource_cache')).toEqual([{ n: 2 }]);
+    await expect(db.run(insert, ['t1:u1', 'GET /api/inspections', '[2]', 2])).rejects.toThrow(/UNIQUE|constraint/i);
+    await expect(db.run('INSERT INTO resource_cache (key, body, fetched_at) VALUES (?, ?, ?)', ['k', '{}', 1])).rejects.toThrow(/NOT NULL|constraint/i);
   });
 
   it('creates the ydoc_updates index on (doc_name, id)', async () => {
@@ -155,6 +193,7 @@ describe('migrate() on the sql.js double', () => {
     expect(await indexes('outbox')).toEqual([
       ['idx_outbox_inspection', 0],
       ['idx_outbox_seq', 1],
+      ['idx_outbox_state_next', 0],
     ]);
     expect(await indexes('resource_cache')).toEqual([['idx_resource_cache_package', 0]]);
     expect(await indexes('device_state')).toEqual([]);

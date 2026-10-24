@@ -16,7 +16,8 @@
     "test": "vitest run",
     "cap:sync": "cap sync",
     "api:types": "node scripts/api-types.mjs",
-    "api:types:check": "node scripts/api-types.mjs --check"
+    "api:types:check": "node scripts/api-types.mjs --check",
+    "contract:fixture": "node scripts/sync-contract-fixture.mjs"
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^8.0.1",

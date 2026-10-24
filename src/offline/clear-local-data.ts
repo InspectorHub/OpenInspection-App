@@ -47,7 +47,7 @@ export async function clearLocalData(db: Db, files: Files): Promise<ClearResult>
     }
   }
 
-  for (const table of ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package'] as const) {
+  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'work_package', 'lease'] as const) {
     await db.run(`DELETE FROM ${table}`);
   }
 
