@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:dev": "tsc --noEmit && node -e \"process.env.NODE_ENV='development';import('vite').then(v=>v.build({mode:'development'}))\"",
     "typecheck": "tsc --noEmit",
     "check:bundle": "node scripts/check-release-bundle.mjs",
     "test": "vitest run",
