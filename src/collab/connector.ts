@@ -7,8 +7,11 @@ import { parseServerUrl } from '../auth/server-config';
 import type { Http, HttpResponse } from '../auth/http';
 import { isAuthError } from '../auth/errors';
 import type { TokenManager } from '../auth/tokens';
+import type { Clock } from '../platform/clock';
+import { systemClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import type { Network } from '../platform/network';
+import { clearSyncProof, recordServerDeleteSet, recordServerStateVector } from './sync-proof';
 import { realTimers, type TimerPort } from './timers';
 import { SqlitePersistence, deleteDocRows, rethrowLater } from './y-sqlite';
 
@@ -105,6 +108,14 @@ export interface CollabConnectorDeps {
   /** Receives storage failures and socket-construction failures. Never receives a ticket or a token. */
   onError?: (error: unknown) => void;
   onStatus?: (inspectionId: string, status: CollabStatus) => void;
+  /**
+   * Receives a failure to record what the server said about its copy (see `sync-proof.ts`). It never means data was
+   * lost and never affects the sync: the document then simply keeps counting as not yet on the server. Receives
+   * a fixed generic error only.
+   */
+  onProofError?: (error: unknown) => void;
+  /** The time stamped on a sync proof. Defaults to the system clock. */
+  clock?: Clock;
 }
 
 export interface NativeCollabConnector extends FieldCollabConnector {
@@ -174,6 +185,22 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
   const timers = deps.timers ?? realTimers;
   const random = deps.random ?? Math.random;
   const report = deps.onError ?? rethrowLater;
+  const clock = deps.clock ?? systemClock;
+  const reportProof = (): void => {
+    try {
+      deps.onProofError?.(new Error('The sync proof could not be recorded'));
+    } catch {
+      // A failing reporter must not change what the connection does.
+    }
+  };
+  /** Runs one proof write so that neither a throw nor a rejection can reach the sync. */
+  const recordProof = (write: () => Promise<void>): void => {
+    try {
+      write().catch(reportProof);
+    } catch {
+      reportProof();
+    }
+  };
   const live = new Map<string, Set<Entry>>();
 
   function open(inspectionId: string, opts: { onChange?: () => void; onSynced?: () => void }): ResultsDocHandle {
@@ -412,10 +439,16 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         encoding.writeVarUint(reply, MSG_SYNC);
         syncProtocol.writeSyncStep2(reply, doc, payload);
         if (from.isOpen()) from.send(encoding.toUint8Array(reply));
+        // The server has just told us what it holds. This, and the deleted ranges of its step 2 below, are the only
+        // things ever recorded as proof: what this device sends is not.
+        const observed = payload.slice();
+        recordProof(() => recordServerStateVector(deps.db, docName, observed, clock.now()));
         return;
       }
       applyRemoteUpdate(payload, from);
       if (messageType === syncProtocol.messageYjsSyncStep2) {
+        const observed = payload.slice();
+        recordProof(() => recordServerDeleteSet(deps.db, docName, observed, clock.now()));
         attempts = 0;
         neverOpened = 0;
         if (!synced) {
@@ -445,6 +478,12 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         } catch (error) {
           // As on the web: a failed clear must not wedge the resync. It is reported, not hidden.
           report(error);
+        }
+        // What the server said about the replaced document describes a document that no longer exists here.
+        try {
+          await clearSyncProof(deps.db, docName);
+        } catch {
+          reportProof();
         }
         if (destroyed) return;
         doc = new Y.Doc();
@@ -636,6 +675,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       // Close first and wait: a write still in flight must land before the rows are deleted, not after.
       await Promise.all([...(live.get(inspectionId) ?? [])].map((entry) => entry.close()));
       await deleteDocRows(deps.db, resultsDocName(inspectionId));
+      await clearSyncProof(deps.db, resultsDocName(inspectionId));
     },
     onLockChange: () => {
       for (const group of live.values()) for (const entry of group) entry.reevaluate();

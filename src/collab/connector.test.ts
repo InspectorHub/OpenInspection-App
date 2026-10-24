@@ -1032,7 +1032,7 @@ describe('a version restore in progress', () => {
     world = await createWorld({}, (real) => ({
       ...real,
       run: async (sql, params) => {
-        if (sql.startsWith('DELETE')) {
+        if (sql.startsWith('DELETE FROM ydoc_updates')) {
           await new Promise<void>((resolve) => {
             deleting.push(resolve);
           });
@@ -1097,7 +1097,7 @@ describe('purge waits for the connection to finish', () => {
           log.push('insert-done');
           return result;
         }
-        if (sql.startsWith('DELETE')) log.push('delete');
+        if (sql.startsWith('DELETE FROM ydoc_updates')) log.push('delete');
         return real.run(sql, params);
       },
     }));
@@ -1280,7 +1280,7 @@ describe('a version restore: frames that arrive while it is in progress', () => 
       ...real,
       query: (sql, params) => (failReads ? Promise.reject(new Error('read failed')) : real.query(sql, params)),
       run: async (sql, params) => {
-        if (sql.startsWith('DELETE')) {
+        if (sql.startsWith('DELETE FROM ydoc_updates')) {
           if (failReadsAfterClear) failReads = true;
           await new Promise<void>((resolve) => {
             deleting.push(resolve);
