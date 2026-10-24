@@ -1,0 +1,778 @@
+import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
+import * as syncProtocol from 'y-protocols/sync';
+import * as Y from 'yjs';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AuthError } from '../auth/errors';
+import type { Http, HttpRequest, HttpResponse } from '../auth/http';
+import type { SessionCheck, TokenManager } from '../auth/tokens';
+import type { Db } from '../platform/db';
+import { createSqlJsDb } from '../platform/db-sqljs';
+import type { Network } from '../platform/network';
+import { migrate } from '../platform/schema';
+import {
+  createCollabConnector,
+  reconnectDelayMs,
+  type CollabConnectorDeps,
+  type CollabSocket,
+  type CollabStatus,
+  type SocketHandlers,
+} from './connector';
+import { createManualTimers, type ManualTimers } from './test-support/manual-timers';
+
+const ORIGIN = 'https://oi.example.test';
+const MSG_SYNC = 0;
+const MSG_RESTORE = 2;
+
+class FakeSocket implements CollabSocket {
+  readonly sent: Uint8Array[] = [];
+  closed = false;
+  private opened = false;
+
+  constructor(
+    readonly url: string,
+    private readonly handlers: SocketHandlers,
+  ) {}
+
+  isOpen(): boolean {
+    return this.opened && !this.closed;
+  }
+  send(data: Uint8Array): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.closed = true;
+  }
+  serverOpens(): void {
+    this.opened = true;
+    this.handlers.open();
+  }
+  serverSends(data: Uint8Array): void {
+    this.handlers.message(data);
+  }
+  serverCloses(): void {
+    this.opened = false;
+    this.handlers.close();
+  }
+}
+
+/** Resolves a waiter when a list reaches a length; every wait is on a signal the code under test raises. */
+class Signals<T> {
+  readonly items: T[] = [];
+  private waiters: { count: number; resolve: () => void }[] = [];
+  push(item: T): void {
+    this.items.push(item);
+    this.waiters = this.waiters.filter((w) => {
+      if (this.items.length < w.count) return true;
+      w.resolve();
+      return false;
+    });
+  }
+  waitFor(count: number): Promise<void> {
+    if (this.items.length >= count) return Promise.resolve();
+    return new Promise((resolve) => this.waiters.push({ count, resolve }));
+  }
+}
+
+function ticketReply(ticket: string, extra: Record<string, unknown> = {}): HttpResponse {
+  return reply(200, { success: true, data: { ticket, expiresIn: 60, ...extra } });
+}
+
+function reply(status: number, json: unknown, retryAfterMs: number | null = null): HttpResponse {
+  return { status, headers: new Headers(), text: JSON.stringify(json), json, retryAfterMs, upgrade: null };
+}
+
+function frame(write: (encoder: encoding.Encoder) => void): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MSG_SYNC);
+  write(encoder);
+  return encoding.toUint8Array(encoder);
+}
+
+function messageKind(data: Uint8Array): number {
+  const decoder = decoding.createDecoder(data);
+  decoding.readVarUint(decoder);
+  return decoding.readVarUint(decoder);
+}
+
+const STEP1 = syncProtocol.messageYjsSyncStep1;
+const UPDATE = syncProtocol.messageYjsUpdate;
+
+interface World {
+  db: Db;
+  timers: ManualTimers;
+  requests: HttpRequest[];
+  replies: (HttpResponse | Error)[];
+  sockets: FakeSocket[];
+  socketSignal: Signals<FakeSocket>;
+  statuses: Signals<CollabStatus>;
+  errors: unknown[];
+  changes: Signals<null>;
+  online: boolean;
+  locked: boolean;
+  emitOnline(online: boolean): void;
+  tokens: { getAccessToken: ReturnType<typeof vi.fn>; checkSession: ReturnType<typeof vi.fn> };
+  connector: ReturnType<typeof createCollabConnector>;
+}
+
+async function createWorld(overrides: Partial<CollabConnectorDeps> = {}, dbWrap?: (db: Db) => Db): Promise<World> {
+  const realDb = await createSqlJsDb();
+  await migrate(realDb, 0);
+  const db = dbWrap ? dbWrap(realDb) : realDb;
+  const timers = createManualTimers();
+  const listeners = new Set<(online: boolean) => void>();
+  const requests: HttpRequest[] = [];
+  const sockets: FakeSocket[] = [];
+  const socketSignal = new Signals<FakeSocket>();
+  const world: World = {
+    db: realDb,
+    timers,
+    requests,
+    replies: [],
+    sockets,
+    socketSignal,
+    statuses: new Signals<CollabStatus>(),
+    errors: [],
+    changes: new Signals<null>(),
+    online: true,
+    locked: false,
+    emitOnline: (online) => {
+      world.online = online;
+      for (const listener of [...listeners]) listener(online);
+    },
+    tokens: {
+      getAccessToken: vi.fn(() => Promise.resolve<string | null>('access-token-1')),
+      checkSession: vi.fn(() => Promise.resolve<SessionCheck>({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } })),
+    },
+    connector: undefined as never,
+  };
+  let ticketNumber = 0;
+  const http: Http = {
+    request: (req) => {
+      requests.push(req);
+      const next = world.replies.shift();
+      if (next instanceof Error) return Promise.reject(next);
+      ticketNumber += 1;
+      return Promise.resolve(next ?? ticketReply(`ticket-number-${String(ticketNumber).padStart(4, '0')}-abcdef`));
+    },
+  };
+  const network: Network = {
+    online: () => Promise.resolve(world.online),
+    onChange: (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+  world.connector = createCollabConnector({
+    db,
+    http,
+    tokens: world.tokens as unknown as Pick<TokenManager, 'getAccessToken' | 'checkSession'>,
+    network,
+    origin: ORIGIN,
+    isLocked: () => world.locked,
+    openSocket: (url, handlers) => {
+      const socket = new FakeSocket(url, handlers);
+      sockets.push(socket);
+      socketSignal.push(socket);
+      return socket;
+    },
+    timers,
+    random: () => 1,
+    onError: (error) => world.errors.push(error),
+    onStatus: (_id, status) => world.statuses.push(status),
+    ...overrides,
+  });
+  return world;
+}
+
+async function barrier(db: Db): Promise<void> {
+  await db.query('SELECT 1');
+}
+
+async function rows(db: Db, docName: string): Promise<number> {
+  const result = await db.query<{ n: number }>('SELECT COUNT(*) AS n FROM ydoc_updates WHERE doc_name = ?', [docName]);
+  return Number(result[0]?.n);
+}
+
+function connect(world: World, id = 'insp-1'): ReturnType<World['connector']['connect']> {
+  return world.connector.connect(id, { onChange: () => world.changes.push(null) });
+}
+
+function url(socket: FakeSocket): URL {
+  return new URL(socket.url);
+}
+
+let world: World;
+beforeEach(async () => {
+  world = await createWorld();
+});
+
+describe('connect: local state first, then the network', () => {
+  it('asks for no ticket until the stored state has been applied', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    world = await createWorld({}, (real) => ({
+      ...real,
+      query: async (sql, params) => {
+        await held;
+        return real.query(sql, params);
+      },
+    }));
+    const handle = connect(world);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(world.requests).toHaveLength(0);
+    expect(world.sockets).toHaveLength(0);
+
+    release();
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('restores the stored content into the live document before any socket opens', async () => {
+    const seed = new Y.Doc();
+    seed.getMap<unknown>('m').set('k', 'stored');
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-insp-1', Y.encodeStateAsUpdate(seed)]);
+
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    expect(handle.doc.getMap<unknown>('m').get('k')).toBe('stored');
+    expect(handle.synced()).toBe(false);
+    handle.destroy();
+  });
+
+  it('never opens a socket when the stored state cannot be read, and reports it', async () => {
+    world = await createWorld({}, (real) => ({ ...real, query: () => Promise.reject(new Error('read failed')) }));
+    const handle = connect(world);
+    await vi.waitFor(() => {
+      expect(world.errors).toHaveLength(1);
+    });
+    expect(world.requests).toHaveLength(0);
+    expect(world.sockets).toHaveLength(0);
+    handle.destroy();
+  });
+
+  it('asks the server for a ticket with the access token, and opens the pinned socket with it', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+
+    expect(world.requests).toHaveLength(1);
+    const request = world.requests[0] as HttpRequest;
+    expect(request.method).toBe('POST');
+    expect(request.url).toBe(`${ORIGIN}/api/inspections/insp-1/collab/ticket`);
+    expect(request.headers).toEqual({ Authorization: 'Bearer access-token-1' });
+
+    const socket = world.sockets[0] as FakeSocket;
+    const opened = url(socket);
+    expect(opened.origin).toBe('wss://oi.example.test');
+    expect(opened.pathname).toBe('/api/inspections/insp-1/collab/ws');
+    expect(opened.searchParams.get('ticket')).toBe('ticket-number-0001-abcdef');
+    handle.destroy();
+  });
+
+  it('starts the sync with a step 1 when the socket opens, and is synced after the step 2', async () => {
+    const onSynced = vi.fn();
+    const handle = world.connector.connect('insp-1', { onSynced, onChange: () => world.changes.push(null) });
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    expect(socket.sent).toHaveLength(0);
+
+    socket.serverOpens();
+    expect(socket.sent).toHaveLength(1);
+    expect(messageKind(socket.sent[0] as Uint8Array)).toBe(STEP1);
+    expect(handle.synced()).toBe(false);
+
+    const server = new Y.Doc();
+    server.getMap<unknown>('m').set('remote', 'x');
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, server)));
+    expect(handle.synced()).toBe(true);
+    expect(onSynced).toHaveBeenCalledTimes(1);
+    expect(handle.doc.getMap<unknown>('m').get('remote')).toBe('x');
+    handle.destroy();
+  });
+});
+
+describe('connect: the pinned origin', () => {
+  it('uses only the stored origin, whatever the ticket answer carries', async () => {
+    world.replies.push(ticketReply('ticket-number-0001-abcdef', { url: 'wss://evil.example/steal', wsUrl: 'wss://evil.example', origin: 'https://evil.example' }));
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    expect(url(world.sockets[0] as FakeSocket).host).toBe('oi.example.test');
+    expect(world.sockets.every((s) => !s.url.includes('evil.example'))).toBe(true);
+    handle.destroy();
+  });
+
+  it('turns an http loopback origin into ws, and refuses a plain-http remote origin', async () => {
+    const local = await createWorld({ origin: 'http://localhost:8787' });
+    const handle = connect(local);
+    await local.socketSignal.waitFor(1);
+    expect(local.sockets[0]?.url.startsWith('ws://localhost:8787/api/inspections/insp-1/collab/ws?ticket=')).toBe(true);
+    handle.destroy();
+
+    await expect(createWorld({ origin: 'http://lan.example.test:8787' })).rejects.toBeInstanceOf(AuthError);
+    const allowed = await createWorld({ origin: 'http://lan.example.test:8787', allowInsecureHttp: true });
+    const second = connect(allowed);
+    await allowed.socketSignal.waitFor(1);
+    expect(allowed.sockets[0]?.url.startsWith('ws://lan.example.test:8787/')).toBe(true);
+    second.destroy();
+  });
+
+  it('refuses an origin with a path, and an inspection id outside the id charset', async () => {
+    await expect(createWorld({ origin: 'https://oi.example.test/app' })).rejects.toBeInstanceOf(AuthError);
+    for (const bad of ['', '../x', 'a b', 'a/b', 'a?ticket=1', 'x'.repeat(65)]) {
+      expect(() => world.connector.connect(bad, {})).toThrow(RangeError);
+    }
+    expect(world.requests).toHaveLength(0);
+    const ok = world.connector.connect('abc_DEF-123', {});
+    ok.destroy();
+  });
+});
+
+describe('reconnecting', () => {
+  it('computes an exponential delay with jitter and a ceiling', () => {
+    expect([0, 1, 2, 3].map((n) => reconnectDelayMs(n, () => 1))).toEqual([400, 800, 1600, 3200]);
+    expect([0, 1, 2, 3].map((n) => reconnectDelayMs(n, () => 0))).toEqual([200, 400, 800, 1600]);
+    expect(reconnectDelayMs(30, () => 1)).toBe(30_000);
+    expect(reconnectDelayMs(30, () => 0)).toBe(15_000);
+    expect(reconnectDelayMs(0, () => 0.5)).toBe(300);
+  });
+
+  it('fetches a new ticket for every reconnect, and backs off while sockets keep failing', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const tickets: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      tickets.push(url(world.sockets[i] as FakeSocket).searchParams.get('ticket') ?? '');
+      (world.sockets[i] as FakeSocket).serverCloses();
+      await world.statuses.waitFor(2 * (i + 1));
+      expect(world.timers.pending()).toBe(1);
+      world.timers.fireNext();
+      await world.socketSignal.waitFor(i + 2);
+    }
+    tickets.push(url(world.sockets[3] as FakeSocket).searchParams.get('ticket') ?? '');
+    expect(new Set(tickets).size).toBe(4);
+    expect(world.requests).toHaveLength(4);
+    expect(world.timers.requested()).toEqual([400, 800, 1600]);
+    handle.destroy();
+  });
+
+  it('starts the backoff over after a sync', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    (world.sockets[0] as FakeSocket).serverCloses();
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(2);
+    const second = world.sockets[1] as FakeSocket;
+    second.serverOpens();
+    second.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, new Y.Doc())));
+    second.serverCloses();
+    expect(world.timers.requested()).toEqual([400, 400]);
+    handle.destroy();
+  });
+
+  it('ignores the close of a socket that is no longer the current one', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const first = world.sockets[0] as FakeSocket;
+    first.serverCloses();
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(2);
+    first.serverCloses();
+    expect(world.timers.pending()).toBe(0);
+    handle.destroy();
+  });
+
+  it('retries a ticket request that fails on the network, with the same backoff', async () => {
+    world.replies.push(new AuthError('server_unreachable'));
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.statuses.items.slice(0, 2)).toEqual(['connecting', 'retrying']);
+    expect(world.timers.requested()).toEqual([400]);
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(2);
+    handle.destroy();
+  });
+
+  it('waits at least as long as the server asked on 429 and 503', async () => {
+    world.replies.push(reply(503, { error: 'busy' }, 5_000));
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.timers.requested()).toEqual([5_000]);
+    handle.destroy();
+  });
+
+  it('does not retry when the server refuses this device for this inspection, or for this version', async () => {
+    for (const [status, expected] of [
+      [403, 'denied'],
+      [404, 'denied'],
+      [426, 'upgrade_required'],
+    ] as const) {
+      const w = await createWorld();
+      w.replies.push(reply(status, { error: 'no' }));
+      const handle = connect(w);
+      await w.statuses.waitFor(2);
+      expect(w.statuses.items).toEqual(['connecting', expected]);
+      expect(w.timers.pending()).toBe(0);
+      expect(w.sockets).toHaveLength(0);
+      w.emitOnline(true);
+      await barrier(w.db);
+      expect(w.requests).toHaveLength(1);
+      handle.destroy();
+    }
+    world.replies.push(reply(500, { error: 'boom' }));
+    const retried = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.timers.pending()).toBe(1);
+    retried.destroy();
+  });
+
+  it('ignores a ticket that is not shaped like one', async () => {
+    world.replies.push(ticketReply('short'), ticketReply('has spaces in it, not allowed'), reply(200, { success: true, data: {} }));
+    const handle = connect(world);
+    for (let i = 0; i < 3; i += 1) {
+      await world.statuses.waitFor(2 * (i + 1));
+      world.timers.fireNext();
+    }
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(4);
+    expect(world.sockets).toHaveLength(1);
+    expect(url(world.sockets[0] as FakeSocket).searchParams.get('ticket')).toBe('ticket-number-0004-abcdef');
+    handle.destroy();
+  });
+});
+
+describe('when the ticket is refused for authentication', () => {
+  it('stops after a bounded number of refusals, clears nothing and does not loop', async () => {
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-insp-1', Uint8Array.from([0, 0])]);
+    for (let i = 0; i < 10; i += 1) world.replies.push(reply(401, { error: 'unauthorized' }));
+    const handle = connect(world);
+
+    for (let attempt = 1; attempt < 3; attempt += 1) {
+      await world.statuses.waitFor(2 * attempt);
+      world.timers.fireNext();
+    }
+    await world.statuses.waitFor(6);
+    expect(world.statuses.items[5]).toBe('auth_rejected');
+    expect(world.requests).toHaveLength(3);
+    expect(world.tokens.checkSession).toHaveBeenCalledTimes(3);
+    expect(world.timers.pending()).toBe(0);
+
+    world.emitOnline(true);
+    await barrier(world.db);
+    expect(world.requests).toHaveLength(3);
+    expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    handle.destroy();
+  });
+
+  it('stops at once when the token manager says the session is over', async () => {
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-insp-1', Uint8Array.from([0, 0])]);
+    world.replies.push(reply(401, { error: 'unauthorized' }));
+    world.tokens.checkSession.mockResolvedValue({ kind: 'relogin' });
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.statuses.items).toEqual(['connecting', 'signed_out']);
+    expect(world.requests).toHaveLength(1);
+    expect(world.timers.pending()).toBe(0);
+    expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    handle.destroy();
+  });
+
+  it('asks the token manager when there is no access token, and retries when it only says "later"', async () => {
+    world.tokens.getAccessToken.mockResolvedValueOnce(null);
+    world.tokens.checkSession.mockResolvedValueOnce({ kind: 'retry', reason: 'network', retryAfterMs: 7_000 });
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    expect(world.requests).toHaveLength(0);
+    expect(world.tokens.checkSession).toHaveBeenCalledWith(ORIGIN);
+    expect(world.timers.requested()).toEqual([7_000]);
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('counts only refusals in a row: a good ticket starts the count over', async () => {
+    world.replies.push(reply(401, {}), reply(401, {}));
+    const handle = connect(world);
+    await world.statuses.waitFor(2);
+    world.timers.fireNext();
+    await world.statuses.waitFor(4);
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(1);
+    (world.sockets[0] as FakeSocket).serverCloses();
+    world.replies.push(reply(401, {}), reply(401, {}));
+    await world.statuses.waitFor(6);
+    world.timers.fireNext();
+    await world.statuses.waitFor(8);
+    world.timers.fireNext();
+    await world.statuses.waitFor(10);
+    world.timers.fireNext();
+    await world.socketSignal.waitFor(2);
+    expect(world.statuses.items).not.toContain('auth_rejected');
+    expect(world.requests).toHaveLength(6);
+    handle.destroy();
+  });
+});
+
+describe('offline and locked devices', () => {
+  it('makes no attempt while offline, and connects when the network returns', async () => {
+    world.online = false;
+    const handle = connect(world);
+    await world.statuses.waitFor(1);
+    expect(world.statuses.items).toEqual(['offline']);
+    expect(world.requests).toHaveLength(0);
+    expect(world.timers.pending()).toBe(0);
+
+    world.emitOnline(true);
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('drops the socket and schedules nothing when the network goes away', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    world.emitOnline(false);
+    expect(socket.closed).toBe(true);
+    socket.serverCloses();
+    expect(world.timers.pending()).toBe(0);
+    expect(world.statuses.items.at(-1)).toBe('offline');
+
+    world.emitOnline(true);
+    await world.socketSignal.waitFor(2);
+    expect(world.requests).toHaveLength(2);
+    handle.destroy();
+  });
+
+  it('does not connect on a locked device, and connects once it is unlocked', async () => {
+    world.locked = true;
+    const handle = connect(world);
+    await world.statuses.waitFor(1);
+    expect(world.statuses.items).toEqual(['locked']);
+    expect(world.requests).toHaveLength(0);
+    world.emitOnline(true);
+    await barrier(world.db);
+    await Promise.resolve();
+    expect(world.requests).toHaveLength(0);
+
+    world.locked = false;
+    world.connector.onLockChange();
+    await world.socketSignal.waitFor(1);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('closes a live socket when the device becomes locked, and stays quiet', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+
+    world.locked = true;
+    world.connector.onLockChange();
+    await world.statuses.waitFor(2);
+    expect(world.statuses.items.at(-1)).toBe('locked');
+    expect(socket.closed).toBe(true);
+    socket.serverCloses();
+    expect(world.timers.pending()).toBe(0);
+    expect(world.requests).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('treats a failing lock check as locked', async () => {
+    const failing = await createWorld({
+      isLocked: () => Promise.reject(new Error('lock state unreadable')),
+    });
+    const handle = connect(failing);
+    await failing.statuses.waitFor(1);
+    expect(failing.statuses.items).toEqual(['locked']);
+    expect(failing.requests).toHaveLength(0);
+    handle.destroy();
+  });
+});
+
+describe('messages from the socket', () => {
+  it('applies an update from the server to the document and stores it once', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+
+    const server = new Y.Doc();
+    server.getMap<unknown>('m').set('remote', 'hello');
+    socket.serverSends(frame((e) => syncProtocol.writeUpdate(e, Y.encodeStateAsUpdate(server))));
+    expect(handle.doc.getMap<unknown>('m').get('remote')).toBe('hello');
+    await barrier(world.db);
+    expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    expect(socket.sent).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('sends a local edit to the server once, and stores it once', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('local', 1);
+    await barrier(world.db);
+
+    const updates = socket.sent.filter((m) => messageKind(m) === UPDATE);
+    expect(updates).toHaveLength(1);
+    expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    handle.destroy();
+  });
+
+  it('answers a server step 1 with a step 2 of the local state', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('mine', 1);
+    const server = new Y.Doc();
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep1(e, server)));
+    const step2 = socket.sent.filter((m) => messageKind(m) === syncProtocol.messageYjsSyncStep2);
+    expect(step2).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it('ignores frames that are empty or of an unknown kind', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    socket.serverSends(new Uint8Array(0));
+    socket.serverSends(Uint8Array.from([7, 1, 2, 3]));
+    expect(handle.synced()).toBe(false);
+    expect(world.errors).toEqual([]);
+    handle.destroy();
+  });
+
+  it('drops local state and resyncs when the server announces a version restore', async () => {
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('stale', 1);
+    await barrier(world.db);
+    expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    const before = handle.doc;
+    const changesBefore = world.changes.items.length;
+
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await world.changes.waitFor(changesBefore + 1);
+    expect(handle.doc).not.toBe(before);
+    expect(handle.doc.getMap<unknown>('m').get('stale')).toBeUndefined();
+    expect(handle.synced()).toBe(false);
+    expect(await rows(world.db, 'results-insp-1')).toBe(0);
+    expect(socket.sent.filter((m) => messageKind(m) === STEP1)).toHaveLength(2);
+
+    const restored = new Y.Doc();
+    restored.getMap<unknown>('m').set('restored', true);
+    socket.serverSends(frame((e) => syncProtocol.writeSyncStep2(e, restored)));
+    expect(handle.doc.getMap<unknown>('m').get('restored')).toBe(true);
+    expect(handle.synced()).toBe(true);
+    await barrier(world.db);
+    expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    handle.destroy();
+  });
+});
+
+describe('destroy and purge', () => {
+  it('cancels a pending reconnect and closes the socket', async () => {
+    const handle = connect(world);
+    await world.socketSignal.waitFor(1);
+    const first = world.sockets[0] as FakeSocket;
+    first.serverCloses();
+    expect(world.timers.pending()).toBe(1);
+    handle.destroy();
+    expect(world.timers.pending()).toBe(0);
+
+    const live = connect(world, 'insp-2');
+    await world.socketSignal.waitFor(2);
+    const second = world.sockets[1] as FakeSocket;
+    live.destroy();
+    live.destroy();
+    expect(second.closed).toBe(true);
+    expect(world.requests).toHaveLength(2);
+  });
+
+  it('does not open a socket for a ticket that arrives after destroy', async () => {
+    let answer: (response: HttpResponse) => void = () => undefined;
+    const held = await createWorld({
+      http: {
+        request: () =>
+          new Promise<HttpResponse>((resolve) => {
+            answer = resolve;
+          }),
+      },
+    });
+    const handle = connect(held);
+    await held.statuses.waitFor(1);
+    handle.destroy();
+    answer(ticketReply('ticket-number-0001-abcdef'));
+    await barrier(held.db);
+    await Promise.resolve();
+    expect(held.sockets).toHaveLength(0);
+  });
+
+  it('purge deletes that inspection rows, closes its socket and leaves other inspections alone', async () => {
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('k', 1);
+    handle.doc.getMap<unknown>('m').set('j', 2);
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-insp-2', Uint8Array.from([0, 0])]);
+    await barrier(world.db);
+    expect(await rows(world.db, 'results-insp-1')).toBe(2);
+
+    await world.connector.purge('insp-1');
+    expect(socket.closed).toBe(true);
+    expect(await rows(world.db, 'results-insp-1')).toBe(0);
+    expect(await rows(world.db, 'results-insp-2')).toBe(1);
+
+    handle.doc.getMap<unknown>('m').set('after', 3);
+    await barrier(world.db);
+    expect(await rows(world.db, 'results-insp-1')).toBe(0);
+    expect(world.timers.pending()).toBe(0);
+  });
+
+  it('purge deletes the rows of an inspection that has no live connection, and rejects an invalid id', async () => {
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-insp-9', Uint8Array.from([0, 0])]);
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-insp-90', Uint8Array.from([0, 0])]);
+    await world.connector.purge('insp-9');
+    expect(await rows(world.db, 'results-insp-9')).toBe(0);
+    expect(await rows(world.db, 'results-insp-90')).toBe(1);
+
+    await expect(world.connector.purge("x' OR '1'='1")).rejects.toBeInstanceOf(RangeError);
+    await expect(world.connector.purge('%')).rejects.toBeInstanceOf(RangeError);
+    expect(await rows(world.db, 'results-insp-90')).toBe(1);
+  });
+});
+
+describe('what is reported', () => {
+  it('never puts the ticket or the token into a status or an error', async () => {
+    const hostile = await createWorld({
+      openSocket: (socketUrl) => {
+        throw new Error(`Failed to construct 'WebSocket': The URL '${socketUrl}' is invalid.`);
+      },
+    });
+    const handle = connect(hostile);
+    await hostile.statuses.waitFor(2);
+    expect(hostile.errors).toHaveLength(1);
+    const text = JSON.stringify([hostile.statuses.items, hostile.errors.map((e) => (e as Error).message)]);
+    expect(text).not.toContain('ticket-number');
+    expect(text).not.toContain('access-token');
+    expect(hostile.timers.pending()).toBe(1);
+    handle.destroy();
+  });
+});
