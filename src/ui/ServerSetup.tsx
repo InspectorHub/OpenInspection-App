@@ -4,6 +4,7 @@ import type { AppServices } from '../app/compose';
 import { connectToServer } from '../app/connect';
 import { isAuthError } from '../auth/errors';
 import { parseServerUrl } from '../auth/server-config';
+import { DevDiagnostics } from './dev-diagnostics';
 import { Body, Button, Heading, INPUT_CLASSES, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NATIVE_LOGIN_HELP } from './messages';
@@ -126,6 +127,7 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
         )}
         <Button type="submit">Continue</Button>
       </form>
+      <DevDiagnostics services={services} origin={null} />
     </Screen>
   );
 }

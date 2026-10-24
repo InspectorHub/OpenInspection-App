@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import type { StoredIdentity } from '../auth/server-config';
 import { ConfirmDialog } from './ConfirmDialog';
+import { DevDiagnostics } from './dev-diagnostics';
 import { Body, Button, Heading, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor } from './messages';
@@ -67,6 +68,7 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
       <Button ref={trigger} variant="secondary" onClick={() => setConfirming(true)}>
         Sign out
       </Button>
+      <DevDiagnostics services={services} origin={origin} />
       {confirming && (
         <ConfirmDialog
           title="Sign out of this device?"

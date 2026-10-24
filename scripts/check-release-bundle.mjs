@@ -3,13 +3,14 @@
 //   npm run build && npm run check:bundle
 //   node scripts/check-release-bundle.mjs [dist-directory]
 //
-// The plain-http switch on the server screen is behind the build's own DEV flag, which the bundler
-// replaces with a constant, so a release bundle must not contain its label at all. This reads the
+// The plain-http switch on the server screen and the diagnostics screen are behind the build's own DEV flag, which the bundler
+// replaces with a constant, so a release bundle must not contain their labels at all. This reads the
 // built files, because a source test cannot see what the bundler kept.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 
-const FORBIDDEN = ['Allow plain http'];
+// Development-only UI and the diagnostics screen: its button label, and the marker every check title and console line starts with.
+const FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]'];
 const SCANNED = new Set(['.js', '.mjs', '.css', '.html']);
 
 function* walk(dir) {

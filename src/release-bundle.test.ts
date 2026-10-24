@@ -34,6 +34,31 @@ describe('check-release-bundle', () => {
     expect(result.stderr).toContain('Allow plain http');
   });
 
+  it('fails on a bundle that still contains the diagnostics button label', () => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Diagnostics (development only)")' });
+    const result = check(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Diagnostics (development only)');
+  });
+
+  it('fails on a bundle that still contains a check title marker, even in a lazy chunk', () => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Continue")', 'assets/diagnostics-def.js': 'y("[diag] db-blob: binary values")' });
+    const result = check(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('diagnostics-def.js');
+    expect(result.stderr).toContain('[diag]');
+  });
+
+  it('fails on a console line template that carries the marker', () => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'console.info(`[diag] ${id} ${ok} ${detail}`)' });
+    expect(check(dir).status).toBe(1);
+  });
+
+  it('control: a bundle with similar but allowed words passes', () => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Diagnostics are off"); y("diag"); z("[diagram]")' });
+    expect(check(dir).status).toBe(0);
+  });
+
   it('control: passes on a bundle without it, and says how many files it scanned', () => {
     const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Continue")' });
     const result = check(dir);
