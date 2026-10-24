@@ -10,6 +10,55 @@ import { isLocalId } from './registry';
  * loader applies. The global set is what the loader reads once per session. Every one is a GET.
  */
 
+/**
+ * Which editor read each cached key answers. The cache is keyed by the path the package downloads; the editor's
+ * loader does not always read that exact url, so a source that serves the editor from the cache must map the url it
+ * is asked for to a key deliberately, never by string equality. `:id` stands for the inspection id.
+ *
+ *   cached key                                  the editor read it answers
+ *   /api/inspections/:id                        the inspection row (loader)
+ *   /api/inspections/:id/results                /api/inspections/:id/results?scope=_default (loader). The package caches the
+ *                                               whole map without a query; the loader asks for the default scope only, and
+ *                                               the whole map is a superset of it.
+ *   /api/inspections/:id/report-data            same url (loader)
+ *   /api/inspections/:id/units                  same url (loader, jobs that may have units)
+ *   /api/inspections/:id/unit-progress          same url (loader, jobs that may have units)
+ *   /api/inspections/:id/compliance             same url (loader, full PCA reports)
+ *   /api/inspections/:id/statutory-details      same url (loader, templates that declare a statutory form)
+ *   /api/inspections/:id/statutory-form/coverage  same url (loader, templates that declare a statutory form)
+ *   /api/inspections/:id/cost-items             same url (the cost panel of commercial jobs; not a loader read)
+ *   /api/session/context                        same url (loader)
+ *   /api/tags                                   same url (loader)
+ *   /api/admin/defect-categories                same url (loader)
+ *   /api/recommendations                        same url (component-level read)
+ *   /api/contractor-types                       same url (component-level read)
+ *
+ * `EDITOR_READ_KEY_MAP` below is the same table as data, and a test keeps it equal to what the package downloads.
+ */
+export interface EditorReadMapping {
+  /** The url the editor asks for, `:id` for the inspection id; a query string is part of the pattern when the editor sends one. */
+  editorRead: string;
+  /** The key the package stores it under. */
+  cacheKey: string;
+}
+
+export const EDITOR_READ_KEY_MAP: readonly EditorReadMapping[] = [
+  { editorRead: '/api/inspections/:id', cacheKey: '/api/inspections/:id' },
+  { editorRead: '/api/inspections/:id/results?scope=_default', cacheKey: '/api/inspections/:id/results' },
+  { editorRead: '/api/inspections/:id/report-data', cacheKey: '/api/inspections/:id/report-data' },
+  { editorRead: '/api/inspections/:id/units', cacheKey: '/api/inspections/:id/units' },
+  { editorRead: '/api/inspections/:id/unit-progress', cacheKey: '/api/inspections/:id/unit-progress' },
+  { editorRead: '/api/inspections/:id/compliance', cacheKey: '/api/inspections/:id/compliance' },
+  { editorRead: '/api/inspections/:id/statutory-details', cacheKey: '/api/inspections/:id/statutory-details' },
+  { editorRead: '/api/inspections/:id/statutory-form/coverage', cacheKey: '/api/inspections/:id/statutory-form/coverage' },
+  { editorRead: '/api/inspections/:id/cost-items', cacheKey: '/api/inspections/:id/cost-items' },
+  { editorRead: '/api/session/context', cacheKey: '/api/session/context' },
+  { editorRead: '/api/tags', cacheKey: '/api/tags' },
+  { editorRead: '/api/admin/defect-categories', cacheKey: '/api/admin/defect-categories' },
+  { editorRead: '/api/recommendations', cacheKey: '/api/recommendations' },
+  { editorRead: '/api/contractor-types', cacheKey: '/api/contractor-types' },
+];
+
 export const GLOBAL_RESOURCE_PATHS = ['/api/session/context', '/api/tags', '/api/recommendations', '/api/contractor-types', '/api/admin/defect-categories'] as const;
 
 /** The path of an inspection's own row. The id is checked here, so no other module can build a url from an unchecked one. */

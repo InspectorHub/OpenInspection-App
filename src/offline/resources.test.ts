@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RESERVED_INSPECTION_IDS } from './registry';
-import { DEFAULT_JSON_LIMITS, GLOBAL_RESOURCE_PATHS, baseInspectionPaths, conditionalInspectionPaths, hasSuccessEnvelope, isJsonContentType, jsonWithinLimits } from './resources';
+import { DEFAULT_JSON_LIMITS, EDITOR_READ_KEY_MAP, GLOBAL_RESOURCE_PATHS, baseInspectionPaths, conditionalInspectionPaths, hasSuccessEnvelope, isJsonContentType, jsonWithinLimits } from './resources';
 
 const limits = { ...DEFAULT_JSON_LIMITS, maxDepth: 5, maxNodes: 50, maxArrayLength: 10 };
 
@@ -100,5 +100,25 @@ describe('the response guard', () => {
     let deep: unknown = 1;
     for (let i = 0; i < 100_000; i += 1) deep = [deep];
     expect(jsonWithinLimits(deep, DEFAULT_JSON_LIMITS)).toBe(false);
+  });
+});
+
+describe('the editor read to cache key map', () => {
+  const ID = 'i1';
+  const everyInspectionPath = (): string[] => {
+    const everything = { success: true, data: { inspection: { propertyType: 'commercial', reportTier: 'full_pca', templateSnapshot: { statutoryForm: true } } } };
+    return [...baseInspectionPaths(ID), ...conditionalInspectionPaths(ID, everything)];
+  };
+  const keysOfMap = (): string[] => EDITOR_READ_KEY_MAP.map((entry) => entry.cacheKey.replace(':id', ID));
+
+  it('has an entry for every resource the package caches, and no entry for one it does not', () => {
+    const cached = [...everyInspectionPath(), ...GLOBAL_RESOURCE_PATHS];
+    expect([...keysOfMap()].sort()).toEqual([...cached].sort());
+    expect(new Set(keysOfMap()).size).toBe(keysOfMap().length);
+  });
+
+  it('maps the scoped results read to the unscoped key the package stores', () => {
+    const results = EDITOR_READ_KEY_MAP.find((entry) => entry.cacheKey.endsWith('/results'));
+    expect(results).toEqual({ editorRead: '/api/inspections/:id/results?scope=_default', cacheKey: '/api/inspections/:id/results' });
   });
 });

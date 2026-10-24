@@ -220,7 +220,7 @@ export async function createPackageWorld(options: Partial<RefresherDeps> = {}): 
       );
     },
     cached: async (key: string, account: string = ALICE_KEY) => (await world.db.query<{ body: string }>('SELECT body FROM resource_cache WHERE account_key = ? AND key = ?', [account, key]))[0]?.body ?? null,
-    cachedKeys: async (id: string) => (await world.db.query<{ key: string }>("SELECT key FROM resource_cache WHERE package_id = ? AND key <> '$refresh_error' ORDER BY key", [id])).map((r) => r.key),
+    cachedKeys: async (id: string) => (await world.db.query<{ key: string }>("SELECT key FROM resource_cache WHERE package_id = ? AND SUBSTR(key, 1, 5) = '/api/' ORDER BY key", [id])).map((r) => r.key),
     run: (reason: RefreshReason = 'manual') => refresher.refresh({ reason }),
   });
 }

@@ -98,7 +98,7 @@ describe('replaceInspectionResources', () => {
 
   it('refuses a key that is not an api path, so a refresh marker cannot be planted', async () => {
     await addPackage('i1');
-    await expect(replaceInspectionResources(db, { accountKey: A, inspectionId: 'i1', packageGen: 0, resources: stage(['$refresh_error', 'x']), refreshedAt: 1 })).rejects.toThrow();
+    await expect(replaceInspectionResources(db, { accountKey: A, inspectionId: 'i1', packageGen: 0, resources: stage(['$refresh_error:i1', 'x']), refreshedAt: 1 })).rejects.toThrow();
     expect(await db.query('SELECT 1 FROM resource_cache')).toEqual([]);
   });
 

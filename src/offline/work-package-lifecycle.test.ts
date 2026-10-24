@@ -296,14 +296,15 @@ describe('the size cap', () => {
     ['a media row', "INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, created_at) VALUES ('m', 'a', 'photo', 'p', 'image/jpeg', '{}', 'uploaded', 1)"],
     ['a Yjs update', "INSERT INTO ydoc_updates (doc_name, data) VALUES ('results-a', x'00')"],
     ['a pin', "UPDATE work_package SET pinned = 1 WHERE inspection_id = 'a'"],
-  ])('with %s on the oldest inspection nothing is evicted, and when the cap still cannot be met the run makes no request at all', async (_name, protect) => {
+  ])('with %s on the oldest inspection nothing is evicted, and when the cap still cannot be met the run does not halt: the evicted one is a new download and is skipped', async (_name, protect) => {
     await seedTwo();
     await w.db.run(protect);
     const tight = w.build({ limits: { cacheCapBytes: 10 } });
     const summary = await tight.refresh({ reason: 'manual' });
-    expect(summary).toMatchObject({ halted: 'cache_full', refreshed: 0 });
-    expect(w.pkg.requests).toHaveLength(0);
+    expect(summary).toMatchObject({ halted: null, refreshed: 0, skippedCacheFull: 1, cacheFull: true });
+    expect(w.pkg.requests.length).toBeGreaterThan(0);
     expect(await w.cachedKeys('a')).toHaveLength(3);
+    expect(await w.cachedKeys('b')).toEqual([]);
   });
 
   it('under the cap nothing is evicted', async () => {
@@ -319,7 +320,7 @@ describe('the size cap', () => {
     const summary = await w.run();
     expect(summary).toMatchObject({ refreshed: 0, failed: 1 });
     expect(await w.cachedKeys('t1')).toEqual([]);
-    expect(await w.db.query("SELECT body FROM resource_cache WHERE key = '$refresh_error'")).toEqual([{ body: 'too_large' }]);
+    expect(await w.db.query("SELECT key, body FROM resource_cache WHERE SUBSTR(key, 1, 15) = '$refresh_error:'")).toEqual([{ key: '$refresh_error:t1', body: 'too_large' }]);
   });
 });
 

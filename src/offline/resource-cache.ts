@@ -1,5 +1,6 @@
 import type { Db } from '../platform/db';
 import { accountKey as accountKeyOf } from './outbox';
+import { isLocalId } from './registry';
 
 /**
  * The local copy of the server's JSON reads (`resource_cache`). Every row belongs to one account (`account_key`)
@@ -11,11 +12,19 @@ import { accountKey as accountKeyOf } from './outbox';
 /** Not a valid inspection id (`$` is outside the id charset), so no inspection can collide with it. */
 export const GLOBAL_PACKAGE_ID = '$global';
 /**
- * The marker row that says why an inspection's last refresh failed. Its body is a fixed code from the refresher.
- * It lives in the package it describes, so a purge, a clear and a successful replacement all remove it with the
- * package and it needs no table or `device_state` key of its own.
+ * The marker rows that say why an inspection's last refresh failed. There is one per inspection, keyed
+ * `$refresh_error:<inspectionId>` (the table's key is unique per account, so a shared key would let one inspection's
+ * failure overwrite another's). The body is a fixed code from the refresher. A marker lives in the package it
+ * describes, so a purge, a clear and a successful replacement all remove it with the package and it needs no table or
+ * `device_state` key of its own. `$` is outside the api-path pattern, so no fetched resource can collide with one.
  */
-export const REFRESH_ERROR_KEY = '$refresh_error';
+export const REFRESH_ERROR_PREFIX = '$refresh_error:';
+
+/** The marker key of one inspection. The id is checked, so a marker key can never be built from free text. */
+export function refreshErrorKey(inspectionId: string): string {
+  if (!isLocalId(inspectionId)) throw new RangeError('invalid inspection id');
+  return `${REFRESH_ERROR_PREFIX}${inspectionId}`;
+}
 const KEY_PATTERN = /^\/api\//;
 
 export interface CachedResource {
@@ -64,7 +73,7 @@ export async function readCachedBodies(db: Db, account: string, keys: readonly s
   return found;
 }
 
-export type ReplaceOutcome = 'replaced' | 'no_package' | 'purging' | 'stale_generation' | 'other_account';
+export type ReplaceOutcome = 'replaced' | 'no_package' | 'purging' | 'stale_generation' | 'other_account' | 'not_refreshable';
 
 export interface ReplaceInspectionInput {
   accountKey: string;
@@ -78,23 +87,24 @@ export interface ReplaceInspectionInput {
 
 /**
  * Replaces every cached resource of one inspection in ONE short transaction, after checking in that same
- * transaction that the package still exists, is not being purged, belongs to this account and is still at the
- * generation the caller fetched against. A refresh that finishes after a purge or after a newer refresh therefore
+ * transaction that the package still exists, is not being purged, is not quarantined, is still confirmed by the server, belongs to
+ * this account and is still at the generation the caller fetched against. A refresh that finishes after a purge or after a newer refresh therefore
  * writes nothing. A failure anywhere rolls the whole set back.
  */
 export async function replaceInspectionResources(db: Db, input: ReplaceInspectionInput): Promise<ReplaceOutcome> {
   assertKeys(input.resources);
   return db.transaction(async (tx) => {
-    const rows = await tx.query<{ tenant_id: string | null; user_id: string | null; purging: number; package_gen: number }>(
-      'SELECT tenant_id, user_id, purging, package_gen FROM work_package WHERE inspection_id = ?',
+    const rows = await tx.query<{ tenant_id: string | null; user_id: string | null; purging: number; package_gen: number; quarantine_source: string | null; server_confirmed: number }>(
+      'SELECT tenant_id, user_id, purging, package_gen, quarantine_source, server_confirmed FROM work_package WHERE inspection_id = ?',
       [input.inspectionId],
     );
     const row = rows[0];
     if (row === undefined) return 'no_package';
     if (row.tenant_id === null || row.user_id === null || accountKeyOf({ tenantId: row.tenant_id, userId: row.user_id }) !== input.accountKey) return 'other_account';
     if (row.purging !== 0) return 'purging';
+    if (row.quarantine_source !== null || row.server_confirmed !== 1) return 'not_refreshable';
     if (row.package_gen !== input.packageGen) return 'stale_generation';
-    const bumped = await tx.run('UPDATE work_package SET package_gen = package_gen + 1, refreshed_at = ? WHERE inspection_id = ? AND package_gen = ? AND purging = 0', [input.refreshedAt, input.inspectionId, input.packageGen]);
+    const bumped = await tx.run('UPDATE work_package SET package_gen = package_gen + 1, refreshed_at = ? WHERE inspection_id = ? AND package_gen = ? AND purging = 0 AND quarantine_source IS NULL AND server_confirmed = 1', [input.refreshedAt, input.inspectionId, input.packageGen]);
     if (bumped.changes !== 1) return 'stale_generation';
     await tx.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ?', [input.accountKey, input.inspectionId]);
     await insertAll(tx, input.accountKey, input.inspectionId, input.resources);
@@ -112,19 +122,36 @@ export async function replaceGlobalResources(db: Db, input: { accountKey: string
 }
 
 /**
- * Remembers why an inspection's refresh failed. Written only while the package exists and is not being purged, so
- * a marker is never left behind for a package that has gone. The previous cache is not touched.
+ * Remembers why an inspection's refresh failed. Written only while the package exists, is not being purged and
+ * belongs to this account, so a marker is never left behind for a package that has gone or is someone else's. One
+ * marker per inspection: a second failure replaces that inspection's marker and no other. The previous cache is not
+ * touched.
  */
 export async function recordRefreshError(db: Db, input: { accountKey: string; inspectionId: string; code: string; at: number }): Promise<void> {
-  await db.run(
-    `INSERT OR REPLACE INTO resource_cache (account_key, key, etag, body, fetched_at, package_id)
-     SELECT ?, ?, NULL, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_package WHERE inspection_id = ? AND purging = 0)`,
-    [input.accountKey, REFRESH_ERROR_KEY, input.code, input.at, input.inspectionId, input.inspectionId],
-  );
+  const key = refreshErrorKey(input.inspectionId);
+  await db.transaction(async (tx) => {
+    const rows = await tx.query<{ tenant_id: string | null; user_id: string | null; purging: number }>('SELECT tenant_id, user_id, purging FROM work_package WHERE inspection_id = ?', [input.inspectionId]);
+    const row = rows[0];
+    if (row === undefined || row.purging !== 0 || row.tenant_id === null || row.user_id === null) return;
+    if (accountKeyOf({ tenantId: row.tenant_id, userId: row.user_id }) !== input.accountKey) return;
+    await tx.run('INSERT OR REPLACE INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, ?, ?, ?)', [input.accountKey, key, input.code, input.at, input.inspectionId]);
+  });
 }
 
 export async function clearRefreshError(db: Db, accountKey: string, inspectionId: string): Promise<void> {
-  await db.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ? AND key = ?', [accountKey, inspectionId, REFRESH_ERROR_KEY]);
+  await db.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ? AND key = ?', [accountKey, inspectionId, refreshErrorKey(inspectionId)]);
+}
+
+/** Inspections of this account that hold at least one fetched resource (a marker alone does not count). */
+export async function packagesWithCachedRows(db: Db, accountKey: string): Promise<Set<string>> {
+  const rows = await db.query<{ package_id: string }>("SELECT DISTINCT package_id FROM resource_cache WHERE account_key = ? AND package_id <> ? AND SUBSTR(key, 1, 5) = '/api/'", [accountKey, GLOBAL_PACKAGE_ID]);
+  return new Set(rows.map((r) => r.package_id));
+}
+
+/** Bytes of fetched resources one package holds, markers excluded. */
+export async function packageBytes(db: Db, accountKey: string, packageId: string): Promise<number> {
+  const rows = await db.query<{ n: number | null }>("SELECT SUM(LENGTH(CAST(body AS BLOB))) AS n FROM resource_cache WHERE account_key = ? AND package_id = ? AND SUBSTR(key, 1, 5) = '/api/'", [accountKey, packageId]);
+  return rows[0]?.n ?? 0;
 }
 
 /** Bytes of body text one account holds, markers included. */
@@ -164,7 +191,7 @@ export async function evictOverCap(db: Db, input: { accountKey: string; capBytes
   const owners = await db.query<{ package_id: string; oldest: number; tenant_id: string | null; user_id: string | null }>(
     `SELECT r.package_id AS package_id, MIN(r.fetched_at) AS oldest, w.tenant_id AS tenant_id, w.user_id AS user_id
      FROM resource_cache r JOIN work_package w ON w.inspection_id = r.package_id
-     WHERE r.account_key = ? AND r.package_id <> ? GROUP BY r.package_id ORDER BY oldest ASC, r.package_id ASC`,
+     WHERE r.account_key = ? AND r.package_id <> ? AND SUBSTR(r.key, 1, 5) = '/api/' GROUP BY r.package_id ORDER BY oldest ASC, r.package_id ASC`,
     [input.accountKey, GLOBAL_PACKAGE_ID],
   );
   for (const candidate of owners) {

@@ -27,7 +27,11 @@ import {
   type Target,
 } from './package-targets';
 import {
+  GLOBAL_PACKAGE_ID,
+  cacheBytes,
   evictOverCap,
+  packageBytes,
+  packagesWithCachedRows,
   readCached,
   recordRefreshError,
   replaceGlobalResources,
@@ -75,7 +79,6 @@ export type RefreshHalt =
   | 'request_cap'
   | 'too_many_errors'
   | 'rate_limited'
-  | 'cache_full'
   | 'list_failed'
   | 'storage_failed';
 
@@ -93,6 +96,12 @@ export interface RefreshSummary {
   halted: RefreshHalt | null;
   /** Another flow (replay, reconcile, another refresh) held the lease; nothing was requested. */
   leaseBusy: boolean;
+  /** List queries that stopped at the page cap while the server still had more. Rows past the cap were never seen. */
+  listTruncated: number;
+  /** Inspections not downloaded because the account is over its cache cap and had nothing evictable (new downloads only). */
+  skippedCacheFull: number;
+  /** The account was over its cache cap with nothing evictable: only replacements that do not grow the cache were made. */
+  cacheFull: boolean;
 }
 
 export interface RefreshLimits {
@@ -200,9 +209,13 @@ interface Run {
   consecutive: number;
   halted: RefreshHalt | null;
   cooling: Promise<void> | null;
+  /** Set when the account is over its cache cap and eviction could not get it under: replacements may not grow the cache. */
+  replaceOnly: boolean;
+  /** Growth already granted to replacements of this run while in `replaceOnly` mode. */
+  granted: number;
 }
 
-const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false });
+const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false });
 
 const utf8Length = (text: string): number => new TextEncoder().encode(text).byteLength;
 
@@ -225,6 +238,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
   let started = false;
   let running: Promise<RefreshSummary> | null = null;
   let queued: RefreshReason | null = null;
+  let runningReason: RefreshReason | null = null;
   let busyStreak = 0;
   let timer: unknown = null;
   const unsubscribe: (() => void)[] = [];
@@ -313,6 +327,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
   }
 
   async function sendOnce(run: Run, path: string): Promise<Sent> {
+    // A request may have waited for a permit since `getJson` last looked: a stopped refresher fetches no token at all.
+    if (stopped) return halt(run, 'stopped');
     let token: string | null;
     try {
       token = await deps.tokens.getAccessToken(deps.origin);
@@ -321,6 +337,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     }
     if (token === null) return halt(run, 'auth');
     // Fetching a token can take a refresh round trip; what was true before it is checked again right before the request.
+    if (stopped) return halt(run, 'stopped');
     const blocked = await gate(run, true);
     if (blocked !== null) return halt(run, blocked);
     if (run.summary.requests >= limits.maxRequests) return halt(run, 'request_cap');
@@ -364,6 +381,11 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
         continue;
       }
       const release = await acquirePermit();
+      if (stopped || run.halted !== null || skip?.()) {
+        // Waiting for a permit can outlast the reason to send: a sibling failed, the run halted or the refresher stopped.
+        release();
+        continue;
+      }
       let sent: Sent;
       try {
         sent = await sendOnce(run, path);
@@ -448,6 +470,22 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     into.set(path, { body: fetched.text, etag: fetched.etag, fetchedAt: now });
   }
 
+  /**
+   * In `replaceOnly` mode (the account is over its cap with nothing to evict): true when replacing a package's set of
+   * `newBytes` does not push the account past the cap. A set that is no bigger than the one it replaces always passes.
+   * Growth is granted against the headroom minus what this run already granted, and a grant is never given back, so
+   * three replacements racing each other can only be refused too often, never accepted too often.
+   */
+  async function mayGrow(run: Run, packageId: string, newBytes: number): Promise<boolean> {
+    const held = await packageBytes(deps.db, run.key, packageId);
+    const growth = newBytes - held;
+    if (growth <= 0) return true;
+    const total = await cacheBytes(deps.db, run.key);
+    if (growth > limits.cacheCapBytes - total - run.granted) return false;
+    run.granted += growth;
+    return true;
+  }
+
   async function refreshOne(run: Run, target: Target): Promise<void> {
     const before = await readPackageRow(deps.db, target.id);
     if (before === null || !isRefreshable(before, run.account)) {
@@ -486,6 +524,10 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     let bytes = 0;
     for (const value of staged.values()) bytes += utf8Length(value.body);
     if (bytes > limits.inspectionBytes) return fail(run, target.id, 'too_large');
+    if (run.replaceOnly && !(await mayGrow(run, target.id, bytes))) {
+      run.summary.skippedCacheFull += 1;
+      return;
+    }
     const blocked = await gate(run, false);
     if (blocked !== null) {
       halt(run, blocked);
@@ -524,6 +566,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       }
       cursor = next;
     }
+    // The cap was reached with a cursor still open: what lies past it was never seen, and the summary says so.
+    run.summary.listTruncated += 1;
     return true;
   }
 
@@ -544,10 +588,13 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     );
     if (run.halted !== null) return;
     const staged = new Map<string, StagedResource>();
+    let stagedBytes = 0;
     for (const { path, answer } of answers) {
       if (answer.kind !== 'ok') return;
       stage(staged, path, answer, now);
+      stagedBytes += utf8Length(answer.text);
     }
+    if (run.replaceOnly && !(await mayGrow(run, GLOBAL_PACKAGE_ID, stagedBytes))) return;
     const blocked = await gate(run, false);
     if (blocked !== null) {
       halt(run, blocked);
@@ -567,9 +614,11 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
   }
 
   async function work(run: Run): Promise<void> {
-    if (await evict(run) > limits.cacheCapBytes) {
-      halt(run, 'cache_full');
-      return;
+    if ((await evict(run)) > limits.cacheCapBytes) {
+      // Over the cap with nothing left to evict (pinned, unsent or unconfirmed packages hold the space). Stopping here
+      // would keep even today's work from refreshing, so the run goes on in replace-only mode instead.
+      run.replaceOnly = true;
+      run.summary.cacheFull = true;
     }
     const now = deps.clock.now();
     const todayDay = utcDay(now);
@@ -591,6 +640,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     await upsertListed(deps.db, run.account, list.items);
     const rows = await readPackageRows(deps.db);
     const withError = await packagesWithError(deps.db, run.account);
+    const held = run.replaceOnly ? await packagesWithCachedRows(deps.db, run.key) : new Set<string>();
     const targets: Target[] = [];
     const considered = new Set<string>();
     const consider = (id: string, listed: { scheduledAt: number | null; completed: boolean; today: boolean } | null): void => {
@@ -604,6 +654,10 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       const fresh = run.reason !== 'manual' && row.refreshed_at > 0 && age >= 0 && age < limits.freshnessMs && !withError.has(id);
       if (fresh) {
         run.summary.skipped += 1;
+        return;
+      }
+      if (run.replaceOnly && !held.has(id)) {
+        run.summary.skippedCacheFull += 1;
         return;
       }
       const scheduledAt = listed === null ? row.scheduled_at : listed.scheduledAt;
@@ -642,7 +696,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       summary.halted = 'no_account';
       return summary;
     }
-    const run: Omit<Run, 'lease'> = { account, key: accountKeyOf(account), reason, summary, consecutive: 0, halted: null, cooling: null };
+    const run: Omit<Run, 'lease'> = { account, key: accountKeyOf(account), reason, summary, consecutive: 0, halted: null, cooling: null, replaceOnly: false, granted: 0 };
     try {
       const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease) => {
         const live: Run = { ...run, lease };
@@ -689,17 +743,30 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     return reason;
   }
 
+  /**
+   * A call while a run is in flight shares that run, with one exception: a person asking (`manual`) while a run for
+   * another reason is going must not be answered with that run's result, whose freshness skips a person's request
+   * overrides. It queues one more manual run, and the promise it gets resolves with the summary of that follow-up run
+   * (the last run of the flight). Any other reason during a run just shares the flight and queues nothing.
+   */
   function refresh(options: { reason?: RefreshReason } = {}): Promise<RefreshSummary> {
-    if (running !== null) return running;
-    const flight = (async (): Promise<RefreshSummary> => {
+    if (running !== null) {
+      if ((options.reason ?? 'manual') === 'manual' && !stopped && runningReason !== 'manual') queued = 'manual';
+      return running;
+    }
+    const flight: Promise<RefreshSummary> = (async (): Promise<RefreshSummary> => {
       let reason: RefreshReason = options.reason ?? 'manual';
       let last: RefreshSummary;
       for (;;) {
+        runningReason = reason;
         last = await runOnce(reason);
         const follow = takeQueued();
         if (follow === null || stopped) break;
         reason = follow;
       }
+      // Cleared in the same turn as the last look at `queued`, so a call that arrives after it starts a new flight
+      // instead of queueing a run nobody would take.
+      running = null;
       if (last.halted === 'auth' || last.halted === 'upgrade_required') {
         const why = last.halted;
         notify(() => deps.onHalt?.(why));
@@ -707,7 +774,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       scheduleNext(last);
       return last;
     })().finally(() => {
-      running = null;
+      if (running === flight) running = null;
     });
     running = flight;
     return flight;

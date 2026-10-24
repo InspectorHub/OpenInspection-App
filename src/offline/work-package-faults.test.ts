@@ -342,7 +342,7 @@ describe('transient trouble: backoff, Retry-After, caps', () => {
     expect(summary.halted).toBe('rate_limited');
     expect(w.timers.pending()).toBe(0);
     const after = JSON.parse(await snapshot()) as { cache: { key: string }[] };
-    expect(after.cache.filter((r) => r.key === '$refresh_error')).toEqual([]);
+    expect(after.cache.filter((r) => r.key.startsWith('$refresh_error:'))).toEqual([]);
     expect(await snapshot()).toBe(before);
   });
 
@@ -425,7 +425,7 @@ describe('transient trouble: backoff, Retry-After, caps', () => {
     expect(summary.halted).toBe('request_cap');
     expect(w.pkg.requests).toHaveLength(9);
     expect(summary.requests).toBe(9);
-    const complete = (await w.db.query<{ package_id: string; n: number }>("SELECT package_id, COUNT(*) AS n FROM resource_cache WHERE key <> '$refresh_error' GROUP BY package_id")).map((r) => r.n);
+    const complete = (await w.db.query<{ package_id: string; n: number }>("SELECT package_id, COUNT(*) AS n FROM resource_cache WHERE SUBSTR(key, 1, 5) = '/api/' GROUP BY package_id")).map((r) => r.n);
     expect(complete.every((n) => n === 3)).toBe(true);
   });
 });
@@ -529,7 +529,7 @@ describe('races with a purge and with another refresh', () => {
     expect(summary).toMatchObject({ refreshed: 0, skipped: 1 });
     expect(await versionOf('/api/inspections/t1')).toBe(1);
     expect(await w.db.query('SELECT package_gen FROM work_package')).toEqual([{ package_gen: 1 }]);
-    expect(await w.db.query("SELECT 1 FROM resource_cache WHERE key = '$refresh_error'")).toEqual([]);
+    expect(await w.db.query("SELECT 1 FROM resource_cache WHERE SUBSTR(key, 1, 15) = '$refresh_error:'")).toEqual([]);
   });
 
   it('a newer refresh that finished first wins over this older one', async () => {
@@ -596,7 +596,7 @@ describe('what the person and the logs may see', () => {
     w.serve('t1');
     w.pkg.overrides.set('/api/inspections/t1/results', () => jsonReply(500, { success: false, error: { code: 'X', message: 'SECRET-SERVER-TEXT https://oi.example.test/private' } }));
     const summary = await w.run();
-    const dump = JSON.stringify([summary, await readPackageStates(w.db, ALICE), w.refreshErrors, w.refreshHalts, await w.db.query('SELECT key, body FROM resource_cache WHERE key = ?', ['$refresh_error'])]);
+    const dump = JSON.stringify([summary, await readPackageStates(w.db, ALICE), w.refreshErrors, w.refreshHalts, await w.db.query('SELECT key, body FROM resource_cache WHERE SUBSTR(key, 1, 15) = ?', ['$refresh_error:'])]);
     expect(dump).not.toContain('SECRET-SERVER-TEXT');
     expect(dump).not.toContain('access-token-secret');
     expect(dump).not.toContain('oi.example.test');
@@ -611,7 +611,7 @@ describe('what the person and the logs may see', () => {
       return jsonReply(500, { success: false });
     });
     await w.run();
-    expect(await w.db.query("SELECT 1 FROM resource_cache WHERE key = '$refresh_error'")).toEqual([]);
+    expect(await w.db.query("SELECT 1 FROM resource_cache WHERE SUBSTR(key, 1, 15) = '$refresh_error:'")).toEqual([]);
   });
 
   it('the work list reads timestamps from the package row', async () => {

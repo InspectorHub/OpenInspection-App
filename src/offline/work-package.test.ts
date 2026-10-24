@@ -327,7 +327,7 @@ describe('freshness', () => {
   it('a recorded failure makes the inspection due again at once', async () => {
     w.serve('t1');
     await w.run('start');
-    await w.db.run("INSERT OR REPLACE INTO resource_cache (account_key, key, body, fetched_at, package_id) VALUES (?, '$refresh_error', 'server_error', 1, 't1')", [ALICE_KEY]);
+    await w.db.run("INSERT OR REPLACE INTO resource_cache (account_key, key, body, fetched_at, package_id) VALUES (?, '$refresh_error:t1', 'server_error', 1, 't1')", [ALICE_KEY]);
     w.pkg.requests.length = 0;
     await w.run('start');
     expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));

@@ -1,7 +1,7 @@
 import type { Db } from '../platform/db';
 import { accountKey as accountKeyOf, sameAccount, type Account } from './outbox';
 import { isLocalId } from './registry';
-import { REFRESH_ERROR_KEY } from './resource-cache';
+import { REFRESH_ERROR_PREFIX } from './resource-cache';
 
 /**
  * Which inspections a refresh downloads, in what order, and what the work list may read back about them.
@@ -120,7 +120,7 @@ export async function readPackageRows(db: Db): Promise<Map<string, PackageRow>> 
 /**
  * Records what the server listed. A row is created for an inspection this device has not seen (not yet downloaded:
  * `refreshed_at` 0) and the schedule fields of an existing one are updated, but only when the row is this account's,
- * confirmed by the server and not being purged. Nothing is ever deleted here.
+ * confirmed by the server, not quarantined and not being purged. Nothing is ever deleted here.
  */
 export async function upsertListed(db: Db, account: Account, listed: ParsedList['items']): Promise<void> {
   await db.transaction(async (tx) => {
@@ -128,7 +128,7 @@ export async function upsertListed(db: Db, account: Account, listed: ParsedList[
       await tx.run(
         `INSERT INTO work_package (inspection_id, scheduled_at, completed, refreshed_at, server_confirmed, tenant_id, user_id) VALUES (?, ?, ?, 0, 1, ?, ?)
          ON CONFLICT(inspection_id) DO UPDATE SET scheduled_at = excluded.scheduled_at, completed = excluded.completed
-         WHERE work_package.tenant_id = excluded.tenant_id AND work_package.user_id = excluded.user_id AND work_package.server_confirmed = 1 AND work_package.purging = 0`,
+         WHERE work_package.tenant_id = excluded.tenant_id AND work_package.user_id = excluded.user_id AND work_package.server_confirmed = 1 AND work_package.purging = 0 AND work_package.quarantine_source IS NULL`,
         [id, item.scheduledAt, item.completed ? 1 : 0, account.tenantId, account.userId],
       );
     }
@@ -143,7 +143,7 @@ export function orderTargets(targets: readonly Target[]): Target[] {
 
 /** Packages that have a recorded failure, which are due again at once whatever their age. */
 export async function packagesWithError(db: Db, account: Account): Promise<Set<string>> {
-  const rows = await db.query<{ package_id: string }>('SELECT package_id FROM resource_cache WHERE account_key = ? AND key = ?', [accountKeyOf(account), REFRESH_ERROR_KEY]);
+  const rows = await db.query<{ package_id: string }>('SELECT package_id FROM resource_cache WHERE account_key = ? AND key = ? || package_id', [accountKeyOf(account), REFRESH_ERROR_PREFIX]);
   return new Set(rows.map((r) => r.package_id));
 }
 
@@ -161,10 +161,10 @@ export async function readPackageStates(db: Db, account: Account): Promise<Packa
   const key = accountKeyOf(account);
   const rows = await db.query<{ inspection_id: string; refreshed_at: number; pinned: number; n: number; err: string | null }>(
     `SELECT w.inspection_id AS inspection_id, w.refreshed_at AS refreshed_at, w.pinned AS pinned,
-       (SELECT COUNT(*) FROM resource_cache r WHERE r.account_key = ? AND r.package_id = w.inspection_id AND r.key <> ?) AS n,
-       (SELECT r.body FROM resource_cache r WHERE r.account_key = ? AND r.package_id = w.inspection_id AND r.key = ?) AS err
+       (SELECT COUNT(*) FROM resource_cache r WHERE r.account_key = ? AND r.package_id = w.inspection_id AND r.key <> ? || w.inspection_id) AS n,
+       (SELECT r.body FROM resource_cache r WHERE r.account_key = ? AND r.package_id = w.inspection_id AND r.key = ? || w.inspection_id) AS err
      FROM work_package w WHERE w.tenant_id = ? AND w.user_id = ? ORDER BY w.inspection_id`,
-    [key, REFRESH_ERROR_KEY, key, REFRESH_ERROR_KEY, account.tenantId, account.userId],
+    [key, REFRESH_ERROR_PREFIX, key, REFRESH_ERROR_PREFIX, account.tenantId, account.userId],
   );
   return rows.map((r) => ({ inspectionId: r.inspection_id, lastRefreshedAt: r.refreshed_at > 0 ? r.refreshed_at : null, lastError: isRefreshErrorCode(r.err) ? r.err : null, cachedResources: r.n, pinned: r.pinned === 1 }));
 }
