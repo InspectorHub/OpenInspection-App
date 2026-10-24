@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createAndroidAuthSession } from '../auth/auth-session';
 import { createHeldAuthSession, createWorld, type HeldAuthSession, type World } from '../app/test-support/world';
 import { AUTH_ERROR_CODES, AUTH_ERROR_MESSAGES, AuthError } from '../auth/errors';
 import type { SignInResult } from '../auth/pkce-login';
@@ -101,6 +102,46 @@ describe('SignIn button', () => {
     act(() => held?.closeBrowser());
     expect(screen.getByText(/page was closed/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  });
+
+  describe('the closed-page hint with the real session over plugin fakes', () => {
+    async function renderWithPlugins() {
+      const finished = new Set<() => void>();
+      const finish = () => {
+        for (const listener of [...finished]) listener();
+      };
+      let opened = 0;
+      const browser = {
+        open: () => {
+          opened += 1;
+          return Promise.resolve();
+        },
+        // A tab left over from an earlier login reports that it finished while it is being closed.
+        close: () => {
+          finish();
+          return Promise.resolve();
+        },
+        addListener: (_event: 'browserFinished', listener: () => void) => {
+          finished.add(listener);
+          return Promise.resolve({ remove: () => Promise.resolve(void finished.delete(listener)) });
+        },
+      };
+      const app = { addListener: () => Promise.resolve({ remove: () => Promise.resolve() }) };
+      const world = await createWorld({ authSession: () => createAndroidAuthSession({ browser, app }) });
+      render(<SignIn services={world.services} origin={ORIGIN} relogin={false} notices={[]} onSignedIn={vi.fn()} onChangeServer={vi.fn()} />);
+      return { finish, opened: () => opened };
+    }
+
+    it('a leftover tab finishing while it is closed for the new login does not claim the new page was closed', async () => {
+      const { finish, opened } = await renderWithPlugins();
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Sign in' }));
+      await vi.waitFor(() => expect(opened()).toBe(1));
+      expect(screen.getByRole('button', { name: 'Waiting for sign-in' })).toBeInTheDocument();
+      expect(screen.queryByText(/page was closed/i)).toBeNull();
+      // Positive control: the same report after the new tab opened is shown.
+      act(() => finish());
+      expect(screen.getByText(/page was closed/i)).toBeInTheDocument();
+    });
   });
 
   it('a completed login hands the identity on', async () => {

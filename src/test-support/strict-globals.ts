@@ -5,7 +5,8 @@ import { vi } from 'vitest';
  * WebView when they are called with any `this` other than the window. Node does not care, so a bug of
  * that kind passes every ordinary test. This installs stand-ins that enforce the browser rule: each
  * one throws unless it was called bare (`this` undefined) or as a method of `globalThis`.
- * Call `restoreGlobals()` in `afterEach`.
+ * Call `restoreGlobals()` in `afterEach`. Under jsdom `window` is `globalThis` itself, so `window.setTimeout`
+ * is the stand-in too (pinned by `strict-globals-dom.test.ts`).
  */
 function guard<A extends unknown[], R>(name: string, real: (...args: A) => R): (this: unknown, ...args: A) => R {
   return function strictBuiltin(this: unknown, ...args: A): R {

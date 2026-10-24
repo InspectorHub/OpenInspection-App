@@ -321,6 +321,100 @@ describe('Android auth session (Custom Tab)', () => {
     expect(f.browser.opened).toEqual([]);
   });
 
+  it('a throwing or non-promise close() before the open does not stop the sign-in', async () => {
+    for (const close of [
+      () => {
+        throw new Error('plugin threw synchronously');
+      },
+      () => undefined as unknown as Promise<void>,
+      () => 'closed' as unknown as Promise<void>,
+    ]) {
+      const f = fakes();
+      f.browser.close = close;
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+      const pending = session.start(AUTH_URL, SCHEME);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.browser.opened).toEqual([AUTH_URL]);
+      f.app.open(CALLBACK);
+      expect(await pending).toBe(CALLBACK);
+    }
+  });
+
+  it('a throwing close() while ending the login still rejects it and does not escape', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    const outcome = codeOf(session.start(AUTH_URL, SCHEME));
+    await vi.advanceTimersByTimeAsync(0);
+    f.browser.close = () => {
+      throw new Error('plugin threw synchronously');
+    };
+    expect(() => session.cancel()).not.toThrow();
+    expect(await outcome).toBe('sign_in_cancelled');
+  });
+
+  describe('a browser-finished report from a tab left over from an earlier login', () => {
+    it('is not passed on when it arrives while the leftover tab is being closed, before this login opened its own', async () => {
+      const f = fakes();
+      f.browser.close = () => {
+        f.browser.finish();
+        return Promise.resolve();
+      };
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+      let signals = 0;
+      session.onBrowserClosed(() => {
+        signals += 1;
+      });
+      const pending = session.start(AUTH_URL, SCHEME);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.browser.opened).toEqual([AUTH_URL]);
+      expect(signals).toBe(0);
+      f.app.open(CALLBACK);
+      await pending;
+    });
+
+    it('positive control: a report after the tab opened is passed on', async () => {
+      const f = fakes();
+      f.browser.close = () => {
+        f.browser.finish();
+        return Promise.resolve();
+      };
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+      let signals = 0;
+      session.onBrowserClosed(() => {
+        signals += 1;
+      });
+      const pending = session.start(AUTH_URL, SCHEME);
+      await vi.advanceTimersByTimeAsync(0);
+      f.browser.finish();
+      expect(signals).toBe(1);
+      f.app.open(CALLBACK);
+      await pending;
+    });
+
+    it('is not passed on while this login is still opening its tab', async () => {
+      let openTab: () => void = () => undefined;
+      const openGate = new Promise<void>((resolve) => {
+        openTab = resolve;
+      });
+      const f = fakes({ openGate });
+      const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+      let signals = 0;
+      session.onBrowserClosed(() => {
+        signals += 1;
+      });
+      const pending = session.start(AUTH_URL, SCHEME);
+      await vi.advanceTimersByTimeAsync(0);
+      f.browser.finish();
+      expect(signals).toBe(0);
+      openTab();
+      await vi.advanceTimersByTimeAsync(0);
+      f.browser.finish();
+      expect(signals).toBe(1);
+      f.app.open(CALLBACK);
+      await pending;
+    });
+  });
+
   describe('a login that ends while the listeners are still being registered', () => {
     function gate(): { promise: Promise<void>; release: () => void } {
       let release: () => void = () => undefined;

@@ -155,6 +155,17 @@ describe('ServerSetup connect', () => {
     await vi.waitFor(() => expect(onConnected).toHaveBeenCalledWith('https://oi.example.test', ['server_too_old']));
   });
 
+  it('while connecting, Connect shows a working state without being dimmed, and Change address is plainly disabled', async () => {
+    const world = await createWorld({ fetch: () => new Promise<Response>(() => undefined) });
+    const { user } = await toConfirm(world);
+    await user.click(screen.getByRole('button', { name: 'Connect' }));
+    const working = await screen.findByRole('button', { name: 'Connecting' });
+    expect(working).toBeDisabled();
+    expect(working).toHaveAttribute('aria-busy', 'true');
+    expect(working.className).not.toMatch(/opacity/);
+    expect(screen.getByRole('button', { name: 'Change address' })).toBeDisabled();
+  });
+
   it('two taps on Connect in one frame check the server once', async () => {
     const { world, onConnected } = await toConfirm();
     const button = screen.getByRole('button', { name: 'Connect' });

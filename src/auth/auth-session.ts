@@ -80,6 +80,8 @@ interface PendingStart {
   resolve(url: string): void;
   reject(error: AuthError): void;
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** True once this login's own tab has been opened; a browser report before that is about an older tab. */
+  tabOpened: boolean;
 }
 
 function isWebUrl(raw: string): boolean {
@@ -111,6 +113,13 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
   let appRegistration: Promise<unknown> | null = null;
   let browserRegistration: Promise<unknown> | null = null;
 
+  /** Best effort, and safe against a plugin that throws or returns something that is not a promise. */
+  function closeBrowser(): Promise<void> {
+    return Promise.resolve()
+      .then(() => deps.browser.close())
+      .catch(() => undefined);
+  }
+
   function settle(p: PendingStart): void {
     clearTimeout(p.timer);
     if (pending === p) pending = null;
@@ -119,7 +128,7 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
   function end(p: PendingStart, code: AuthErrorCode): void {
     if (pending !== p) return;
     settle(p);
-    deps.browser.close().catch(() => undefined);
+    closeBrowser();
     p.reject(new AuthError(code));
   }
 
@@ -129,7 +138,7 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
         const p = pending;
         if (!p || !isCallbackUrl(url, p.scheme) || (p.accept && !p.accept(url))) return;
         settle(p);
-        deps.browser.close().catch(() => undefined);
+        closeBrowser();
         p.resolve(url);
       });
       appRegistration = registration;
@@ -139,7 +148,7 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
     }
     if (!browserRegistration) {
       const registration = deps.browser.addListener('browserFinished', () => {
-        if (!pending) return;
+        if (!pending?.tabOpened) return;
         for (const listener of [...closedListeners]) {
           try {
             listener();
@@ -163,7 +172,7 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
       if (pending) return Promise.reject(new AuthError('sign_in_in_progress'));
       if (!isWebUrl(url)) return Promise.reject(new AuthError('sign_in_failed'));
       return new Promise<string>((resolve, reject) => {
-        const p: PendingStart = { scheme: callbackScheme, accept, resolve, reject, timer: undefined };
+        const p: PendingStart = { scheme: callbackScheme, accept, resolve, reject, timer: undefined, tabOpened: false };
         pending = p;
         p.timer = setTimeout(() => {
           end(p, 'sign_in_expired');
@@ -174,11 +183,12 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
             if (pending !== p) return;
             // A tab left over from an earlier login (cancelled, or from a previous run of the app) must not
             // stay on the stack under the new one. Best effort: there may be nothing to close.
-            await deps.browser.close().catch(() => undefined);
+            await closeBrowser();
             if (pending !== p) return;
             await deps.browser.open({ url });
+            p.tabOpened = true;
             // ...or while the tab was opening, when the close that ended it ran before the tab existed.
-            if (pending !== p) deps.browser.close().catch(() => undefined);
+            if (pending !== p) void closeBrowser();
           })
           .catch(() => {
             if (pending !== p) return;

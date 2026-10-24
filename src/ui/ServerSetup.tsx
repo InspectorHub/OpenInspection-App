@@ -75,7 +75,7 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
         {error && <Notice tone="bad">{error}</Notice>}
         {nativeUnavailable && <Notice tone="info">{NATIVE_LOGIN_HELP}</Notice>}
         <div className="flex flex-col gap-3">
-          <Button disabled={busy} onClick={() => void latch(() => connect(origin))}>
+          <Button busy={busy} onClick={() => void latch(() => connect(origin))}>
             {busy ? 'Connecting' : 'Connect'}
           </Button>
           <Button variant="secondary" disabled={busy} onClick={() => setStep({ kind: 'edit' })}>

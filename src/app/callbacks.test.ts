@@ -4,18 +4,34 @@ import { registerCallbackRouter } from './callbacks';
 import type { AppLike } from '../auth/auth-session';
 import { connectToServer } from './connect';
 
-function fakeApp(): AppLike & { emit(url: string): void; registrations: number } {
-  const listeners: ((event: { url: string }) => void)[] = [];
+function fakeApp(options: { failFirst?: boolean } = {}): AppLike & { emit(url: string): void; emitRaw(event: unknown): void; registrations: number; removed: number; active(): number } {
+  const listeners = new Set<(event: { url: string }) => void>();
+  let failures = options.failFirst ? 1 : 0;
   const app = {
     registrations: 0,
+    removed: 0,
     addListener: (_event: 'appUrlOpen', listener: (event: { url: string }) => void) => {
       app.registrations += 1;
-      listeners.push(listener);
-      return Promise.resolve({ remove: () => Promise.resolve() });
+      if (failures > 0) {
+        failures -= 1;
+        return Promise.reject(new Error('plugin not ready'));
+      }
+      listeners.add(listener);
+      return Promise.resolve({
+        remove: () => {
+          app.removed += 1;
+          listeners.delete(listener);
+          return Promise.resolve();
+        },
+      });
     },
     emit: (url: string) => {
-      for (const listener of listeners) listener({ url });
+      for (const listener of [...listeners]) listener({ url });
     },
+    emitRaw: (event: unknown) => {
+      for (const listener of [...listeners]) listener(event as { url: string });
+    },
+    active: () => listeners.size,
   };
   return app;
 }
@@ -23,6 +39,61 @@ function fakeApp(): AppLike & { emit(url: string): void; registrations: number }
 const STRAY = 'io.inspectorhub.app:/oauth/callback?code=abc&state=stray';
 
 describe('callback router', () => {
+  it('a non-string url and an undefined or non-object event are dropped before the flow sees them', () => {
+    const app = fakeApp();
+    const router = registerCallbackRouter(app);
+    const handleCallback = vi.fn((_url: string) => Promise.resolve(null));
+    router.bind({ handleCallback });
+    for (const event of [undefined, null, 'io.inspectorhub.app:/oauth/callback', 7, {}, { url: 7 }, { url: null }, { url: ['io.inspectorhub.app:/oauth/callback'] }]) {
+      expect(() => app.emitRaw(event)).not.toThrow();
+    }
+    expect(handleCallback).not.toHaveBeenCalled();
+    app.emit(STRAY);
+    expect(handleCallback).toHaveBeenCalledTimes(1);
+    expect(handleCallback).toHaveBeenCalledWith(STRAY);
+  });
+
+  it('removes the previous listener when the module is hot-replaced, and routes nothing afterwards', async () => {
+    const app = fakeApp();
+    let dispose: () => void = () => undefined;
+    const router = registerCallbackRouter(app, { hot: { dispose: (callback) => (dispose = callback) } });
+    const handleCallback = vi.fn((_url: string) => Promise.resolve(null));
+    router.bind({ handleCallback });
+    await Promise.resolve();
+    expect(app.active()).toBe(1);
+    dispose();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(app.removed).toBe(1);
+    expect(app.active()).toBe(0);
+    app.emit(STRAY);
+    expect(handleCallback).not.toHaveBeenCalled();
+  });
+
+  it('control: without a hot replacement the listener is never removed', async () => {
+    const app = fakeApp();
+    registerCallbackRouter(app, { hot: { dispose: () => undefined } });
+    await Promise.resolve();
+    expect(app.removed).toBe(0);
+    expect(app.active()).toBe(1);
+  });
+
+  it('retries the registration on the next bind when addListener rejected, once it has succeeded it does not register again', async () => {
+    const app = fakeApp({ failFirst: true });
+    const router = registerCallbackRouter(app);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(app.active()).toBe(0);
+    const handleCallback = vi.fn((_url: string) => Promise.resolve(null));
+    router.bind({ handleCallback });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(app.registrations).toBe(2);
+    expect(app.active()).toBe(1);
+    app.emit(STRAY);
+    expect(handleCallback).toHaveBeenCalledTimes(1);
+    router.bind({ handleCallback });
+    expect(app.registrations).toBe(2);
+  });
+
   it('registers the appUrlOpen listener once, before any flow is bound', () => {
     const app = fakeApp();
     registerCallbackRouter(app);
