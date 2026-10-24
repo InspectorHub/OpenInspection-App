@@ -2,15 +2,24 @@ import type { MediaUploader } from '@inspectorhub/field-ui';
 import { isAuthError } from '../auth/errors';
 import type { Http, HttpResponse } from '../auth/http';
 import { parseServerUrl } from '../auth/server-config';
-import { backoffMs, type TokenManager } from '../auth/tokens';
+import type { TokenManager } from '../auth/tokens';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { systemClock, type Clock } from '../platform/clock';
 import type { UploaderPluginLike } from '../platform/uploader';
 import { isValidMediaId } from './errors';
 import { isValidUploadedKey, MEDIA_CONTENT_TYPES, type MediaRow, type MediaStore } from './store';
 
-/** Failed attempts after which a photo is given up on; a permanent refusal uses them all at once so the row stays failed and visible. */
-export const MAX_UPLOAD_ATTEMPTS = 8;
+/**
+ * The attempts value that marks a photo as given up on. Only a PERMANENT refusal (the server or the file says this
+ * photo can never be sent) writes it, all at once, so the row stays `failed` and visible until `retry()`. A TRANSIENT
+ * failure (network, timeout, 408, 429, 5xx, plugin or disk trouble) keeps counting attempts but saturates one below
+ * this value, so a weak network can never give a photo up: it is retried indefinitely with a backoff capped at an hour.
+ */
+export const MAX_UPLOAD_ATTEMPTS = 1_000_000;
+/** First wait after a transient failure; doubles with each further failure. */
+export const TRANSIENT_BACKOFF_BASE_MS = 15_000;
+/** The longest wait between two automatic tries of a photo that keeps failing for transient reasons. */
+export const TRANSIENT_BACKOFF_CAP_MS = 3_600_000;
 /** The longest one upload may stay silent before it is abandoned and counted as failed. */
 export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
 /** The longest a server's Retry-After may hold a retry. */
@@ -87,6 +96,11 @@ export interface NativeUploaderDeps {
   clock?: Clock;
   random?: () => number;
   uploadTimeoutMs?: number;
+  /**
+   * Called after `retry()` moved a row back to `pending`, so the reconciler can run now (wire it to `reconciler.trigger()`;
+   * the reconciler is created after the uploader, so pass a closure). A throw is ignored.
+   */
+  onRetry?: (pendingId: string) => void;
   /** Receives storage failures. Never receives a token, a url or a path. */
   onError?: (error: unknown) => void;
 }
@@ -105,7 +119,9 @@ export interface NativeUploader extends MediaUploader {
   retryAt(pendingId: string): number | null;
   /**
    * The manual retry: forgets the backoff, sets the row back to `pending` with no attempts used, and returns
-   * whether a row matched. Does nothing for a photo that is already uploaded or in flight.
+   * whether the transition happened. It is one conditional update on the state that was read, so a row that
+   * changed meanwhile (uploaded, started) is left alone and the answer is false. Does nothing for a photo that is
+   * already uploaded or in flight. Calls `onRetry` after a successful transition.
    */
   retry(pendingId: string): Promise<boolean>;
   /** Forgets the backoff memory of every photo not in `keep`, so a photo that is gone leaves nothing behind. */
@@ -129,6 +145,17 @@ interface RetryState {
   failures: number;
   nextAt: number;
   last: Failure;
+}
+
+/**
+ * The wait after a transient failure: 15 s doubling to one hour, jittered between half and full, and never shorter
+ * than the server's own Retry-After. `attempt` is the number of failures so far (at least 1).
+ */
+export function transientBackoffMs(attempt: number, retryAfterMs: number | null, random: () => number = Math.random): number {
+  const exponent = Math.min(Math.max(0, attempt - 1), 30);
+  const exponential = Math.min(TRANSIENT_BACKOFF_BASE_MS * 2 ** exponent, TRANSIENT_BACKOFF_CAP_MS);
+  const jittered = Math.round(exponential * (0.5 + 0.5 * random()));
+  return Math.max(jittered, retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : 0);
 }
 
 const FORBIDDEN_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization']);
@@ -346,12 +373,16 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     }
   }
 
+  /**
+   * An answer that is not a well-formed success (unreadable, a captive portal's page, an error shape) is transient.
+   * A well-formed success that names a url or key this photo may not use is the server being wrong, which no
+   * amount of waiting repairs: permanent.
+   */
   function parseMinted(body: unknown, row: MediaRow): Minted {
-    const bad: Minted = { ok: false, failure: failure('BAD_URL', { retryable: true }) };
-    if (!isRecord(body) || body.success !== true || !isRecord(body.data)) return bad;
+    if (!isRecord(body) || body.success !== true || !isRecord(body.data)) return { ok: false, failure: failure('BAD_URL', { retryable: true }) };
     const url = resolveUploadUrl(origin, body.data.url);
     const key = body.data.key;
-    if (url === null || !isExpectedKey(key, row)) return bad;
+    if (url === null || !isExpectedKey(key, row)) return { ok: false, failure: failure('BAD_URL', { retryable: false }) };
     return { ok: true, url, key };
   }
 
@@ -411,8 +442,9 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   /**
    * Records a failure. A halting one (locked, signed out, client too old) says nothing about the photo, so it
    * costs no attempt and a row already marked `uploading` goes back to what it was. Every other failure is a
-   * counted attempt: the row becomes `failed` (one more attempt, or all of them for a permanent refusal) and a
-   * retryable one backs off, so the count reaches the cap after a bounded number of tries.
+   * counted attempt and the row becomes `failed`. A permanent refusal uses every attempt at once (given up,
+   * visible, waits for `retry()`). A transient one adds one attempt, never reaching the given-up marker, and
+   * backs off from 15 s up to an hour with no end: the reconciler wakes at exactly this instant (`retryAt`).
    */
   async function settleFailure(row: MediaRow, f: Failure, marked: boolean): Promise<UploadOutcome> {
     if (f.halt) {
@@ -425,12 +457,12 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       }
       return toOutcome(f);
     }
-    const attempts = f.retryable ? Math.min(row.attempts + 1, MAX_UPLOAD_ATTEMPTS) : MAX_UPLOAD_ATTEMPTS;
+    const attempts = f.retryable ? Math.min(row.attempts + 1, MAX_UPLOAD_ATTEMPTS - 1) : MAX_UPLOAD_ATTEMPTS;
     const seen = (retries.get(row.pendingId)?.failures ?? 0) + 1;
     retries.set(row.pendingId, {
       failures: seen,
-      // With every attempt used there is nothing left to wait for.
-      nextAt: f.retryable && attempts < MAX_UPLOAD_ATTEMPTS ? clock.now() + backoffMs(Math.max(seen, attempts), f.retryAfterMs, random) : 0,
+      // A permanent refusal has nothing left to wait for; a transient failure always waits.
+      nextAt: f.retryable ? clock.now() + transientBackoffMs(Math.max(seen, attempts), f.retryAfterMs, random) : 0,
       last: f,
     });
     try {
@@ -560,7 +592,16 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       try {
         const row = await deps.store.getRow(pendingId);
         if (row === null || row.state === 'uploaded') return false;
-        return await deps.store.markState(pendingId, 'pending', { attempts: 0 });
+        // Conditional on the state just read: a row that was uploaded or started meanwhile is not overwritten.
+        const moved = await deps.store.markState(pendingId, 'pending', { attempts: 0, ifState: row.state });
+        if (moved) {
+          try {
+            deps.onRetry?.(pendingId);
+          } catch {
+            // A failing listener must not undo a retry that was recorded.
+          }
+        }
+        return moved;
       } catch (error) {
         report(error);
         return false;

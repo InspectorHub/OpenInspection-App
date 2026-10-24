@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
 import { createManualClock } from '../platform/clock';
 import { createManualTimers } from '../collab/test-support/manual-timers';
-import { createNativeUploader } from './native-uploader';
+import { createNativeUploader, MAX_UPLOAD_ATTEMPTS } from './native-uploader';
 import { createMediaReconciler } from './reconcile';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, response } from './test-support/fakes';
 
@@ -62,14 +62,14 @@ describe('SECURITY 1: the signed url is only ever used against the pinned origin
     ['a very long url', `/api/public/uploads/photo?token=${'a'.repeat(5000)}.${'b'.repeat(20)}`],
   ];
 
-  it.each(refused)('refuses %s: nothing is uploaded, and the refusal costs exactly one attempt', async (_label, url) => {
+  it.each(refused)('refuses %s: nothing is uploaded, and the refusal is permanent (every attempt used, no retry)', async (_label, url) => {
     const s = await build();
     await s.world.store.put(photoRecord('p1'));
     s.world.engine.mintOverride = () => response(200, { success: true, data: { url, key: `tenant-1/inspections/${INSPECTION}/photos/p1.jpg`, expiresAt: 1 } });
     const outcome = await s.uploader.uploadDetailed(ref());
-    expect(outcome).toMatchObject({ ok: false, code: 'BAD_URL' });
+    expect(outcome).toMatchObject({ ok: false, code: 'BAD_URL', retryable: false });
     expect(s.plugin.starts).toHaveLength(0);
-    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: 1, uploadedKey: null });
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS, uploadedKey: null });
   });
 
   it.each([

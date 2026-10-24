@@ -279,6 +279,17 @@ describe('media store: get, list, objectUrl, delete', () => {
     expect(await world.store.markState('missing', 'failed')).toBe(false);
   });
 
+  it('markState with ifState is one conditional UPDATE: it matches only a row in that state and changes nothing otherwise (f)', async () => {
+    const world = await createMediaWorld();
+    await world.store.put(photoRecord(ID));
+    await world.store.markState(ID, 'failed', { attempts: 5 });
+    expect(await world.store.markState(ID, 'pending', { attempts: 0, ifState: 'uploaded' })).toBe(false);
+    expect(await world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: 5 });
+    expect(await world.store.markState(ID, 'pending', { attempts: 0, ifState: 'failed' })).toBe(true);
+    expect(await world.store.getRow(ID)).toMatchObject({ state: 'pending', attempts: 0 });
+    await expect(world.store.markState(ID, 'pending', { ifState: 'exploded' as never })).rejects.toThrow();
+  });
+
   it('stores crop and annotate records with their meta and reads them back', async () => {
     const world = await createMediaWorld();
     const crop = {

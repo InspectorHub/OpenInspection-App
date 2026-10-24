@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createManualClock } from '../platform/clock';
 import { AuthError } from '../auth/errors';
-import { backoffMs } from '../auth/tokens';
 import { createManualTimers } from '../collab/test-support/manual-timers';
 import { fakeAppState } from '../offline/test-support/fakes';
-import { createNativeUploader, MAX_UPLOAD_ATTEMPTS } from './native-uploader';
-import { createMediaReconciler, type ResolvePending } from './reconcile';
+import { createNativeUploader, MAX_UPLOAD_ATTEMPTS, transientBackoffMs, type NativeUploader } from './native-uploader';
+import { createMediaReconciler, MIN_RETRY_DELAY_MS, type MediaReconciler, type ResolvePending } from './reconcile';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, response, type FakePlugin, type MediaWorld } from './test-support/fakes';
 
 const SESSION_OK = { kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } } as const;
@@ -41,10 +40,11 @@ interface Setup {
   log: string[];
   resolve: ReturnType<typeof vi.fn<ResolvePending>>;
   errors: unknown[];
+  uploader: NativeUploader;
   rec: ReturnType<typeof createMediaReconciler>;
 }
 
-async function setup(options: { concurrency?: number; maxRowsPerPass?: number; world?: MediaWorld; plugin?: FakePlugin; onUnlocked?: (cb: () => void) => () => void } = {}): Promise<Setup> {
+async function setup(options: { concurrency?: number; maxRowsPerPass?: number; fallbackIntervalMs?: number; world?: MediaWorld; plugin?: FakePlugin; onUnlocked?: (cb: () => void) => () => void } = {}): Promise<Setup> {
   const world = options.world ?? (await createMediaWorld());
   const plugin = options.plugin ?? createFakePlugin({ engine: world.engine, files: world.files });
   const timers = createManualTimers();
@@ -75,7 +75,11 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; w
     timers,
     clock,
     random: () => 1,
+    onRetry: () => {
+      recRef?.trigger();
+    },
   });
+  let recRef: MediaReconciler | null = null;
   const rec = createMediaReconciler({
     store: world.store,
     uploader,
@@ -85,12 +89,15 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; w
     appState,
     clock,
     timers,
+    random: () => 0.5,
+    ...(options.fallbackIntervalMs === undefined ? {} : { fallbackIntervalMs: options.fallbackIntervalMs }),
     ...(options.onUnlocked === undefined ? {} : { onUnlocked: options.onUnlocked }),
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     ...(options.maxRowsPerPass === undefined ? {} : { maxRowsPerPass: options.maxRowsPerPass }),
     onError: (e) => errors.push(e),
   });
-  return { world, plugin, timers, clock, network, appState, state, log, resolve, errors, rec };
+  recRef = rec;
+  return { world, plugin, timers, clock, network, appState, state, log, resolve, errors, uploader, rec };
 }
 
 /** Lets every chain of already-resolved promises run to its end: the fakes in these tests never wait on a timer. */
@@ -320,27 +327,33 @@ describe('reconcile: concurrency, single flight, bounds', () => {
 });
 
 describe('reconcile: retries, backoff, giving up', () => {
-  it('retries a failed row with exponential backoff, a timer for the next try, and gives up after the attempt cap', async () => {
+  it('retries a failed row with exponential backoff and a timer for each next try, and never gives up on a transient failure (I-3)', async () => {
     const s = await setup();
     await putPhotos(s, ['p1']);
     s.world.engine.mintOverride = () => response(503);
     s.rec.start();
     await s.rec.idle();
-    for (let attempt = 1; attempt < MAX_UPLOAD_ATTEMPTS; attempt += 1) {
+    let previous = 0;
+    for (let attempt = 1; attempt <= 14; attempt += 1) {
       const row = await s.world.store.getRow('p1');
       expect(row).toMatchObject({ state: 'failed', attempts: attempt });
-      const expected = backoffMs(attempt, null, () => 1);
+      const expected = transientBackoffMs(attempt, null, () => 1);
       expect(s.timers.delays()).toEqual([expected]);
+      expect(expected).toBeGreaterThanOrEqual(previous);
+      previous = expected;
       s.clock.advance(expected);
       s.timers.fireNext();
       await s.rec.idle();
     }
-    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
-    expect(s.timers.pending()).toBe(0);
-    const calls = s.world.engine.http.calls.length;
-    s.rec.trigger();
+    expect(previous).toBe(3_600_000);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: 15 });
+    expect(s.timers.pending()).toBe(1);
+    s.world.engine.mintOverride = null;
+    s.clock.advance(3_600_000);
+    s.timers.fireNext();
     await s.rec.idle();
-    expect(s.world.engine.http.calls.length).toBe(calls);
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
     s.rec.stop();
   });
 
@@ -352,7 +365,7 @@ describe('reconcile: retries, backoff, giving up', () => {
     const calls = s.world.engine.http.calls.length;
     await s.rec.reconcileUploads();
     expect(s.world.engine.http.calls.length).toBe(calls);
-    s.clock.advance(1_000);
+    s.clock.advance(15_000);
     s.world.engine.mintOverride = null;
     await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 1, confirmed: 1 });
   });
@@ -557,39 +570,43 @@ describe('reconcile: the retry timer never spins (M-1)', () => {
     return due;
   }
 
-  it('goes offline before the timer fires: the fire arms nothing, and the network coming back resumes the upload', async () => {
+  it('goes offline before the timer fires: the fire arms only the slow fallback, one timer per fire, and the network coming back resumes the upload', async () => {
     const s = await setup();
     await failedOnce(s);
     s.network.setQuietly(false);
-    const fires = await fireRetryTimers(s, 25);
-    expect(fires).toBe(1);
-    expect(s.timers.pending()).toBe(0);
-    expect(s.timers.requested()).toHaveLength(1);
-    expect(s.timers.requested().every((ms) => ms > 0)).toBe(true);
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(1);
+    expect(s.timers.delays()).toEqual([300_000]);
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(s.timers.delays()).toEqual([300_000]);
+    expect(s.timers.requested().every((ms) => ms >= MIN_RETRY_DELAY_MS)).toBe(true);
     // Control: the network trigger resumes it.
     s.world.engine.mintOverride = null;
     s.network.set(true);
     await s.rec.idle();
     expect(await s.world.store.listRows()).toEqual([]);
     expect(s.world.engine.objects.size).toBe(1);
+    expect(s.timers.pending()).toBe(0);
     s.rec.stop();
   });
 
-  it('locks before the timer fires: the fire arms nothing, and the unlock signal resumes the upload', async () => {
+  it('locks before the timer fires: the fire arms only the slow fallback, and the unlock signal resumes the upload', async () => {
     const unlocked = new Set<() => void>();
     const s = await setup({ onUnlocked: (cb) => { unlocked.add(cb); return () => unlocked.delete(cb); } });
     await failedOnce(s);
     s.state.locked = true;
-    const fires = await fireRetryTimers(s, 25);
-    expect(fires).toBe(1);
-    expect(s.timers.pending()).toBe(0);
-    expect(s.timers.requested()).toHaveLength(1);
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(s.timers.delays()).toEqual([300_000]);
     // Control: unlocking resumes it.
     s.state.locked = false;
     s.world.engine.mintOverride = null;
     for (const cb of [...unlocked]) cb();
     await s.rec.idle();
     expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
     s.rec.stop();
     expect(unlocked.size).toBe(0);
   });
@@ -714,8 +731,8 @@ describe('reconcile: a stored key that is not the photo\'s own is never put into
   });
 });
 
-describe('reconcile: failures before the transfer end failed and stop the timer (I-6)', () => {
-  it('a mint that keeps failing with a network error backs off, reaches the cap as a visible failed row, and arms no more timers', async () => {
+describe('reconcile: failures before the transfer keep backing off and never spin (I-6, I-3)', () => {
+  it('a mint that keeps failing with a network error backs off to one hour and keeps exactly one timer armed', async () => {
     const s = await setup();
     await putPhotos(s, ['p1']);
     s.world.engine.mintOverride = () => {
@@ -724,16 +741,375 @@ describe('reconcile: failures before the transfer end failed and stop the timer 
     s.rec.start();
     await s.rec.idle();
     let fires = 0;
-    while (s.timers.pending() > 0 && fires < 30) {
-      s.clock.advance(s.timers.delays()[0] ?? 0);
+    let previous = 0;
+    while (fires < 25) {
+      expect(s.timers.pending()).toBe(1);
+      const delay = s.timers.delays()[0] ?? 0;
+      expect(delay).toBeGreaterThanOrEqual(previous);
+      expect(delay).toBeLessThanOrEqual(3_600_000);
+      previous = delay;
+      s.clock.advance(delay);
       s.timers.fireNext();
       fires += 1;
       await s.rec.idle();
     }
-    expect(fires).toBe(MAX_UPLOAD_ATTEMPTS - 1);
-    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
-    expect(s.world.engine.http.calls).toHaveLength(MAX_UPLOAD_ATTEMPTS);
+    expect(previous).toBe(3_600_000);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: 26 });
+    expect(s.world.engine.http.calls).toHaveLength(26);
+    expect(s.timers.requested()).toHaveLength(26);
+    s.rec.stop();
     expect(s.timers.pending()).toBe(0);
+  });
+});
+
+describe('reconcile: a slow fallback resumes a run that was cut short, and never spins (I-1)', () => {
+  const FALLBACK = 300_000;
+
+  it('signed out: the run is halted, the fallback is armed, and after sign-in it resumes with no other trigger', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1', 'p2']);
+    s.state.token = null;
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.plugin.starts).toHaveLength(0);
+    expect(s.timers.delays()).toEqual([FALLBACK]);
+    s.state.token = 'access-token-secret';
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.world.engine.objects.size).toBe(2);
+    expect(s.timers.pending()).toBe(0);
+    s.rec.stop();
+  });
+
+  it('client too old (426): the fallback is armed and resumes once the server accepts the client again', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.world.engine.mintOverride = () => response(426);
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.delays()).toEqual([FALLBACK]);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'pending', attempts: 0 });
+    s.world.engine.mintOverride = null;
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+  });
+
+  it('locked with no unlock signal wired: the fallback resumes the run after unlock', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.state.locked = true;
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.delays()).toEqual([FALLBACK]);
+    s.state.locked = false;
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+  });
+
+  it('trigger() is the call to make right after sign-in: it resumes at once and takes the fallback timer away', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.state.token = null;
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(1);
+    s.state.token = 'access-token-secret';
+    s.rec.trigger();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
+    s.rec.stop();
+  });
+
+  it('nothing outstanding: no fallback is armed (empty table, everything confirmed, only permanent failures)', async () => {
+    const s = await setup();
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.requested()).toEqual([]);
+    await putPhotos(s, ['p1']);
+    s.rec.trigger();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
+    await putPhotos(s, ['gone']);
+    s.plugin.defaultBehavior = { kind: 'complete', statusCode: 413 };
+    s.rec.trigger();
+    await s.rec.idle();
+    expect(await s.world.store.getRow('gone')).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+    expect(s.timers.pending()).toBe(0);
+    s.rec.stop();
+  });
+
+  it('is armed only while the reconciler is started: a direct pass that was cut short arms nothing', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.state.token = null;
+    await s.rec.reconcileUploads();
+    expect(s.timers.requested()).toEqual([]);
+  });
+
+  it('stop() clears it, and a run that ends after stop() arms nothing', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.state.token = null;
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(1);
+    s.rec.stop();
+    expect(s.timers.pending()).toBe(0);
+    s.rec.trigger();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(0);
+  });
+
+  it('never a busy loop: fifty fires while still halted arm exactly one timer each, every delay at the fallback interval', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.state.token = null;
+    s.rec.start();
+    await s.rec.idle();
+    for (let i = 0; i < 50; i += 1) {
+      expect(s.timers.pending()).toBe(1);
+      s.timers.fireNext();
+      await s.rec.idle();
+    }
+    expect(s.timers.pending()).toBe(1);
+    expect(s.timers.requested()).toHaveLength(51);
+    expect(s.timers.requested().every((ms) => ms === FALLBACK)).toBe(true);
+    expect(s.plugin.starts).toHaveLength(0);
+    s.rec.stop();
+  });
+
+  it('the interval has a floor of one second and is clamped to a day', async () => {
+    const tiny = await setup({ fallbackIntervalMs: 5 });
+    await putPhotos(tiny, ['p1']);
+    tiny.state.token = null;
+    tiny.rec.start();
+    await tiny.rec.idle();
+    expect(tiny.timers.delays()).toEqual([MIN_RETRY_DELAY_MS]);
+    tiny.rec.stop();
+
+    const huge = await setup({ fallbackIntervalMs: 1e15 });
+    await putPhotos(huge, ['p1']);
+    huge.state.token = null;
+    huge.rec.start();
+    await huge.rec.idle();
+    expect(huge.timers.delays()).toEqual([86_400_000]);
+    huge.rec.stop();
+  });
+});
+
+/** A reconciler over a scripted uploader, to reach states the real uploader never produces on demand. */
+async function scripted(options: {
+  rows: number;
+  retryAt?: (pendingId: string, now: number) => number | null;
+  outcome?: (pendingId: string) => Awaited<ReturnType<NativeUploader['uploadDetailed']>>;
+  attemptsFail?: boolean;
+  maxRowsPerPass?: number;
+  concurrency?: number;
+  start?: boolean;
+  fallbackIntervalMs?: number;
+  random?: () => number;
+}) {
+  const world = await createMediaWorld();
+  const timers = createManualTimers();
+  const clock = createManualClock(1_000_000);
+  for (let i = 0; i < options.rows; i += 1) await world.store.put(photoRecord(`p${String(i + 1)}`, { createdAt: i + 1 }));
+  const errors: unknown[] = [];
+  const rec = createMediaReconciler({
+    store: world.store,
+    uploader: {
+      uploadDetailed: (ref) =>
+        Promise.resolve(options.outcome ? options.outcome(ref.pendingId) : { ok: false, code: 'REJECTED', retryable: false, retryAfterMs: null, halt: false }),
+      attach: () => (options.attemptsFail ? Promise.reject(new Error('plugin not ready')) : Promise.resolve()),
+      isActive: () => false,
+      retryAt: (id) => options.retryAt?.(id, clock.now()) ?? null,
+      forgetExcept: () => undefined,
+    },
+    resolvePending: () => Promise.resolve('resolved'),
+    isLocked: () => false,
+    network: fakeNetwork(),
+    clock,
+    timers,
+    random: options.random ?? (() => 0.5),
+    ...(options.maxRowsPerPass === undefined ? {} : { maxRowsPerPass: options.maxRowsPerPass }),
+    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+    ...(options.fallbackIntervalMs === undefined ? {} : { fallbackIntervalMs: options.fallbackIntervalMs }),
+    onError: (e) => errors.push(e),
+  });
+  if (options.start !== false) rec.start();
+  await rec.idle();
+  return { world, timers, clock, rec, errors };
+}
+
+const HALT = { ok: false, code: 'AUTH', retryable: true, retryAfterMs: null, halt: true } as const;
+const SOFT = { ok: false, code: 'NETWORK', retryable: true, retryAfterMs: null, halt: false } as const;
+
+describe('reconcile: the timer delay is bounded on both sides (a1, d)', () => {
+  it('a wake 10 ms away still arms a one second timer, never a zero-delay one', async () => {
+    const s = await scripted({ rows: 1, retryAt: (_id, now) => now + 10 });
+    expect(s.timers.delays()).toEqual([MIN_RETRY_DELAY_MS]);
+    s.rec.stop();
+  });
+
+  it('a wake ten days away (a wall clock that jumped back) is armed at one day, below the timer limit', async () => {
+    const s = await scripted({ rows: 1, retryAt: (_id, now) => now + 10 * 86_400_000 });
+    expect(s.timers.delays()).toEqual([86_400_000]);
+    s.rec.stop();
+    const far = await scripted({ rows: 1, retryAt: (_id, now) => now + 2 ** 31 + 5 });
+    expect(far.timers.delays()).toEqual([86_400_000]);
+    far.rec.stop();
+  });
+});
+
+describe('reconcile: the fallback is jittered (I-1)', () => {
+  it('between 75% and 125% of the interval, from the injected random source', async () => {
+    const low = await scripted({ rows: 1, outcome: () => HALT, random: () => 0 });
+    expect(low.timers.delays()).toEqual([225_000]);
+    low.rec.stop();
+    const high = await scripted({ rows: 1, outcome: () => HALT, random: () => 1 });
+    expect(high.timers.delays()).toEqual([375_000]);
+    high.rec.stop();
+  });
+});
+
+describe('reconcile: a cut-short run ignores the wakes of other rows (a2)', () => {
+  const outcome = (id: string) => (id === 'p2' ? HALT : ({ ok: true, key: `tenant-1/inspections/insp-1/photos/${id}.jpg`, reused: false } as const));
+
+  it('p1 waits 20 s, p2 halts the run: without start nothing is armed; started, the only timer is the fallback, not the 20 s wake', async () => {
+    const direct = await scripted({ rows: 2, concurrency: 1, start: false, retryAt: (id, now) => (id === 'p1' ? now + 20_000 : null), outcome });
+    await direct.rec.reconcileUploads();
+    expect(direct.timers.requested()).toEqual([]);
+    const started = await scripted({ rows: 2, concurrency: 1, retryAt: (id, now) => (id === 'p1' ? now + 20_000 : null), outcome });
+    expect(started.timers.delays()).toEqual([300_000]);
+    started.rec.stop();
+  });
+});
+
+describe('reconcile: a scan that failed or did not finish still arms the fallback (b)', () => {
+  it('attach() throwing', async () => {
+    const s = await scripted({ rows: 1, attemptsFail: true });
+    expect(s.errors).toHaveLength(1);
+    expect(s.timers.delays()).toEqual([300_000]);
+    s.rec.stop();
+  });
+
+  it('the first page of the table failing to load', async () => {
+    const world = await createMediaWorld();
+    world.store.listRowsPage = () => Promise.reject(new Error('database is locked'));
+    const timers = createManualTimers();
+    const rec = createMediaReconciler({
+      store: world.store,
+      uploader: { uploadDetailed: () => Promise.resolve(SOFT), attach: () => Promise.resolve(), isActive: () => false, retryAt: () => null, forgetExcept: () => undefined },
+      resolvePending: () => Promise.resolve('resolved'),
+      isLocked: () => false,
+      network: fakeNetwork(),
+      clock: createManualClock(1_000_000),
+      timers,
+      random: () => 0.5,
+    });
+    rec.start();
+    await rec.idle();
+    expect(timers.delays()).toEqual([300_000]);
+    rec.stop();
+    expect(timers.pending()).toBe(0);
+  });
+
+  it('the page limit being used up before the end of the table, with no row waiting for a wake', async () => {
+    const s = await scripted({ rows: 52, maxRowsPerPass: 1 });
+    expect(s.timers.delays()).toEqual([300_000]);
+    s.rec.stop();
+  });
+
+  it('positive control: a table read to its end with only permanent failures arms nothing', async () => {
+    const s = await scripted({ rows: 3, maxRowsPerPass: 1 });
+    expect(s.timers.requested()).toEqual([]);
+    s.rec.stop();
+  });
+});
+
+describe('reconcile: a failed document step wakes itself with a growing wait (I-2)', () => {
+  it('resolvePending failing (document busy): wakes after 5 s, 10 s, 20 s ... up to 5 minutes, then a success clears it', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.resolve.mockRejectedValue(new Error('DOC_BUSY'));
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.delays()).toEqual([5_000]);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'uploaded' });
+    expect(s.world.files.paths()).toEqual(['media/p1.jpg']);
+    const waits = [5_000];
+    for (let i = 0; i < 9; i += 1) {
+      s.clock.advance(s.timers.delays()[0] ?? 0);
+      s.timers.fireNext();
+      await s.rec.idle();
+      waits.push(s.timers.delays()[0] ?? 0);
+    }
+    expect(waits).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000, 300_000, 300_000]);
+    expect(s.plugin.starts).toHaveLength(1);
+    s.resolve.mockResolvedValue('resolved');
+    s.clock.advance(300_000);
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
+    s.rec.stop();
+  });
+
+  it('store.delete failing after a resolve: wakes after 5 s and finishes the deletion', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    const realDelete = s.world.store.delete.bind(s.world.store);
+    let failing = true;
+    s.world.store.delete = async (id) => {
+      if (failing) throw new Error('database is locked');
+      await realDelete(id);
+    };
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.delays()).toEqual([5_000]);
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'uploaded' });
+    failing = false;
+    s.clock.advance(5_000);
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
+    s.rec.stop();
+  });
+
+  it('a photo deleted while its document step waits leaves nothing to re-arm', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.resolve.mockRejectedValue(new Error('DOC_FAILED'));
+    s.rec.start();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(1);
+    await s.world.store.delete('p1');
+    s.clock.advance(5_000);
+    s.timers.fireNext();
+    await s.rec.idle();
+    expect(s.timers.pending()).toBe(0);
+    s.rec.stop();
+  });
+});
+
+describe('reconcile: the manual retry wakes the reconciler (f)', () => {
+  it('uploader.retry() on a photo that was refused for good runs the reconciler without any other trigger', async () => {
+    const s = await setup();
+    await putPhotos(s, ['p1']);
+    s.world.engine.mintOverride = () => response(413);
+    s.rec.start();
+    await s.rec.idle();
+    expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+    s.world.engine.mintOverride = null;
+    await expect(s.uploader.retry('p1')).resolves.toBe(true);
+    await s.rec.idle();
+    expect(await s.world.store.listRows()).toEqual([]);
+    expect(s.world.engine.objects.size).toBe(1);
     s.rec.stop();
   });
 });

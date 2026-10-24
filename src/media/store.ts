@@ -75,6 +75,8 @@ export interface RowFilter {
 export interface MarkPatch {
   attempts?: number;
   uploadedKey?: string | null;
+  /** Makes the update conditional: it applies only to a row that is in this state right now (one UPDATE, no read first). */
+  ifState?: MediaState;
 }
 
 /** One page of the table: the valid rows, how many rows the query returned, and where the next page starts. */
@@ -425,7 +427,14 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
         sets.push('uploaded_key = ?');
         params.push(patch.uploadedKey);
       }
-      const result = await db.run(`UPDATE media SET ${sets.join(', ')} WHERE pending_id = ?`, [...params, pendingId]);
+      let condition = 'pending_id = ?';
+      const where: unknown[] = [pendingId];
+      if (patch?.ifState !== undefined) {
+        assertMediaState(patch.ifState);
+        condition += ' AND state = ?';
+        where.push(patch.ifState);
+      }
+      const result = await db.run(`UPDATE media SET ${sets.join(', ')} WHERE ${condition}`, [...params, ...where]);
       return result.changes > 0;
     },
 
