@@ -14,9 +14,10 @@ export type VerifyResult =
  * The lock screen's "Verify online": asks the server whether it still accepts this device, ignoring
  * any backoff because a person asked. The auth layer records the verification itself (see
  * `tokens.onVerified`); this only re-evaluates afterwards, so the answer comes from the same rules
- * as every other trigger. A session-confirmed verification whose server `Date` agrees with the device
- * clock re-anchors the clock reference (see `recordVerified`), so correcting a wrong date and then
- * verifying online unlocks the device without clearing local data; with no agreeing server date a
+ * as every other trigger. A session-confirmed verification whose server time (the `serverNowMs` body
+ * field, or the `Date` header when the server exposes it) agrees with the device clock re-anchors the
+ * clock reference (see `recordVerified`), so correcting a wrong date and then verifying online unlocks
+ * the device without clearing local data; with no server time available, or one that disagrees, a
  * clock lock stays.
  *
  * A refused refresh is `sign_in_required`, never revoked: the server answers it the same way for a

@@ -25,7 +25,8 @@ export interface HttpResponse {
   /** The `X-Client-Upgrade` header, when the server sent one. */
   upgrade: string | null;
   /**
-   * The response `Date` header as epoch milliseconds, or null when it is absent or does not parse.
+   * The response `Date` header as epoch milliseconds, or null when it is absent, not an IMF-fixdate, or not exposed to
+   * the page (a cross-origin `Date` is only readable when the server lists it in `Access-Control-Expose-Headers`).
    * Only the offline lock's clock re-anchor reads it (see `recordVerified`), and only after checking it
    * against the device clock; it is never used as a time source on its own.
    */
@@ -65,11 +66,28 @@ export function safeUrlForLog(url: string): string {
   }
 }
 
-/** The `Date` header as epoch ms, or null when absent, empty or not a date. */
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const IMF_FIXDATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
+
+/**
+ * The `Date` header as epoch ms. Only the IMF-fixdate form is accepted (`Sun, 06 Nov 1994 08:49:37 GMT`),
+ * with a weekday that matches the date and fields that are a real instant; every other form is null,
+ * because a lenient parser would read local-time forms in the device's own zone.
+ */
 export function parseServerDate(value: string | null): number | null {
-  if (value === null || value.trim() === '') return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (value === null) return null;
+  const match = IMF_FIXDATE.exec(value);
+  if (!match) return null;
+  const [, weekday, day, month, year, hour, minute, second] = match;
+  const [d, y, h, mi, sec] = [day, year, hour, minute, second].map(Number);
+  const monthIndex = MONTHS.indexOf(month ?? '');
+  if (d === undefined || y === undefined || h === undefined || mi === undefined || sec === undefined || monthIndex < 0) return null;
+  const parsed = Date.UTC(y, monthIndex, d, h, mi, sec);
+  const check = new Date(parsed);
+  const real = check.getUTCFullYear() === y && check.getUTCMonth() === monthIndex && check.getUTCDate() === d && check.getUTCHours() === h && check.getUTCMinutes() === mi && check.getUTCSeconds() === sec;
+  if (!real || WEEKDAYS[check.getUTCDay()] !== weekday) return null;
+  return parsed;
 }
 
 /** Delta-seconds only; an HTTP-date would need the server's clock, which is never trusted. */

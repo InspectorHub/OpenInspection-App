@@ -147,9 +147,21 @@ export interface SessionInfo {
 }
 
 export type SessionResult =
-  /** `serverDateMs` is the `Date` header of this very response (epoch ms), or null when absent or unparseable. */
-  | { kind: 'ok'; session: SessionInfo; serverDateMs: number | null }
+  /**
+   * `serverDateMs` is the `Date` header of this very response (epoch ms), or null when absent, unparseable or
+   * not exposed to the page by CORS. `serverNowMs` is the optional `serverNowMs` field of the body (epoch ms),
+   * or null when absent or implausible.
+   */
+  | { kind: 'ok'; session: SessionInfo; serverDateMs: number | null; serverNowMs: number | null }
   | { kind: 'unauthorized' };
+
+/** Epoch milliseconds between 2001-09-09 and 5138-11-16: anything else (seconds, a float, text, zero) is not a server clock reading. */
+const MIN_PLAUSIBLE_SERVER_NOW_MS = 1e12;
+const MAX_PLAUSIBLE_SERVER_NOW_MS = 1e14;
+
+function serverNowMsOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= MIN_PLAUSIBLE_SERVER_NOW_MS && value <= MAX_PLAUSIBLE_SERVER_NOW_MS ? value : null;
+}
 
 /** `GET /api/client/session` with a Bearer token (no cookies, no credentials mode). */
 export async function fetchSession(http: Http, origin: string, accessToken: string): Promise<SessionResult> {
@@ -168,7 +180,7 @@ export async function fetchSession(http: Http, origin: string, accessToken: stri
   if (res.status !== 200 || !userId || !tenantId || role === undefined || typeof days !== 'number' || !Number.isInteger(days) || days < 0) {
     throw new AuthError('server_response_invalid');
   }
-  return { kind: 'ok', session: { userId, tenantId, role, offlineMaxDays: days }, serverDateMs: res.serverDateMs };
+  return { kind: 'ok', session: { userId, tenantId, role, offlineMaxDays: days }, serverDateMs: res.serverDateMs, serverNowMs: serverNowMsOf(data?.serverNowMs) };
 }
 
 export async function loadClientId(db: Db, origin: string): Promise<string | null> {

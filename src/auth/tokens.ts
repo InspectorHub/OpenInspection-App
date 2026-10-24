@@ -131,12 +131,12 @@ export interface TokenDeps {
   /**
    * Called after the server accepted this device. `sessionConfirmed` is true when the session endpoint
    * answered ok (`offlineMaxDays` is then the tenant's limit, and `serverDateMs` the `Date` header of
-   * that response or null); false for a token refresh alone, which
+   * that response or null, and `serverNowMs` the optional body field of it or null); false for a token refresh alone, which
    * proves the grant is alive but not that the device is still allowed, so it must not undo a
    * revocation (`offlineMaxDays` is null then).
    * Best effort: a failure here is swallowed, which can only leave the offline lock stricter.
    */
-  onVerified?(event: { at: number; offlineMaxDays: number | null; sessionConfirmed: boolean; serverDateMs: number | null }): Promise<void> | void;
+  onVerified?(event: { at: number; offlineMaxDays: number | null; sessionConfirmed: boolean; serverDateMs: number | null; serverNowMs: number | null }): Promise<void> | void;
   /**
    * Called when the session endpoint kept answering 401 after a successful token refresh: the only
    * definitive "this device is no longer allowed" signal. A refresh that is refused (400 invalid_grant)
@@ -232,9 +232,9 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       // Recording is best effort; see the hook documentation.
     }
   }
-  const refreshed = (): Promise<void> => notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays: null, sessionConfirmed: false, serverDateMs: null }));
-  const sessionConfirmed = (offlineMaxDays: number, serverDateMs: number | null): Promise<void> =>
-    notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays, sessionConfirmed: true, serverDateMs }));
+  const refreshed = (): Promise<void> => notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays: null, sessionConfirmed: false, serverDateMs: null, serverNowMs: null }));
+  const sessionConfirmed = (offlineMaxDays: number, serverDateMs: number | null, serverNowMs: number | null): Promise<void> =>
+    notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays, sessionConfirmed: true, serverDateMs, serverNowMs }));
 
   const generationOf = (origin: string): number => generations.get(origin) ?? 0;
   const bumpGeneration = (origin: string): void => {
@@ -379,24 +379,34 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   async function checkWith(origin: string, accessToken: string): Promise<SessionCheck> {
     const generation = generationOf(origin);
     const epoch = signOutEpochOf(origin);
+    /**
+     * A sign-out (finished or not) or a new sign-in during the awaits makes any verdict stale, and a stale
+     * answer must neither be recorded nor revoke. The two differ: after a sign-out the user is signed out;
+     * after a new sign-in the answer is not known yet, and the user who just signed in must not be told
+     * they are signed out.
+     */
+    const overtaken = (): SessionCheck | null => {
+      if (signOutEpochOf(origin) !== epoch || isSigningOut(origin)) return { kind: 'signed_out' };
+      if (generationOf(origin) !== generation) return { kind: 'retry', reason: 'superseded', retryAfterMs: 0 };
+      return null;
+    };
     try {
       const result = await fetchSession(deps.http, origin, accessToken);
       if (result.kind === 'ok') {
-        await sessionConfirmed(result.session.offlineMaxDays, result.serverDateMs);
+        const stale = overtaken();
+        if (stale) return stale;
+        await sessionConfirmed(result.session.offlineMaxDays, result.serverDateMs, result.serverNowMs);
         return result;
       }
       const again = await refresh(origin, { ignoreBackoff: true });
       if (again.kind !== 'ok') return again;
       const second = await fetchSession(deps.http, origin, again.accessToken);
+      const stale = overtaken();
+      if (stale) return stale;
       if (second.kind === 'ok') {
-        await sessionConfirmed(second.session.offlineMaxDays, second.serverDateMs);
+        await sessionConfirmed(second.session.offlineMaxDays, second.serverDateMs, second.serverNowMs);
         return second;
       }
-      // A sign-out (finished or not) or a new sign-in during the awaits above makes this verdict stale.
-      // The two differ: after a sign-out the user is signed out; after a new sign-in the answer is not
-      // known yet, and the user who just signed in must not be told they are signed out.
-      if (signOutEpochOf(origin) !== epoch || isSigningOut(origin)) return { kind: 'signed_out' };
-      if (generationOf(origin) !== generation) return { kind: 'retry', reason: 'superseded', retryAfterMs: 0 };
       relogin.add(origin);
       if (activeOrigin === origin) access = null;
       await notify(() => deps.onRevoked?.());

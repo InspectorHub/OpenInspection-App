@@ -4,7 +4,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import { CLOCK_SKEW_TOLERANCE_MS, DAY_MS } from './lock';
-import { evaluateAndPersist, loadLockState, loadTenantName, lockStateVersion, MAX_TENANT_NAME_LENGTH, recordRefreshed, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
+import { evaluateAndPersist, loadLockState, loadTenantName, lastSessionServerTime, lockStateVersion, MAX_TENANT_NAME_LENGTH, recordRefreshed, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
 import { countWaitingUploads } from './waiting';
 
 const NOW = 1_800_000_000_000;
@@ -343,5 +343,102 @@ describe('the write version', () => {
     release();
     await writing;
     expect(lockStateVersion()).toBeGreaterThan(during);
+  });
+});
+
+describe('evaluateAndPersist and a verification that commits between its load and its write', () => {
+  const FORTY_DAYS = 40 * DAY_MS;
+
+  /** A Db whose first query answers, then waits: the evaluation has loaded and has not written yet. */
+  function gatedLoad(): { slow: Db; loaded: Promise<void>; release: () => void } {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const loaded = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let gated = true;
+    const slow: Db = {
+      ...db,
+      query: async <T,>(sql: string, params?: unknown[]): Promise<T[]> => {
+        const rows = await db.query<T>(sql, params);
+        if (!gated) return rows;
+        gated = false;
+        entered();
+        await gate;
+        return rows;
+      },
+    };
+    return { slow, loaded, release };
+  }
+
+  async function lockedByClock(): Promise<void> {
+    await recordVerified(db, NOW, 30);
+    await evaluateAndPersist(db, NOW + FORTY_DAYS);
+    expect(await evaluateAndPersist(db, NOW)).toEqual({ locked: true, reason: 'clock' });
+  }
+
+  it('does not write the stale high value back over the re-anchor, and answers from the new state', async () => {
+    await lockedByClock();
+    const { slow, loaded, release } = gatedLoad();
+    const evaluating = evaluateAndPersist(slow, NOW);
+    await loaded;
+    await recordVerified(db, NOW, 30, NOW);
+    release();
+    expect(await evaluating).toEqual({ locked: false });
+    expect(await stored('max_seen_time')).toBe(String(NOW));
+    expect(await evaluateAndPersist(db, NOW)).toEqual({ locked: false });
+  });
+
+  it('control: with nothing committed in between, the latest time seen is still raised', async () => {
+    await recordVerified(db, NOW, 30);
+    const { slow, loaded, release } = gatedLoad();
+    const evaluating = evaluateAndPersist(slow, NOW + 5000);
+    await loaded;
+    release();
+    expect(await evaluating).toEqual({ locked: false });
+    expect(await stored('max_seen_time')).toBe(String(NOW + 5000));
+  });
+});
+
+describe('recordVerified with a server time from the body (serverNowMs) and/or the Date header', () => {
+  const FORTY_DAYS = 40 * DAY_MS;
+  const TOL = CLOCK_SKEW_TOLERANCE_MS;
+
+  async function lockedByClock(): Promise<void> {
+    await recordVerified(db, NOW, 30);
+    await evaluateAndPersist(db, NOW + FORTY_DAYS);
+    expect(await evaluateAndPersist(db, NOW)).toEqual({ locked: true, reason: 'clock' });
+  }
+
+  it.each([
+    ['the body alone, matching', null, NOW + 1000, true],
+    ['the header alone, matching', NOW + 1000, null, true],
+    ['both, matching', NOW + 1000, NOW - 1000, true],
+    ['both, at the edge of the tolerance from now and from each other', NOW - TOL + 1000, NOW + 1000 - 1, true],
+    ['neither', null, null, false],
+    ['the body alone, skewed', null, NOW + TOL + 1, false],
+    ['the header alone, skewed', NOW - TOL - 1, null, false],
+    ['a matching header with a skewed body', NOW, NOW + 3_600_000, false],
+    ['a skewed header with a matching body', NOW - 3_600_000, NOW, false],
+    ['both within the tolerance of now but further apart than it', NOW - TOL, NOW + TOL, false],
+    ['a body that is not a number', null, Number.NaN, false],
+  ])('%s: re-anchor is %s', async (_label, header, body, anchors) => {
+    await lockedByClock();
+    await recordVerified(db, NOW, 30, header, body);
+    expect(await stored('max_seen_time')).toBe(String(anchors ? NOW : NOW + FORTY_DAYS));
+  });
+
+  it('reports which server time the last session-confirmed verification carried', async () => {
+    await recordVerified(db, NOW, 30, NOW, NOW);
+    expect(lastSessionServerTime()).toBe('body+header');
+    await recordVerified(db, NOW, 30, null, NOW);
+    expect(lastSessionServerTime()).toBe('body');
+    await recordVerified(db, NOW, 30, NOW, null);
+    expect(lastSessionServerTime()).toBe('header');
+    await recordVerified(db, NOW, 30);
+    expect(lastSessionServerTime()).toBe('none');
   });
 });

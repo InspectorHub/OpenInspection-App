@@ -56,7 +56,7 @@ export function composeWith(parts: ComposeParts): AppServices {
     store,
     clock,
     getClientId: (origin) => loadClientId(db, origin),
-    onVerified: (event) => (event.sessionConfirmed ? recordVerified(db, event.at, event.offlineMaxDays, event.serverDateMs) : recordRefreshed(db, event.at)),
+    onVerified: (event) => (event.sessionConfirmed ? recordVerified(db, event.at, event.offlineMaxDays, event.serverDateMs, event.serverNowMs) : recordRefreshed(db, event.at)),
     onRevoked: () => setRevoked(db),
   });
   const flow = createLoginFlow({ http, db, registrar, tokens, authSession: parts.authSession, clock });

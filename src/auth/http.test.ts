@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isAuthError } from './errors';
-import { createHttp, parseRetryAfter, redact, safeUrlForLog, type FetchLike } from './http';
+import { createHttp, parseRetryAfter, parseServerDate, redact, safeUrlForLog, type FetchLike } from './http';
 
 const ORIGIN = 'https://oi.example.test';
 
@@ -154,5 +154,29 @@ describe('http wrapper: the server Date header', () => {
 
   it.each([['no header', {}], ['an unparseable header', { date: 'yesterday-ish' }], ['an empty header', { date: '' }]])('is null for %s', async (_label, headers) => {
     expect((await request(headers)).serverDateMs).toBeNull();
+  });
+});
+
+describe('parseServerDate accepts only the IMF-fixdate form, in GMT', () => {
+  it('control: a well-formed date parses to its instant', () => {
+    expect(parseServerDate('Wed, 21 Oct 2026 07:28:00 GMT')).toBe(Date.UTC(2026, 9, 21, 7, 28, 0));
+    expect(parseServerDate('Sat, 24 Oct 2026 12:00:00 GMT')).toBe(Date.UTC(2026, 9, 24, 12, 0, 0));
+  });
+
+  it.each([
+    ['a local-time form without a zone', 'Wed, 21 Oct 2026 07:28:00'],
+    ['a numeric offset instead of GMT', 'Wed, 21 Oct 2026 07:28:00 +0200'],
+    ['a named non-GMT zone', 'Wed, 21 Oct 2026 07:28:00 PST'],
+    ['the asctime form', 'Sat Oct 24 12:00:00 2026'],
+    ['ISO 8601', '2026-10-24T12:00:00Z'],
+    ['ISO 8601 without a zone', '2026-10-24T12:00:00'],
+    ['a multi-value join', 'Wed, 21 Oct 2026 07:28:00 GMT, Wed, 21 Oct 2026 07:28:00 GMT'],
+    ['a weekday that does not match the date', 'Mon, 21 Oct 2026 07:28:00 GMT'],
+    ['an impossible calendar day', 'Sat, 31 Oct 2026 24:00:00 GMT'],
+    ['a day that rolls over', 'Sat, 31 Nov 2026 12:00:00 GMT'],
+    ['an obsolete two-digit year', 'Wed, 21 Oct 26 07:28:00 GMT'],
+    ['surrounding junk', 'x Wed, 21 Oct 2026 07:28:00 GMT'],
+  ])('rejects %s', (_label, value) => {
+    expect(parseServerDate(value)).toBeNull();
   });
 });

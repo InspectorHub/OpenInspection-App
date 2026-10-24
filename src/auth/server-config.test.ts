@@ -167,7 +167,7 @@ describe('fetchSession', () => {
     fetch.mockResolvedValueOnce(new Response(JSON.stringify({ success: true, data: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 } }), { status: 200 }));
     fetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
     const http = createHttp({ fetch });
-    expect(await fetchSession(http, 'https://oi.example.com', 'tok')).toEqual({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 }, serverDateMs: null });
+    expect(await fetchSession(http, 'https://oi.example.com', 'tok')).toEqual({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30 }, serverDateMs: null, serverNowMs: null });
     expect(new Headers(fetch.mock.calls[0]?.[1].headers).get('authorization')).toBe('Bearer tok');
     expect(await fetchSession(http, 'https://oi.example.com', 'tok')).toEqual({ kind: 'unauthorized' });
   });
@@ -178,6 +178,41 @@ describe('fetchSession', () => {
     expect(await fetchSession(createHttp({ fetch: dated }), 'https://oi.example.com', 'tok')).toMatchObject({ kind: 'ok', serverDateMs: Date.UTC(2026, 9, 21, 7, 28, 0) });
     const garbled: FetchLike = () => Promise.resolve(new Response(body, { status: 200, headers: { date: 'soon' } }));
     expect(await fetchSession(createHttp({ fetch: garbled }), 'https://oi.example.com', 'tok')).toMatchObject({ kind: 'ok', serverDateMs: null });
+  });
+
+  describe('the optional serverNowMs field of the body', () => {
+    const answer = (extra: Record<string, unknown>, headers: Record<string, string> = {}): FetchLike => () =>
+      Promise.resolve(new Response(JSON.stringify({ success: true, data: { userId: 'u', tenantId: 't', role: 'owner', offlineMaxDays: 30, ...extra } }), { status: 200, headers }));
+    const read = (fetch: FetchLike) => fetchSession(createHttp({ fetch }), 'https://oi.example.com', 'tok');
+
+    it('is carried as epoch milliseconds when it is an integer in the plausible range', async () => {
+      expect(await read(answer({ serverNowMs: 1_800_000_000_000 }))).toMatchObject({ kind: 'ok', serverNowMs: 1_800_000_000_000, serverDateMs: null });
+    });
+
+    it('accepts both ends of the range and nothing outside it', async () => {
+      expect(await read(answer({ serverNowMs: 1e12 }))).toMatchObject({ serverNowMs: 1e12 });
+      expect(await read(answer({ serverNowMs: 1e14 }))).toMatchObject({ serverNowMs: 1e14 });
+      expect(await read(answer({ serverNowMs: 1e12 - 1 }))).toMatchObject({ serverNowMs: null });
+      expect(await read(answer({ serverNowMs: 1e14 + 1 }))).toMatchObject({ serverNowMs: null });
+    });
+
+    it.each([
+      ['a float', 1_800_000_000_000.5],
+      ['a numeric string', '1800000000000'],
+      ['seconds instead of milliseconds', 1_800_000_000],
+      ['zero', 0],
+      ['negative', -1_800_000_000_000],
+      ['null', null],
+      ['an object', { ms: 1 }],
+      ['a boolean', true],
+    ])('treats %s as absent and still returns the session', async (_label, value) => {
+      expect(await read(answer({ serverNowMs: value }))).toMatchObject({ kind: 'ok', session: { userId: 'u' }, serverNowMs: null });
+    });
+
+    it('is absent against a server that does not send it, next to a Date header', async () => {
+      const result = await read(answer({}, { date: 'Wed, 21 Oct 2026 07:28:00 GMT' }));
+      expect(result).toMatchObject({ serverNowMs: null, serverDateMs: Date.UTC(2026, 9, 21, 7, 28, 0) });
+    });
   });
 
   it('rejects a body that is not a session', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { recordVerified } from '../../offline/lock-state';
 import { LOCK_CHECK_INTERVAL_MS } from '../../offline/lock-monitor';
 import { createDiagRig } from '../test-support';
 import { lockClock, lockSimulate } from './lock-clock';
@@ -19,6 +20,21 @@ describe('lock-clock', () => {
     expect(result.detail).toContain('read_only_result=unlocked monitor_persisted=yes');
     expect(result.detail).toContain('manual=change_emulator_date_then_press_simulate');
     expect(await storedMaxSeen(rig)).toBe(before);
+  });
+
+  it.each([
+    ['the body field', null, 'body'],
+    ['the Date header', 'header', 'header'],
+    ['both', 'both', 'body+header'],
+    ['neither', 'none', 'none'],
+  ])('reports whether the last session response exposed server time: %s', async (_label, which, expected) => {
+    const rig = await createDiagRig();
+    const now = rig.world.clock.now();
+    const header = which === 'header' || which === 'both' ? now : null;
+    const body = which === null || which === 'both' ? now : null;
+    await recordVerified(rig.services.db, now, 30, header, body);
+    const result = await lockClock.run(rig.ctx);
+    expect(result.detail).toContain(`server_time=${expected} `);
   });
 
   it('control: fails when the monitor has not persisted the time for longer than two intervals', async () => {

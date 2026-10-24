@@ -843,3 +843,66 @@ describe('a secure store that never answers', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('a session answer that completes after the sign-in it belongs to was ended', () => {
+  /** The server's good session answer is held back until the test releases it; `entered` settles when it is waiting. */
+  function gatedOkSession(): { m: TokenManager; release: () => void; entered: Promise<void>; confirmed: { sessionConfirmed: boolean }[] } {
+    const { gate, release } = gateOf();
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const confirmed: { sessionConfirmed: boolean }[] = [];
+    const fetchWith: FetchLike = async (url, init) => {
+      const answer = await r.server.fetch(url, init);
+      if (new URL(url).pathname === '/api/client/session') {
+        enter();
+        await gate;
+      }
+      return answer;
+    };
+    const m = createTokenManager({
+      http: createHttp({ fetch: fetchWith }),
+      store: r.store,
+      clock: r.clock,
+      getClientId: () => Promise.resolve(r.clientId),
+      random: () => 1,
+      onVerified: (event) => {
+        if (event.sessionConfirmed) confirmed.push(event);
+      },
+    });
+    return { m, release, entered, confirmed };
+  }
+
+  it('positive control: with nothing in between, the answer is recorded as a session confirmation', async () => {
+    const { m, release, entered, confirmed } = gatedOkSession();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await entered;
+    release();
+    expect((await check).kind).toBe('ok');
+    expect(confirmed).toHaveLength(1);
+  });
+
+  it('after a sign-out it records nothing and answers signed_out', async () => {
+    const { m, release, entered, confirmed } = gatedOkSession();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await entered;
+    await m.signOut(r.origin);
+    release();
+    expect(await check).toEqual({ kind: 'signed_out' });
+    expect(confirmed).toEqual([]);
+  });
+
+  it('after a new sign-in it records nothing and asks to check again', async () => {
+    const { m, release, entered, confirmed } = gatedOkSession();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await entered;
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    release();
+    expect(await check).toEqual({ kind: 'retry', reason: 'superseded', retryAfterMs: 0 });
+    expect(confirmed).toEqual([]);
+  });
+});

@@ -1,6 +1,6 @@
 import { evaluateLock } from '../../offline/lock';
 import { LOCK_CHECK_INTERVAL_MS } from '../../offline/lock-monitor';
-import { evaluateAndPersist, loadLockState } from '../../offline/lock-state';
+import { evaluateAndPersist, lastSessionServerTime, loadLockState } from '../../offline/lock-state';
 import { fail, guarded, pass, type CheckDef, type ExtraDef } from './types';
 
 const MINUTE_MS = 60_000;
@@ -34,6 +34,7 @@ export const lockClock: CheckDef = {
         `revoked=${String(state.revoked)}`,
         `read_only_result=${evaluation.reason ?? 'unlocked'}`,
         `monitor_persisted=${persisted ? 'yes' : 'no'}`,
+        `server_time=${lastSessionServerTime() ?? 'unknown'}`,
         'manual=change_emulator_date_then_press_simulate',
       ].join(' ');
       if (signedIn && !persisted) return fail(def, summary);

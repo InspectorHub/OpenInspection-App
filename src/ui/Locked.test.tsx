@@ -65,7 +65,8 @@ describe('what the lock screen shows', () => {
     view(world, 'clock');
     expect(await screen.findByRole('heading', { name: 'Check your date and time' })).toBeInTheDocument();
     expect(screen.getByText(/Correct them in your device settings/i)).toBeInTheDocument();
-    expect(screen.getByText(/once the clock is right and this device is online/i)).toBeInTheDocument();
+    expect(screen.getByText(/verifying online can then re-check it when the server supports it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/and the app unlocks/i)).toBeNull();
     expect(screen.getByRole('button', { name: 'Verify online' })).toBeInTheDocument();
   });
 

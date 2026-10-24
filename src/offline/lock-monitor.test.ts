@@ -5,7 +5,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import { DAY_MS } from './lock';
-import { type LockOutcome, recordVerified, setRevoked } from './lock-state';
+import { evaluateAndPersist, type LockOutcome, recordVerified, setRevoked } from './lock-state';
 import { createCapacitorAppState, LOCK_CHECK_INTERVAL_MS, startLockMonitor } from './lock-monitor';
 import { fakeAppState, fakeScheduler } from './test-support/fakes';
 
@@ -298,5 +298,42 @@ describe('createCapacitorAppState', () => {
     const off = port.onChange(() => undefined);
     await Promise.resolve();
     expect(() => off()).not.toThrow();
+  });
+});
+
+describe('a re-anchor that commits while the monitor is between its load and its write', () => {
+  it('is not undone by the monitor, and the reported answer is the unlocked one', async () => {
+    await evaluateAndPersist(db, NOW + 40 * DAY_MS);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const loading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let gated = true;
+    const slow: Db = {
+      ...db,
+      query: async <T,>(sql: string, params?: unknown[]): Promise<T[]> => {
+        const rows = await db.query<T>(sql, params);
+        if (!gated) return rows;
+        gated = false;
+        entered();
+        await gate;
+        return rows;
+      },
+    };
+    const outcomes: LockOutcome[] = [];
+    const monitor = startLockMonitor({ db: slow, clock, scheduler: fakeScheduler(), onOutcome: (o) => outcomes.push(o) });
+    const running = monitor.checkNow();
+    await loading;
+    await recordVerified(db, NOW, 30, NOW);
+    release();
+    await running;
+    expect(outcomes).toEqual([{ locked: false }]);
+    const rows = await db.query<{ value: string }>("SELECT value FROM device_state WHERE key = 'max_seen_time'");
+    expect(rows[0]?.value).toBe(String(NOW));
+    monitor.stop();
   });
 });

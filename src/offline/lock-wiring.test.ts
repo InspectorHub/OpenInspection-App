@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { decideScreen } from '../app/boot';
+import { withCorsFilter } from '../auth/test-support/cors-filter';
 import { connectToServer } from '../app/connect';
 import { createSignedInWorld, createWorld, restartOffline, rowCounts, seedLocalData, type World } from '../app/test-support/world';
 import { CLOCK_SKEW_TOLERANCE_MS, DAY_MS } from './lock';
-import { evaluateAndPersist, loadLockState } from './lock-state';
+import { evaluateAndPersist, lastSessionServerTime, loadLockState, recordVerified } from './lock-state';
 import { verifyOnline } from './verify-online';
 
 const SECURE = { allowInsecureHttp: false };
@@ -281,11 +282,13 @@ describe('verify online re-anchors the clock reference only when the server vouc
   const FORTY_DAYS = 40 * DAY_MS;
 
   /** A good session answer carrying the given `Date` header (null: no such header). */
-  function sessionDated(date: string | null, userId = 'user-1'): () => Response {
+  function sessionDated(date: string | null, userId = 'user-1', serverNowMs?: number): () => Response {
     return () => {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (date !== null) headers.Date = date;
-      return new Response(JSON.stringify({ success: true, data: { userId, tenantId: 'tenant-1', role: 'inspector', offlineMaxDays: 30 } }), { status: 200, headers });
+      const data: Record<string, unknown> = { userId, tenantId: 'tenant-1', role: 'inspector', offlineMaxDays: 30 };
+      if (serverNowMs !== undefined) data.serverNowMs = serverNowMs;
+      return new Response(JSON.stringify({ success: true, data }), { status: 200, headers });
     };
   }
 
@@ -294,8 +297,8 @@ describe('verify online re-anchors the clock reference only when the server vouc
   }
 
   /** The device clock jumped 40 days ahead and came back: locked as 'clock' for the whole gap. */
-  async function jumpForwardAndBack(): Promise<World> {
-    const world = await createSignedInWorld();
+  async function jumpForwardAndBack(make: () => Promise<World> = createSignedInWorld): Promise<World> {
+    const world = await make();
     await seedLocalData(world.db);
     world.clock.advance(FORTY_DAYS);
     await evaluateAndPersist(world.db, world.clock.now());
@@ -327,6 +330,17 @@ describe('verify online re-anchors the clock reference only when the server vouc
     world.server.queue('/api/client/session', sessionDated(dateFor(world)));
     expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'locked', reason: 'clock' });
     expect((await loadLockState(world.db)).maxSeenTime).toBe(START + FORTY_DAYS);
+  });
+
+  it('a sign-in refused for a different identity re-anchors nothing, even when the server date vouches for the clock', async () => {
+    const world = await jumpForwardAndBack();
+    const before = await loadLockState(world.db);
+    world.server.queue('/api/client/session', sessionDated(httpDate(world), 'someone-else'));
+    await expect(world.services.flow.signIn(world.server.origin)).rejects.toMatchObject({ code: 'identity_mismatch' });
+    const after = await loadLockState(world.db);
+    expect(after.maxSeenTime).toBe(START + FORTY_DAYS);
+    expect(after.lastVerifiedAt).toBe(START);
+    expect(after).toEqual(before);
   });
 
   it('a refresh-only success never re-anchors', async () => {
@@ -374,5 +388,82 @@ describe('verify online re-anchors the clock reference only when the server vouc
     expect(await verifyOnline(offline.services, world.server.origin)).toEqual({ kind: 'retry', cause: 'offline' });
     expect(await decideScreen(offline.services, SECURE)).toMatchObject({ kind: 'locked', reason: 'clock' });
     expect((await loadLockState(world.db)).maxSeenTime).toBe(START + FORTY_DAYS);
+  });
+});
+
+describe('the server time must survive the browser CORS rules to re-anchor the clock reference', () => {
+  const FORTY_DAYS = 40 * DAY_MS;
+  /** A real-looking instant: the body field is only believed inside a plausible epoch-millisecond range. */
+  const BASE = 1_800_000_000_000;
+
+  /** A signed-in world whose network answers reach the app the way a cross-origin WebView fetch would show them. */
+  async function corsWorld(exposed: string[]): Promise<World> {
+    let holder: World | null = null;
+    const world = await createWorld({
+      fetch: (input, init) => {
+        if (holder === null) throw new Error('the world is not built yet');
+        return withCorsFilter(holder.server.fetch, exposed)(input, init);
+      },
+    });
+    holder = world;
+    await connectToServer(world.services, world.server.origin);
+    await world.services.flow.signIn(world.server.origin);
+    return world;
+  }
+
+  async function lockedByClock(exposed: string[]): Promise<World> {
+    const world = await corsWorld(exposed);
+    world.clock.set(BASE);
+    await recordVerified(world.db, BASE, 30);
+    world.clock.advance(FORTY_DAYS);
+    await evaluateAndPersist(world.db, world.clock.now());
+    world.clock.set(BASE);
+    expect(await evaluateAndPersist(world.db, world.clock.now())).toEqual({ locked: true, reason: 'clock' });
+    return world;
+  }
+
+  function answer(world: World, options: { header?: boolean; serverNowMs?: number }): () => Response {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (options.header) headers.Date = new Date(world.clock.now()).toUTCString();
+    const data: Record<string, unknown> = { userId: 'user-1', tenantId: 'tenant-1', role: 'inspector', offlineMaxDays: 30 };
+    if (options.serverNowMs !== undefined) data.serverNowMs = options.serverNowMs;
+    return () => new Response(JSON.stringify({ success: true, data }), { status: 200, headers });
+  }
+
+  it('a Date header the server did not expose is invisible: nothing re-anchors and the device stays locked', async () => {
+    const world = await lockedByClock([]);
+    world.server.queue('/api/client/session', answer(world, { header: true }));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'locked', reason: 'clock' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(BASE + FORTY_DAYS);
+    expect(lastSessionServerTime()).toBe('none');
+  });
+
+  it('the body field gets through the filter and re-anchors', async () => {
+    const world = await lockedByClock([]);
+    world.server.queue('/api/client/session', answer(world, { header: true, serverNowMs: world.clock.now() }));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'unlocked' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(BASE);
+    expect(lastSessionServerTime()).toBe('body');
+  });
+
+  it('a Date header the server exposed re-anchors', async () => {
+    const world = await lockedByClock(['Date']);
+    world.server.queue('/api/client/session', answer(world, { header: true }));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'unlocked' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(BASE);
+    expect(lastSessionServerTime()).toBe('header');
+  });
+
+  it('a body field and an exposed header that disagree by more than the tolerance re-anchor nothing', async () => {
+    const world = await lockedByClock(['Date']);
+    world.server.queue('/api/client/session', answer(world, { header: true, serverNowMs: world.clock.now() + CLOCK_SKEW_TOLERANCE_MS * 2 }));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'locked', reason: 'clock' });
+    expect((await loadLockState(world.db)).maxSeenTime).toBe(BASE + FORTY_DAYS);
+  });
+
+  it('a body field that is out of the plausible range is ignored, which leaves nothing to vouch', async () => {
+    const world = await lockedByClock([]);
+    world.server.queue('/api/client/session', answer(world, { serverNowMs: Math.trunc(world.clock.now() / 1000) }));
+    expect(await verifyOnline(world.services, world.server.origin)).toEqual({ kind: 'locked', reason: 'clock' });
   });
 });
