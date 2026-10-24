@@ -110,6 +110,11 @@ export interface CollabConnectorDeps {
 export interface NativeCollabConnector extends FieldCollabConnector {
   /** Call when the offline lock changed or the user signed in again: connections re-check and start or stop. */
   onLockChange(): void;
+  /**
+   * True while a connection for this inspection has not been destroyed. Code that would otherwise open the
+   * document itself (the photo upload step, when no editor is open) asks first: there is one live connection per inspection.
+   */
+  isOpen(inspectionId: string): boolean;
 }
 
 /** A connection that is still shutting down is tracked until it has finished, so a purge can wait for it. */
@@ -635,5 +640,6 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     onLockChange: () => {
       for (const group of live.values()) for (const entry of group) entry.reevaluate();
     },
+    isOpen: (inspectionId) => [...(live.get(inspectionId) ?? [])].some((entry) => entry.active()),
   };
 }

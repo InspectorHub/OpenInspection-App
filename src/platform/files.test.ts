@@ -41,7 +41,14 @@ function fakeFs() {
       store.delete(path);
       return Promise.resolve();
     },
-    getUri: ({ path }) => Promise.resolve({ uri: `file:///data/${path}` }),
+    getUri: ({ path, directory }) => {
+      dirLog.push(`uri:${directory}`);
+      return Promise.resolve({ uri: `file:///data/${path}` });
+    },
+    stat: ({ path, directory }) => {
+      dirLog.push(`stat:${directory}`);
+      return store.has(path) ? Promise.resolve({ type: 'file', size: store.get(path)?.length ?? 0 }) : Promise.reject(new Error('File does not exist'));
+    },
   };
   return { fs, store, calls, dirs, dirLog };
 }
@@ -79,6 +86,8 @@ describe('Files path handling', () => {
       await expect(files.read(bad)).rejects.toThrow(/path/i);
       await expect(files.remove(bad)).rejects.toThrow(/path/i);
       await expect(files.displayUrl(bad)).rejects.toThrow(/path/i);
+      await expect(files.fileUri(bad)).rejects.toThrow(/path/i);
+      await expect(files.exists(bad)).rejects.toThrow(/path/i);
       await expect(files.writeCacheChunks(bad, (async function* () { yield Uint8Array.from([1]); })())).rejects.toThrow(/path/i);
       expect(calls).toEqual([]);
     },
@@ -110,6 +119,15 @@ describe('Files I/O', () => {
     const { files, calls } = make();
     await expect(files.removeCache('../x')).rejects.toThrow(/path/i);
     expect(calls).toEqual([]);
+  });
+
+  it('answers a native file uri and existence for the no-backup library directory only', async () => {
+    const { files, dirLog } = make();
+    await files.write('media/a.jpg', Uint8Array.from([1]));
+    expect(await files.fileUri('media/a.jpg')).toBe('file:///data/media/a.jpg');
+    expect(await files.exists('media/a.jpg')).toBe(true);
+    expect(await files.exists('media/missing.jpg')).toBe(false);
+    expect(dirLog).toEqual(['write:LIBRARY_NO_CLOUD', 'uri:LIBRARY_NO_CLOUD', 'stat:LIBRARY_NO_CLOUD', 'stat:LIBRARY_NO_CLOUD']);
   });
 
   it('reads back exactly what was written', async () => {

@@ -824,6 +824,23 @@ describe('one connection per inspection', () => {
   });
 });
 
+describe('isOpen: the media code asks before it would open a second document', () => {
+  it('is true while a connection is live, false before the first and from the moment it is destroyed', async () => {
+    expect(world.connector.isOpen('insp-1')).toBe(false);
+    const first = connect(world);
+    await world.socketSignal.waitFor(1);
+    expect(world.connector.isOpen('insp-1')).toBe(true);
+    expect(world.connector.isOpen('insp-2')).toBe(false);
+    first.destroy();
+    expect(world.connector.isOpen('insp-1')).toBe(false);
+  });
+
+  it('is false for an id the connector would refuse', () => {
+    expect(world.connector.isOpen('../x')).toBe(false);
+    expect(world.connector.isOpen('')).toBe(false);
+  });
+});
+
 describe('an attempt that the world overtook', () => {
   it('connects again when the network went away and came back while a ticket was being fetched', async () => {
     const held = heldHttp();

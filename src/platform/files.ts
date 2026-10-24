@@ -9,6 +9,10 @@ export interface Files {
   remove(path: string): Promise<void>;
   /** A webview-loadable url for the file (for `<img src>`). */
   displayUrl(path: string): Promise<string>;
+  /** The `file://` uri of the file, for native plugins that read it themselves (the background uploader). */
+  fileUri(path: string): Promise<string>;
+  /** True when the file can be inspected; false when it is not there (or the plugin cannot say). */
+  exists(path: string): Promise<boolean>;
   /**
    * Streams chunks into one file in the OS cache directory, without holding the
    * whole payload in memory. Intended for transient files such as an export
@@ -30,6 +34,7 @@ export interface FilesystemLike {
   readFile(options: { path: string; directory: Directory }): Promise<{ data: string | Blob }>;
   deleteFile(options: { path: string; directory: Directory }): Promise<void>;
   getUri(options: { path: string; directory: Directory }): Promise<{ uri: string }>;
+  stat(options: { path: string; directory: Directory }): Promise<unknown>;
 }
 
 export interface FilesDeps {
@@ -118,6 +123,20 @@ export function createFiles(deps: FilesDeps): Files {
       assertSafeRelativePath(path);
       const { uri } = await fs.getUri({ path, directory });
       return deps.convertFileSrc(uri);
+    },
+    fileUri: async (path) => {
+      assertSafeRelativePath(path);
+      const { uri } = await fs.getUri({ path, directory });
+      return uri;
+    },
+    exists: async (path) => {
+      assertSafeRelativePath(path);
+      try {
+        await fs.stat({ path, directory });
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }
