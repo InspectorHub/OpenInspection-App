@@ -15,6 +15,10 @@ import {
   isDeviceStateKey,
   migrate,
   readSchemaVersion,
+  assertSchemaShape,
+  EXPECTED_COLUMNS,
+  SCHEMA_DRIFT_MESSAGE,
+  SchemaDriftError,
   SchemaTooNewError,
   toUpgradeStatements,
   type Migration,
@@ -481,5 +485,45 @@ describe('application-level state validators', () => {
     expect(() => {
       assertQuarantineSource(undefined);
     }).toThrow(/quarantine source/i);
+  });
+});
+
+describe('SchemaDriftError: a version 1 database written before the migration was edited in place', () => {
+  it('the expected columns are exactly what the current migration creates (so the list cannot drift from it)', async () => {
+    await migrate(db, 0);
+    for (const [table, expected] of Object.entries(EXPECTED_COLUMNS)) {
+      expect(Object.keys(await columns(table)).sort(), table).toEqual([...expected].sort());
+    }
+    expect(Object.keys(EXPECTED_COLUMNS).sort()).toEqual(['outbox', 'resource_cache', 'work_package']);
+  });
+
+  it('positive control: the current shape passes', async () => {
+    await migrate(db, 0);
+    await expect(assertSchemaShape(db)).resolves.toBeUndefined();
+  });
+
+  const cases = Object.entries(EXPECTED_COLUMNS).flatMap(([table, names]) => names.map((name) => [table, name] as const));
+  it.each(cases)('%s without %s is drift, with the fixed message', async (table, missing) => {
+    await migrate(db, 0);
+    for (const [other, names] of Object.entries(EXPECTED_COLUMNS)) {
+      await db.execute(`DROP TABLE ${other}`);
+      const kept = names.filter((name) => !(other === table && name === missing));
+      await db.execute(`CREATE TABLE ${other} (${kept.map((name) => `"${name}" TEXT`).join(', ')})`);
+    }
+    const err = await assertSchemaShape(db).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SchemaDriftError);
+    expect((err as SchemaDriftError).message).toBe(SCHEMA_DRIFT_MESSAGE);
+    expect((err as SchemaDriftError).message).not.toContain(`${table}.${missing}`);
+    expect((err as SchemaDriftError).detail).toBe(`${table}.${missing}`);
+  });
+
+  it('a missing table is drift', async () => {
+    await migrate(db, 0);
+    await db.execute('DROP TABLE outbox');
+    await expect(assertSchemaShape(db)).rejects.toBeInstanceOf(SchemaDriftError);
+  });
+
+  it('the message tells the person what to do', () => {
+    expect(SCHEMA_DRIFT_MESSAGE).toBe('This development build has an outdated local database: clear the app data');
   });
 });

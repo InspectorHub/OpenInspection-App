@@ -7,10 +7,12 @@ import {
   INSPECTION_CREATE,
   INSPECTION_UPDATE,
   MAX_PAYLOAD_BYTES,
+  RESERVED_INSPECTION_IDS,
   RegistryError,
   findCommand,
   isLocalId,
   pathFor,
+  payloadBytes,
   validateCommand,
   type CommandDef,
   type CommandRegistry,
@@ -209,6 +211,8 @@ describe('inspection.create payload', () => {
     ['bad email', { clientEmail: 'not-an-email' }],
     ['offset date', { date: '2026-10-25T10:00:00+02:00' }],
     ['date only', { date: '2026-10-25' }],
+    ['date without seconds (the engine datetime requires them)', { date: '2026-10-25T10:00Z' }],
+    ['date without seconds, with minutes only and a fraction', { date: '2026-10-25T10:00.5Z' }],
     ['bad property type', { propertyType: 'castle' }],
     ['latitude out of range', { addressLat: 91 }],
     ['too many services', { serviceIds: Array.from({ length: 51 }, (_, i) => `s${String(i)}`) }],
@@ -247,9 +251,48 @@ describe('inspection.create payload', () => {
     expect(validateCommand(registry, 'inspection.create', { id: 'local-1', blob: String.fromCharCode(233) }, counter()).inspectionId).toBe('local-1');
   });
 
+  it('the payload cap is exact: the cap itself is accepted, one byte more is refused', () => {
+    const wide: CommandDef = { ...INSPECTION_CREATE, parse: (input) => input as Record<string, unknown> };
+    const registry: CommandRegistry = [wide];
+    const base = payloadBytes({ id: 'local-1', blob: '' });
+    const atCap = { id: 'local-1', blob: 'x'.repeat(MAX_PAYLOAD_BYTES - base) };
+    expect(payloadBytes(atCap)).toBe(MAX_PAYLOAD_BYTES);
+    expect(validateCommand(registry, 'inspection.create', atCap, counter()).inspectionId).toBe('local-1');
+    expect(codeOf(() => validateCommand(registry, 'inspection.create', { id: 'local-1', blob: 'x'.repeat(MAX_PAYLOAD_BYTES - base + 1) }, counter()))).toBe('payload_too_large');
+  });
+
   it('an unknown op is refused', () => {
     expect(codeOf(() => validateCommand(DEFAULT_REGISTRY, 'inspection.delete', { inspectionId: 'a' }, counter()))).toBe('unknown_op');
     expect(findCommand(DEFAULT_REGISTRY, 'inspection.complete')).toBe(INSPECTION_COMPLETE);
+  });
+});
+
+describe('M-1: ids the engine reserves as route segments are refused, fail closed', () => {
+  const valid = { id: 'local-1', propertyAddress: '12 Test Street', templateId: 'template-1' };
+  const RESERVED = ['bulk', 'counts', 'dashboard', 'inspectors', 'schedule-conflicts', 'templates', 'wizard'];
+
+  it('the list is the engine list (RESERVED_INSPECTION_SEGMENTS in the engine, server/lib/inspection/reserved-segments.ts)', () => {
+    expect([...RESERVED_INSPECTION_IDS].sort()).toEqual([...RESERVED].sort());
+  });
+
+  it.each(RESERVED)('%s is not a local id, so it cannot be supplied, generated or patched', (id) => {
+    expect(isLocalId(id)).toBe(false);
+    expect(codeOf(() => validateCommand(DEFAULT_REGISTRY, 'inspection.create', { ...valid, id }, counter()))).toBe('invalid_payload');
+    expect(codeOf(() => validateCommand(DEFAULT_REGISTRY, 'inspection.create', { propertyAddress: valid.propertyAddress, templateId: valid.templateId }, () => id))).toBe('invalid_payload');
+    expect(codeOf(() => validateCommand(DEFAULT_REGISTRY, 'inspection.update', { inspectionId: id, changes: { sqft: 1 } }, counter()))).toBe('invalid_payload');
+    expect(codeOf(() => validateCommand(DEFAULT_REGISTRY, 'inspection.complete', { inspectionId: id }, counter()))).toBe('invalid_payload');
+    expect(INSPECTION_UPDATE.inspectionIdOf({ inspectionId: id })).toBeNull();
+    expect(INSPECTION_COMPLETE.inspectionIdOf({ inspectionId: id })).toBeNull();
+    expect(INSPECTION_CREATE.inspectionIdOf({ id })).toBeNull();
+    expect(codeOf(() => pathFor(INSPECTION_COMPLETE, id))).toBe('invalid_inspection_id');
+  });
+
+  it('positive controls: near misses and ordinary ids are still ids', () => {
+    for (const id of ['Bulk', 'bulk-1', 'my-bulk', 'counts2', 'template', 'schedule_conflicts', 'wizards', 'a', crypto.randomUUID()]) {
+      expect(isLocalId(id)).toBe(true);
+      expect(validateCommand(DEFAULT_REGISTRY, 'inspection.complete', { inspectionId: id }, counter()).inspectionId).toBe(id);
+    }
+    expect(validateCommand(DEFAULT_REGISTRY, 'inspection.create', { ...valid, id: 'templates-1' }, counter()).inspectionId).toBe('templates-1');
   });
 });
 

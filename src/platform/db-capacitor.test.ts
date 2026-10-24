@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { SchemaTooNewError } from './schema';
+import { EXPECTED_COLUMNS, SCHEMA_DRIFT_MESSAGE, SchemaDriftError, SchemaTooNewError } from './schema';
 import {
   type DbChanges,
   decodeRow,
@@ -19,6 +19,8 @@ class FakeConn implements SqliteDbConnectionLike {
   failProbeWith: Error | null = null;
   queryRows: unknown[] = [];
   userVersion = 0;
+  /** What `PRAGMA table_info(<table>)` reports, by table; null answers with `queryRows`. */
+  columns: Record<string, string[]> | null = null;
 
   open() {
     this.calls.push('open');
@@ -31,6 +33,8 @@ class FakeConn implements SqliteDbConnectionLike {
   query(sql: string, values?: unknown[]) {
     this.calls.push(`query:${sql}:${JSON.stringify(values)}`);
     if (sql === 'PRAGMA user_version') return Promise.resolve({ values: [{ user_version: this.userVersion }] });
+    const table = /^PRAGMA table_info\((\w+)\)$/.exec(sql)?.[1];
+    if (table !== undefined && this.columns !== null) return Promise.resolve({ values: (this.columns[table] ?? []).map((name) => ({ name })) });
     return Promise.resolve({ values: this.queryRows });
   }
   run(sql: string, values?: unknown[], tx?: boolean) {
@@ -372,5 +376,57 @@ describe('transaction safety (capacitor adapter)', () => {
     await expect(db.transaction(() => Promise.reject(new Error('original')))).rejects.toThrow('original');
     conn.failRollbackWith = null;
     await expect(db.run('NEXT', [])).resolves.toEqual({ changes: 1, lastId: 7 });
+  });
+});
+
+describe('openCapacitorDb: a version 1 database from before the in-place migration edit', () => {
+  const v1 = { name: 'oi', platform: 'android' as const, version: 1, upgrades: [{ toVersion: 1, statements: ['A'] }] };
+  const full = (): Record<string, string[]> => Object.fromEntries(Object.entries(EXPECTED_COLUMNS).map(([table, names]) => [table, [...names]]));
+
+  it('a v1 database that lacks a column the code reads: SchemaDriftError with the fixed message, connection closed', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = 1;
+    const old = full();
+    old.outbox = (old.outbox ?? []).filter((name) => name !== 'next_at');
+    sqlite.conn.columns = old;
+    const err = await openCapacitorDb(sqlite, v1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SchemaDriftError);
+    expect((err as SchemaDriftError).message).toBe(SCHEMA_DRIFT_MESSAGE);
+    expect(sqlite.calls).toContain('closeConnection:oi');
+  });
+
+  it('a v1 database with a missing table is drift too', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = 1;
+    const old = full();
+    delete old.work_package;
+    sqlite.conn.columns = old;
+    await expect(openCapacitorDb(sqlite, v1)).rejects.toBeInstanceOf(SchemaDriftError);
+  });
+
+  it('still reports the drift when closing the connection itself fails', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = 1;
+    sqlite.conn.columns = {};
+    sqlite.failClose = true;
+    await expect(openCapacitorDb(sqlite, v1)).rejects.toBeInstanceOf(SchemaDriftError);
+  });
+
+  it('positive control: a v1 database with the current columns opens, and the connection stays open', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = 1;
+    sqlite.conn.columns = full();
+    await expect(openCapacitorDb(sqlite, v1)).resolves.toBeDefined();
+    expect(sqlite.calls.some((c) => c.startsWith('closeConnection'))).toBe(false);
+  });
+
+  it('the shape is checked once, for version 1 only: a fresh database (version 0) and a later version are not probed', async () => {
+    for (const stored of [0, 2]) {
+      const sqlite = new FakeSqlite();
+      sqlite.conn.userVersion = stored;
+      sqlite.conn.columns = {};
+      await expect(openCapacitorDb(sqlite, { ...v1, version: 2, upgrades: [{ toVersion: 1, statements: ['A'] }, { toVersion: 2, statements: ['B'] }] })).resolves.toBeDefined();
+      expect(sqlite.conn.calls.some((c) => c.startsWith('query:PRAGMA table_info'))).toBe(false);
+    }
   });
 });

@@ -5,7 +5,7 @@ import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
-import { Booting, OpenFailed, SchemaTooNew } from './ui/Blocking';
+import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
 import { Locked } from './ui/Locked';
 import { ServerSetup } from './ui/ServerSetup';
 import { SignedIn } from './ui/SignedIn';
@@ -106,6 +106,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
 
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
+    if (screen.kind === 'schema_drift') return <SchemaDrift />;
     if (screen.kind === 'open_failed') return <OpenFailed />;
     return <Booting />;
   }

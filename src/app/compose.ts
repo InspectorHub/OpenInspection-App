@@ -86,7 +86,8 @@ const realAdapters: RealAdapters = {
 
 /**
  * The real adapters behind one call. Rejects with `SchemaTooNewError` when the stored
- * database was written by a newer app; the caller shows the blocking screen for that.
+ * database was written by a newer app, and with `SchemaDriftError` when a development device still carries an
+ * earlier draft of version 1; the caller shows a blocking screen for either.
  * When the secure store cannot be opened the database is closed again before the error is rethrown,
  * so a failed launch leaves no connection open.
  */

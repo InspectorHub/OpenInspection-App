@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
 import { refreshTokenKey } from '../auth/server-config';
-import { SchemaTooNewError } from '../platform/schema';
+import { SchemaDriftError, SchemaTooNewError } from '../platform/schema';
 import { boot, decideScreen } from './boot';
 import { connectToServer } from './connect';
 import { createSignedInWorld as signedInWorld, createWorld, restartOffline } from './test-support/world';
@@ -77,6 +77,11 @@ describe('opening the app', () => {
   it('a database written by a newer app: the blocking screen, and no services', async () => {
     const result = await boot(() => Promise.reject(new SchemaTooNewError(9, 1)), SECURE);
     expect(result).toEqual({ services: null, screen: { kind: 'schema_too_new' } });
+  });
+
+  it('a database from before the in-place schema edit: its own blocking screen, not the newer-data one and not a crash', async () => {
+    const result = await boot(() => Promise.reject(new SchemaDriftError('outbox.next_at')), SECURE);
+    expect(result).toEqual({ services: null, screen: { kind: 'schema_drift' } });
   });
 
   it('control: an ordinary open reaches the decision', async () => {

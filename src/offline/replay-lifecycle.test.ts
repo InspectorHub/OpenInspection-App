@@ -309,14 +309,14 @@ describe('timers', () => {
     w.replayer.stop();
   });
 
-  it('a busy lease arms the fallback so the write is not forgotten', async () => {
+  it('a busy lease arms a short retry (2 to 5 s, jittered) so the write is not forgotten', async () => {
     const w = await createReplayWorld({ fallbackIntervalMs: 10_000 });
     seed(w, 'a');
     await w.queue('inspection.complete', COMPLETE('a'));
     await acquireLease(w.db, SYNC_LEASE, { clock: w.clock, newToken: () => 'other-flow' });
     w.replayer.start();
     await w.replayer.idle();
-    expect(w.timers.delays()).toEqual([10_000]);
+    expect(w.timers.delays()).toEqual([3500]);
     await releaseLease(w.db, SYNC_LEASE, 'other-flow');
     w.timers.fireNext();
     await w.replayer.idle();

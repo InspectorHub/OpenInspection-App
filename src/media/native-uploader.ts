@@ -1,4 +1,5 @@
 import type { MediaUploader } from '@inspectorhub/field-ui';
+import { safeClientHeaders } from '../auth/client-headers';
 import { isAuthError } from '../auth/errors';
 import type { Http, HttpResponse } from '../auth/http';
 import { parseServerUrl } from '../auth/server-config';
@@ -156,16 +157,6 @@ export function transientBackoffMs(attempt: number, retryAfterMs: number | null,
   const exponential = Math.min(TRANSIENT_BACKOFF_BASE_MS * 2 ** exponent, TRANSIENT_BACKOFF_CAP_MS);
   const jittered = Math.round(exponential * (0.5 + 0.5 * random()));
   return Math.max(jittered, retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : 0);
-}
-
-const FORBIDDEN_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization']);
-
-function safeClientHeaders(headers: Record<string, string>): Record<string, string> {
-  const kept: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (!FORBIDDEN_HEADERS.has(name.trim().toLowerCase())) kept[name] = value;
-  }
-  return kept;
 }
 
 function toOutcome(f: Failure): UploadOutcome {

@@ -125,6 +125,41 @@ export class SchemaTooNewError extends Error {
   }
 }
 
+/** What a person reads when a development device still carries the first draft of version 1. */
+export const SCHEMA_DRIFT_MESSAGE = 'This development build has an outdated local database: clear the app data';
+
+/**
+ * The version 1 migration was edited in place before the app shipped, so a development device or emulator that
+ * installed an earlier build reports `user_version = 1` with tables that lack the new columns. Running against it
+ * would fail with obscure SQL errors deep inside a flow; this error stops the app at open instead. The message is
+ * fixed text for the person; `detail` (a `table.column` name) is for a developer reading a debugger, never shown.
+ */
+export class SchemaDriftError extends Error {
+  constructor(readonly detail: string) {
+    super(SCHEMA_DRIFT_MESSAGE);
+    this.name = 'SchemaDriftError';
+  }
+}
+
+/**
+ * The columns of the tables the version 1 migration reshaped while it was still a draft. A test compares this
+ * list with what the migration creates, so the two cannot disagree.
+ */
+export const EXPECTED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  outbox: ['idempotency_key', 'seq', 'op', 'payload', 'state', 'last_error', 'created_at', 'inspection_id', 'registry_version', 'tenant_id', 'user_id', 'attempts', 'next_at'],
+  work_package: ['inspection_id', 'report_id', 'pinned', 'scheduled_at', 'completed', 'refreshed_at', 'quarantine_source', 'server_confirmed', 'tenant_id', 'user_id', 'purging', 'package_gen'],
+  resource_cache: ['account_key', 'key', 'etag', 'body', 'fetched_at', 'package_id'],
+};
+
+/** Throws `SchemaDriftError` when a table is missing or lacks a column in `EXPECTED_COLUMNS`. Reads only. */
+export async function assertSchemaShape(db: Pick<Db, 'query'>): Promise<void> {
+  for (const [table, expected] of Object.entries(EXPECTED_COLUMNS)) {
+    const present = new Set((await db.query<{ name: string }>(`PRAGMA table_info(${table})`)).map((row) => row.name));
+    const missing = expected.find((name) => !present.has(name));
+    if (missing !== undefined) throw new SchemaDriftError(`${table}.${missing}`);
+  }
+}
+
 function assertContiguous(migrations: readonly Migration[]): void {
   migrations.forEach((m, i) => {
     if (m.toVersion !== i + 1) {

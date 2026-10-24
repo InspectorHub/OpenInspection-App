@@ -22,7 +22,7 @@ import {
   type Account,
   type OutboxDeps,
 } from './outbox';
-import { RegistryError } from './registry';
+import { INSPECTION_CREATE, MAX_PAYLOAD_BYTES, RegistryError, payloadBytes, type CommandDef, type CommandRegistry } from './registry';
 import { countOrphanedOutbox, countWaitingUploads } from './waiting';
 
 const ALICE: Account = { tenantId: 'tenant-1', userId: 'alice' };
@@ -79,6 +79,33 @@ describe('enqueue', () => {
     await completeRow(db, second, false);
     const third = await enqueue(deps, 'inspection.complete', { inspectionId: 'c' }, { account: ALICE });
     expect([first.seq, second.seq, third.seq]).toEqual([1, 2, 3]);
+  });
+
+  it('Q11: a payload over the byte cap is refused at enqueue and nothing is stored (positive control: the cap itself is stored)', async () => {
+    const wide: CommandDef = { ...INSPECTION_CREATE, parse: (input) => input as Record<string, unknown> };
+    const registry: CommandRegistry = [wide];
+    const base = payloadBytes({ id: 'big-1', blob: '' });
+    const over = enqueue({ ...deps, registry }, 'inspection.create', { id: 'big-1', blob: 'x'.repeat(MAX_PAYLOAD_BYTES - base + 1) }, { account: ALICE });
+    await expect(over).rejects.toMatchObject({ code: 'payload_too_large' });
+    expect(await listOutbox(db)).toEqual([]);
+    expect(await db.query('SELECT inspection_id FROM work_package')).toEqual([]);
+    const atCap = await enqueue({ ...deps, registry }, 'inspection.create', { id: 'big-1', blob: 'x'.repeat(MAX_PAYLOAD_BYTES - base) }, { account: ALICE });
+    expect(atCap.inspectionId).toBe('big-1');
+  });
+
+  it('I4: the counter wiped or lagging below an existing seq never makes the next seq reuse one', async () => {
+    await enqueue(deps, 'inspection.complete', { inspectionId: 'a' }, { account: ALICE });
+    await enqueue(deps, 'inspection.complete', { inspectionId: 'b' }, { account: ALICE });
+    await enqueue(deps, 'inspection.complete', { inspectionId: 'c' }, { account: ALICE });
+    await db.run("DELETE FROM device_state WHERE key = 'outbox_seq'");
+    const afterWipe = await enqueue(deps, 'inspection.complete', { inspectionId: 'd' }, { account: ALICE });
+    expect(afterWipe.seq).toBe(4);
+    await db.run("UPDATE device_state SET value = '1' WHERE key = 'outbox_seq'");
+    const afterLag = await enqueue(deps, 'inspection.complete', { inspectionId: 'e' }, { account: ALICE });
+    expect(afterLag.seq).toBe(5);
+    await db.run("UPDATE device_state SET value = 'not a number' WHERE key = 'outbox_seq'");
+    expect((await enqueue(deps, 'inspection.complete', { inspectionId: 'f' }, { account: ALICE })).seq).toBe(6);
+    expect((await listOutbox(db)).map((r) => r.seq)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it('a create stores the local work package, unconfirmed, in the same transaction', async () => {
@@ -221,18 +248,40 @@ describe('listing and counting', () => {
 });
 
 describe('state changes', () => {
-  it('markOrphaned moves pending and failed rows of one inspection, only for the asked account, and leaves the rest', async () => {
+  it('markOrphaned moves the pending rows of one inspection, only for the asked account, and leaves the rest (a failed row stays failed, with its own code)', async () => {
     const a1 = await enqueue(deps, 'inspection.complete', { inspectionId: 'a' }, { account: ALICE });
     const a2 = await enqueue(deps, 'inspection.update', { inspectionId: 'a', changes: { sqft: 1 } }, { account: ALICE });
     await enqueue(deps, 'inspection.complete', { inspectionId: 'b' }, { account: ALICE });
     await enqueue(deps, 'inspection.complete', { inspectionId: 'a' }, { account: BOB });
     await markFailed(db, a2.idempotencyKey, 'conflict');
-    expect(await markOrphaned(db, 'a', ALICE)).toBe(2);
+    expect(await markOrphaned(db, 'a', ALICE)).toBe(1);
     expect((await readOutboxRow(db, a1.idempotencyKey))?.state).toBe('orphaned');
     expect((await readOutboxRow(db, a1.idempotencyKey))?.lastError).toBe('target_gone');
-    expect((await readOutboxRow(db, a2.idempotencyKey))?.state).toBe('orphaned');
+    expect(await readOutboxRow(db, a2.idempotencyKey)).toMatchObject({ state: 'failed', lastError: 'conflict' });
     expect(await outboxCounts(db, { account: BOB })).toEqual({ pending: 1, failed: 0, orphaned: 0, needsCheck: 0 });
     expect(await outboxCounts(db, { account: ALICE, inspectionId: 'b' })).toEqual({ pending: 1, failed: 0, orphaned: 0, needsCheck: 0 });
+  });
+
+  it('M-8 / Q23: a failed row is never overwritten by markOrphaned and never resurrected by unorphan', async () => {
+    const failed = await enqueue(deps, 'inspection.update', { inspectionId: 'a', changes: { sqft: 1 } }, { account: ALICE });
+    const pending = await enqueue(deps, 'inspection.complete', { inspectionId: 'a' }, { account: ALICE });
+    await markFailed(db, failed.idempotencyKey, 'validation_failed');
+    expect(await markOrphaned(db, 'a', ALICE)).toBe(1);
+    expect(await readOutboxRow(db, failed.idempotencyKey)).toMatchObject({ state: 'failed', lastError: 'validation_failed' });
+    expect(await readOutboxRow(db, pending.idempotencyKey)).toMatchObject({ state: 'orphaned', lastError: 'target_gone' });
+    expect(await unorphan(db, 'a', ALICE)).toBe(1);
+    expect(await readOutboxRow(db, failed.idempotencyKey)).toMatchObject({ state: 'failed', lastError: 'validation_failed' });
+    expect(await readOutboxRow(db, pending.idempotencyKey)).toMatchObject({ state: 'pending', lastError: null });
+  });
+
+  it('M-8: unorphan reverses only what markOrphaned marked (target_gone); an orphaned row with another code is left alone', async () => {
+    const marked = await enqueue(deps, 'inspection.complete', { inspectionId: 'a' }, { account: ALICE });
+    const other = await enqueue(deps, 'inspection.update', { inspectionId: 'a', changes: { sqft: 1 } }, { account: ALICE });
+    await db.run("UPDATE outbox SET state = 'orphaned', last_error = 'target_gone' WHERE idempotency_key = ?", [marked.idempotencyKey]);
+    await db.run("UPDATE outbox SET state = 'orphaned', last_error = 'corrupt_payload' WHERE idempotency_key = ?", [other.idempotencyKey]);
+    expect(await unorphan(db, 'a', ALICE)).toBe(1);
+    expect((await readOutboxRow(db, marked.idempotencyKey))?.state).toBe('pending');
+    expect(await readOutboxRow(db, other.idempotencyKey)).toMatchObject({ state: 'orphaned', lastError: 'corrupt_payload' });
   });
 
   it('unorphan puts orphaned rows back to pending', async () => {

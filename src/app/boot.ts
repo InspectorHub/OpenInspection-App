@@ -1,7 +1,7 @@
 import { loadIdentity, parseServerUrl, type StoredIdentity } from '../auth/server-config';
 import type { LockReason } from '../offline/lock';
 import { evaluateAndPersist } from '../offline/lock-state';
-import { SchemaTooNewError } from '../platform/schema';
+import { SchemaDriftError, SchemaTooNewError } from '../platform/schema';
 import type { CompatNotice } from './compat-notice';
 import type { AppServices } from './compose';
 
@@ -13,6 +13,8 @@ export type Screen =
   /** Signed in, but the local data is held behind the lock screen. Nothing on it is deleted. */
   | { kind: 'locked'; origin: string; identity: StoredIdentity; reason: LockReason }
   | { kind: 'schema_too_new' }
+  /** A development device still carries the first draft of the local database. */
+  | { kind: 'schema_drift' }
   | { kind: 'open_failed' };
 
 export interface BootResult {
@@ -59,7 +61,9 @@ export async function boot(open: () => Promise<AppServices>, options: { allowIns
   try {
     services = await open();
   } catch (err) {
-    return { services: null, screen: err instanceof SchemaTooNewError ? { kind: 'schema_too_new' } : { kind: 'open_failed' } };
+    if (err instanceof SchemaTooNewError) return { services: null, screen: { kind: 'schema_too_new' } };
+    if (err instanceof SchemaDriftError) return { services: null, screen: { kind: 'schema_drift' } };
+    return { services: null, screen: { kind: 'open_failed' } };
   }
   try {
     return { services, screen: await decideScreen(services, options) };

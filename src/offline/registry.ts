@@ -12,8 +12,17 @@ export const LOCAL_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** A queued payload is a handful of form fields; this bounds what a bug or a hostile caller can park on the device. */
 export const MAX_PAYLOAD_BYTES = 16_384;
 
+/**
+ * The static first segments under `/api/inspections`: routes, never inspection ids. A copy of the engine's
+ * `RESERVED_INSPECTION_SEGMENTS` (server/lib/inspection/reserved-segments.ts), which refuses a client-generated id
+ * equal to one of them. Refusing it here too means such a write is never queued, rather than queued and failed
+ * for good at replay. Keep the two lists equal.
+ */
+export const RESERVED_INSPECTION_IDS: ReadonlySet<string> = new Set(['bulk', 'counts', 'dashboard', 'inspectors', 'schedule-conflicts', 'templates', 'wizard']);
+
+/** A well-formed id that is not a reserved route segment. Every id the registry accepts, finds or puts in a url passes through here. */
 export function isLocalId(value: unknown): value is string {
-  return typeof value === 'string' && LOCAL_ID_PATTERN.test(value);
+  return typeof value === 'string' && LOCAL_ID_PATTERN.test(value) && !RESERVED_INSPECTION_IDS.has(value);
 }
 
 export type RegistryErrorCode = 'unknown_op' | 'invalid_payload' | 'invalid_inspection_id' | 'payload_too_large';
@@ -104,7 +113,8 @@ const localId: Field = (value) => (isLocalId(value) ? value : invalid());
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$/;
 const email: Field = (value) => (typeof value === 'string' && value.length <= 254 && (value === '' || EMAIL.test(value)) ? value : invalid());
 
-const UTC_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?Z$/;
+// Seconds are required, as the engine's datetime check requires them: '10:00Z' would be accepted here and refused there.
+const UTC_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/;
 const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** UTC only: an offset form is not promised by the contract, and a refusal here would strand a person's write. */
 const dateTime: Field = (value) => (typeof value === 'string' && UTC_DATE_TIME.test(value) && !Number.isNaN(Date.parse(value)) ? value : invalid());

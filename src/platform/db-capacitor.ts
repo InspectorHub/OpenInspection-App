@@ -1,7 +1,7 @@
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { Capacitor } from '@capacitor/core';
 import { createDb, type Db, type DbOptions } from './db';
-import { CURRENT_SCHEMA_VERSION, SchemaTooNewError, toUpgradeStatements } from './schema';
+import { assertSchemaShape, CURRENT_SCHEMA_VERSION, SchemaTooNewError, toUpgradeStatements } from './schema';
 
 /** The platforms the adapter distinguishes; anything that is not Android or iOS is `web`. */
 export type DbPlatform = 'android' | 'ios' | 'web';
@@ -67,7 +67,8 @@ export function randomHex32(): string {
  * Opens (creating on first launch) the encrypted database and returns a `Db`.
  * The plugin manages the encryption key itself; this only provisions it once.
  * Throws `SchemaTooNewError` (after closing the connection) when the stored
- * schema version is higher than `version`.
+ * schema version is higher than `version`, and `SchemaDriftError` (also after
+ * closing it) when a version 1 database lacks columns the code reads.
  */
 export async function openCapacitorDb(
   sqlite: SqliteConnectionLike,
@@ -101,7 +102,18 @@ export async function openCapacitorDb(
     await sqlite.closeConnection(name, false).catch(() => undefined);
     throw new SchemaTooNewError(storedVersion, version);
   }
-  return wrapConnection(conn, options.platform);
+  const db = wrapConnection(conn, options.platform);
+  // Version 1 was edited in place while the app was unreleased: a development database still on the first draft
+  // says version 1 but lacks columns. Probe the shape once, for that version only, and stop with a readable error.
+  if (storedVersion === 1) {
+    try {
+      await assertSchemaShape(db);
+    } catch (error) {
+      await sqlite.closeConnection(name, false).catch(() => undefined);
+      throw error;
+    }
+  }
+  return db;
 }
 
 async function readUserVersion(conn: SqliteDbConnectionLike): Promise<number> {

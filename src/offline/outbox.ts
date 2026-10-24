@@ -285,12 +285,14 @@ function accountClause(account: Account | undefined): { sql: string; params: unk
 
 /**
  * The reconcile (and only the reconcile) calls this once the server no longer shows the inspection: every
- * queued write for it stops being sent and is kept, counted apart from the sendable ones, until the person acts.
+ * PENDING write for it stops being sent and is kept, counted apart from the sendable ones, until the person acts.
+ * A failed row is unsent data too, but it already waits for a person with its own code; it stays failed and its
+ * code is not overwritten. The marker `target_gone` is what `unorphan` later reverses, and nothing else.
  */
 export async function markOrphaned(db: Db, inspectionId: string, account?: Account): Promise<number> {
   const scope = accountClause(account);
   const result = await db.run(
-    `UPDATE outbox SET state = 'orphaned', last_error = 'target_gone', next_at = NULL WHERE inspection_id = ? AND state IN ('pending', 'failed')${scope.sql}`,
+    `UPDATE outbox SET state = 'orphaned', last_error = 'target_gone', next_at = NULL WHERE inspection_id = ? AND state = 'pending'${scope.sql}`,
     [inspectionId, ...scope.params],
   );
   return result.changes;
@@ -300,7 +302,7 @@ export async function markOrphaned(db: Db, inspectionId: string, account?: Accou
 export async function unorphan(db: Db, inspectionId: string, account?: Account): Promise<number> {
   const scope = accountClause(account);
   const result = await db.run(
-    `UPDATE outbox SET state = 'pending', last_error = NULL, attempts = 0, next_at = NULL WHERE inspection_id = ? AND state = 'orphaned'${scope.sql}`,
+    `UPDATE outbox SET state = 'pending', last_error = NULL, attempts = 0, next_at = NULL WHERE inspection_id = ? AND state = 'orphaned' AND last_error = 'target_gone'${scope.sql}`,
     [inspectionId, ...scope.params],
   );
   return result.changes;

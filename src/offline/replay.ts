@@ -1,3 +1,6 @@
+import { safeClientHeaders } from '../auth/client-headers';
+import { AuthError } from '../auth/errors';
+import { parseServerUrl } from '../auth/server-config';
 import { backoffMs, type TokenManager } from '../auth/tokens';
 import type { Http, HttpResponse } from '../auth/http';
 import { realTimers, type TimerPort } from '../collab/timers';
@@ -51,11 +54,30 @@ export const TARGET_CHECK_BASE_MS = 30_000;
 export const IN_FLIGHT_RETRY_MS = 2000;
 /** Answers the replay reads are small JSON envelopes; a larger one is not the server's. */
 export const RESPONSE_MAX_BYTES = 262_144;
-const HEADS_PER_PASS = 200;
+/** Heads read per page. Only sendable heads are paged, so a pile of failed or waiting ones cannot push a healthy line out of the window. */
+const HEADS_PER_PAGE = 200;
+/**
+ * A run that found the lease held by another flow (reconcile, package refresh, another replayer) asks again after
+ * 2 to 5 seconds, not after the slow fallback: the other flows are short. The replayer only ever takes a lease that
+ * is free and gives it back when its run ends, so asking often cannot starve them. Ten asks in a row (about 35 s)
+ * are the bound; after that the slow fallback interval applies until a run gets the lease.
+ */
+const LEASE_BUSY_RETRY_BASE_MS = 2000;
+const LEASE_BUSY_RETRY_SPAN_MS = 3000;
+const LEASE_BUSY_RETRIES_BEFORE_FALLBACK = 10;
 /** A `next_at` further ahead than any wait this module writes can only come from a clock that was set back since: the row is due. */
 const IMPLAUSIBLE_WAIT_MS = 2 * MAX_RETRY_AFTER_MS;
 const QUOTA_CODE = /^QUOTA_/;
-const ERROR_CODE = /^[A-Z0-9_]{1,64}$/;
+const ERROR_CODE = /^[A-Za-z0-9_]{1,64}$/;
+/**
+ * 403 answers that refuse the person's action, not the inspection's visibility: a suspended workspace and the
+ * permission-ceiling refusals. They stay final until someone changes the account, so they fail visibly instead of
+ * waiting for a visibility check that would never end. The engine's ordinary 403 (code `forbidden`, which includes
+ * "you are not on this inspection") is not in this set: that one is exactly what the visibility check is for.
+ */
+const REFUSAL_CODES = new Set(['TENANT_SUSPENDED', 'FINANCIAL_REQUIRED', 'CAPABILITY_CEILING', 'ROLE_CEILING', 'SELF_PERMISSION_CHANGE']);
+/** True for the lowest-seq row of each line of one account; `o` is the outer row. */
+const IS_HEAD = `seq = (SELECT MIN(i.seq) FROM outbox i WHERE i.tenant_id = o.tenant_id AND i.user_id = o.user_id AND COALESCE(i.inspection_id, '') = COALESCE(o.inspection_id, ''))`;
 
 export interface ReplayDeps {
   db: Db;
@@ -67,6 +89,8 @@ export interface ReplayDeps {
   registry?: CommandRegistry;
   /** `X-Client-Platform` and `X-Client-Version`. */
   clientHeaders?: Record<string, string>;
+  /** Development switch with the same meaning as for the server screen: lets the pinned origin be plain http on a non-loopback host. */
+  allowInsecureHttp?: boolean;
   /** The signed-in account, or null when there is none. Read before every request. */
   account(): Account | null | Promise<Account | null>;
   /** True when the offline lock holds or the device is revoked. A check that throws counts as locked. */
@@ -125,7 +149,8 @@ function errorCodeOf(json: unknown): string | null {
   if (typeof json !== 'object' || json === null || !('error' in json)) return null;
   const error = json.error;
   if (typeof error !== 'object' || error === null || !('code' in error)) return null;
-  return typeof error.code === 'string' && ERROR_CODE.test(error.code) ? error.code : null;
+  // The engine sends some codes upper case and some lower case; compare them in one spelling.
+  return typeof error.code === 'string' && ERROR_CODE.test(error.code) ? error.code.toUpperCase() : null;
 }
 
 function isSuccessBody(json: unknown): json is Record<string, unknown> {
@@ -142,16 +167,20 @@ function createdIdOf(json: Record<string, unknown>): string | null {
 }
 
 export function createReplayer(deps: ReplayDeps): Replayer {
+  // Every url is built from this string, so it must be exactly what the server screen stored: an origin and nothing else.
+  if (parseServerUrl(deps.origin, deps.allowInsecureHttp === undefined ? {} : { allowInsecureHttp: deps.allowInsecureHttp }) !== deps.origin) throw new AuthError('invalid_server_url');
   const registry = deps.registry ?? DEFAULT_REGISTRY;
   const timers = deps.timers ?? realTimers;
   const random = deps.random ?? Math.random;
-  const clientHeaders = deps.clientHeaders ?? {};
+  // Credentials and the per-row key are set below; a client header of any case can neither add nor replace them.
+  const clientHeaders = safeClientHeaders(deps.clientHeaders ?? {}, ['idempotency-key', 'content-type']);
   const fallbackInterval = Math.max(MIN_RETRY_DELAY_MS, Math.min(deps.fallbackIntervalMs ?? DEFAULT_FALLBACK_INTERVAL_MS, MAX_RETRY_DELAY_MS));
   const leaseOptions = { clock: deps.clock, ttlMs: deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS, ...(deps.newToken ? { newToken: deps.newToken } : {}) };
   let stopped = false;
   let started = false;
   let running: Promise<ReplayResult> | null = null;
   let again = false;
+  let busyStreak = 0;
   let timer: unknown = null;
   const unsubscribe: (() => void)[] = [];
 
@@ -207,7 +236,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
   }
 
   /** One authenticated request to the pinned origin. A 401 refreshes the session once; everything else is answered, never thrown. */
-  async function send(def: CommandDef, row: OutboxRow, path: string, body: unknown): Promise<Sent> {
+  async function send(lease: LeaseHandle, def: CommandDef, row: OutboxRow, path: string, body: unknown): Promise<Sent> {
     let refreshed = false;
     for (;;) {
       let token: string | null;
@@ -217,8 +246,13 @@ export function createReplayer(deps: ReplayDeps): Replayer {
         return { kind: 'transient', retryAfterMs: null };
       }
       if (token === null) return { kind: 'halt', reason: 'auth' };
+      // Fetching a token can take a refresh round trip. What was true before it is checked again right before the
+      // request: the lease, the lock and the network, and that the signed-in account still owns this row.
+      if (!(await lease.renew().catch(() => false))) return { kind: 'halt', reason: 'lease_lost' };
       const blocked = await mayContactServer();
       if (blocked !== null) return { kind: 'halt', reason: blocked };
+      const who = await currentAccount();
+      if (who === null || !sameAccount(who, row.tenantId, row.userId)) return { kind: 'halt', reason: 'no_account' };
       let res: HttpResponse;
       try {
         res = await deps.http.request({
@@ -270,6 +304,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
       if (code === 'HOLIDAY_BLOCKED') return { kind: 'failed', code: 'holiday_blocked' };
       return { kind: 'failed', code: def.op === 'inspection.complete' ? 'inspection_cancelled' : 'validation_failed' };
     }
+    if (status === 403 && code !== null && REFUSAL_CODES.has(code)) return { kind: 'failed', code: 'rejected' };
     if ((status === 403 || status === 404) && def.scope === 'inspection' && def.createsInspection !== true) {
       return { kind: 'waiting', code: 'target_not_visible', delayMs: targetCheckDelay(row), needsCheck: true };
     }
@@ -282,7 +317,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     return { kind: 'failed', code };
   }
 
-  async function attempt(row: OutboxRow): Promise<Decision> {
+  async function attempt(lease: LeaseHandle, row: OutboxRow): Promise<Decision> {
     const def = findCommand(registry, row.op);
     if (def === null) return fail('unknown_op');
     if (row.registryVersion !== def.registryVersion) return fail('unknown_registry_version');
@@ -296,7 +331,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     } catch {
       return fail('corrupt_payload');
     }
-    const sent = await send(def, row, path, def.body(payload));
+    const sent = await send(lease, def, row, path, def.body(payload));
     if (sent.kind === 'halt') return sent;
     if (sent.kind === 'transient') return { kind: 'waiting', code: 'network', delayMs: delayFor(row, sent.retryAfterMs), needsCheck: false };
     return triage(def, row, sent.res);
@@ -312,22 +347,27 @@ export function createReplayer(deps: ReplayDeps): Replayer {
         result.halted = 'no_account';
         return;
       }
-      // The head of each line: the lowest seq of one account's inspection (or of its inspection-free writes).
-      // Only a head may be sent, so a failed, orphaned or waiting head holds back its own line and nothing else.
-      const heads = await deps.db.query<{ idempotency_key: string; state: string; next_at: number | null }>(
-        `SELECT idempotency_key, state, next_at FROM outbox o
-         WHERE tenant_id = ? AND user_id = ?
-           AND seq = (SELECT MIN(i.seq) FROM outbox i WHERE i.tenant_id = o.tenant_id AND i.user_id = o.user_id AND COALESCE(i.inspection_id, '') = COALESCE(o.inspection_id, ''))
+      // The head of each line is the lowest seq of one account's inspection (or of its inspection-free writes), taken
+      // over ALL its rows. Only a head may be sent, so a failed, orphaned or waiting head holds back its own line and
+      // nothing else. The page holds only heads that may be sent now, so stuck lines cannot crowd healthy ones out;
+      // a next_at beyond any wait this module writes is a clock that was set back, and counts as due.
+      const now = deps.clock.now();
+      const farAhead = now + IMPLAUSIBLE_WAIT_MS;
+      const waiting = await deps.db.query<{ at: number | null }>(
+        `SELECT MIN(next_at) AS at FROM outbox o WHERE tenant_id = ? AND user_id = ? AND state = 'pending' AND next_at > ? AND next_at <= ? AND ${IS_HEAD}`,
+        [account.tenantId, account.userId, now, farAhead],
+      );
+      const earliest = waiting[0]?.at ?? null;
+      if (earliest !== null && (run.wake === null || earliest < run.wake)) run.wake = earliest;
+      const heads = await deps.db.query<{ idempotency_key: string }>(
+        `SELECT idempotency_key FROM outbox o
+         WHERE tenant_id = ? AND user_id = ? AND state = 'pending' AND (next_at IS NULL OR next_at <= ? OR next_at > ?) AND ${IS_HEAD}
          ORDER BY seq LIMIT ?`,
-        [account.tenantId, account.userId, HEADS_PER_PASS],
+        [account.tenantId, account.userId, now, farAhead, HEADS_PER_PAGE],
       );
       let progressed = false;
       for (const head of heads) {
-        if (attempted.has(head.idempotency_key) || head.state !== 'pending') continue;
-        if (head.next_at !== null && head.next_at > deps.clock.now() && head.next_at - deps.clock.now() <= IMPLAUSIBLE_WAIT_MS) {
-          if (run.wake === null || head.next_at < run.wake) run.wake = head.next_at;
-          continue;
-        }
+        if (attempted.has(head.idempotency_key)) continue;
         const blocked = await mayContactServer();
         if (blocked !== null) {
           result.halted = blocked;
@@ -347,7 +387,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
         }
         attempted.add(row.idempotencyKey);
         progressed = true;
-        const decision = await attempt(row);
+        const decision = await attempt(lease, row);
         if (decision.kind === 'halt') {
           result.halted = decision.reason;
           return;
@@ -398,6 +438,10 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     return Math.round(fallbackInterval * (0.75 + 0.5 * random()));
   }
 
+  function leaseBusyDelay(): number {
+    return Math.round(LEASE_BUSY_RETRY_BASE_MS + LEASE_BUSY_RETRY_SPAN_MS * random());
+  }
+
   function scheduleRetry(run: RunReport): void {
     if (timer !== null) {
       timers.clearTimeout(timer);
@@ -408,7 +452,9 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     const stuck = halted !== null || leaseBusy || run.error;
     const candidates: number[] = [];
     if (!stuck && run.wake !== null) candidates.push(run.wake - deps.clock.now());
-    if (started && stuck && halted !== 'stopped') candidates.push(fallbackDelay());
+    const onlyBusy = leaseBusy && halted === null && !run.error;
+    busyStreak = onlyBusy ? busyStreak + 1 : 0;
+    if (started && stuck && halted !== 'stopped') candidates.push(onlyBusy && busyStreak <= LEASE_BUSY_RETRIES_BEFORE_FALLBACK ? leaseBusyDelay() : fallbackDelay());
     if (candidates.length === 0) return;
     const delay = Math.max(MIN_RETRY_DELAY_MS, Math.min(Math.min(...candidates), MAX_RETRY_DELAY_MS));
     timer = timers.setTimeout(() => {

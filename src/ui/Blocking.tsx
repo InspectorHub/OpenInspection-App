@@ -1,3 +1,4 @@
+import { SCHEMA_DRIFT_MESSAGE } from '../platform/schema';
 import { Body, Heading, Notice, Screen } from './kit';
 
 export function Booting() {
@@ -17,6 +18,16 @@ export function SchemaTooNew() {
       <Heading>This app is older than your data</Heading>
       <Body>The data on this device was saved by a newer version of InspectorHub. Update the app to open it. Nothing has been changed or deleted.</Body>
       <Notice tone="info">Exporting the data from this device is not available yet.</Notice>
+    </Screen>
+  );
+}
+
+/** A development device installed an earlier build of the local database. Not reachable on a device that never had one. */
+export function SchemaDrift() {
+  return (
+    <Screen>
+      <Heading>Local database is out of date</Heading>
+      <Body>{SCHEMA_DRIFT_MESSAGE}</Body>
     </Screen>
   );
 }

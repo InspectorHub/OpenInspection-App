@@ -6,7 +6,7 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { createHeldAuthSession, createSignedInWorld, createWorld, restartOffline, rowCounts, seedLocalData, type HeldAuthSession } from './app/test-support/world';
-import { SchemaTooNewError } from './platform/schema';
+import { SCHEMA_DRIFT_MESSAGE, SchemaDriftError, SchemaTooNewError } from './platform/schema';
 import { refreshTokenKey } from './auth/server-config';
 
 afterEach(cleanup);
@@ -34,6 +34,15 @@ describe('App first screen', () => {
     expect(await screen.findByRole('heading', { name: 'This app is older than your data' })).toBeInTheDocument();
     expect(screen.getByText(/not available yet/i)).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('an outdated development database shows the clear-the-app-data screen, with no controls and no SQL', async () => {
+    render(<App open={() => Promise.reject(new SchemaDriftError('outbox.next_at'))} allowInsecureHttp={false} />);
+    expect(await screen.findByText(SCHEMA_DRIFT_MESSAGE)).toBeInTheDocument();
+    expect(screen.getByText('This development build has an outdated local database: clear the app data')).toBeInTheDocument();
+    expect(screen.queryByText(/next_at|outbox|no such column/i)).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByText('This app is older than your data')).toBeNull();
   });
 
   it('control: the blocking screen is not shown for an ordinary open', async () => {
