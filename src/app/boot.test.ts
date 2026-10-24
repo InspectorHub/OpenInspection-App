@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
 import { refreshTokenKey } from '../auth/server-config';
 import { SchemaTooNewError } from '../platform/schema';
@@ -89,5 +89,21 @@ describe('opening the app', () => {
   it('any other open failure is a distinct screen, not the newer-data one', async () => {
     const result = await boot(() => Promise.reject(new AuthError('storage_failed')), SECURE);
     expect(result).toEqual({ services: null, screen: { kind: 'open_failed' } });
+  });
+
+  it('a failing first read closes the database it opened and shows the open-failed screen', async () => {
+    const world = await createWorld();
+    const close = vi.fn(() => Promise.resolve());
+    const broken = { ...world.services, close, db: { ...world.db, query: () => Promise.reject(new Error('disk I/O error')) } };
+    const result = await boot(() => Promise.resolve(broken), SECURE);
+    expect(result).toEqual({ services: null, screen: { kind: 'open_failed' } });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('control: a successful boot leaves the database open', async () => {
+    const world = await createWorld();
+    const close = vi.fn(() => Promise.resolve());
+    await boot(() => Promise.resolve({ ...world.services, close }), SECURE);
+    expect(close).not.toHaveBeenCalled();
   });
 });

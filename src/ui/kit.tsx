@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 
 /**
  * The page frame: full height, safe-area padding, a plain column on a phone and a single
@@ -51,7 +51,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   quiet: 'text-ih-primary-text hover:bg-ih-bg-muted',
 };
 
-export function Button({ variant = 'primary', className = '', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
+export function Button({ variant = 'primary', className = '', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; ref?: Ref<HTMLButtonElement> }) {
   return <button type="button" className={`${BUTTON_BASE} ${VARIANT_CLASSES[variant]} ${className}`} {...rest} />;
 }
 

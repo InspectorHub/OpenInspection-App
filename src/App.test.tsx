@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -23,8 +23,8 @@ describe('App first screen', () => {
     const { services, calls } = restartOffline(world);
     render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} />);
     expect(await screen.findByRole('heading', { name: 'Work list coming in a later task' })).toBeInTheDocument();
-    expect(screen.getByTestId('identity-role')).toHaveTextContent('inspector');
-    expect(screen.getByTestId('identity-tenant')).toHaveTextContent('tenant-1');
+    expect(screen.getByTestId('identity-role')).toHaveTextContent('Inspector');
+    expect(screen.queryByTestId('identity-tenant')).toBeNull();
     expect(screen.queryByRole('heading', { name: /^Sign in/ })).toBeNull();
     expect(calls).toEqual([]);
   });
@@ -79,10 +79,11 @@ describe('App whole journey', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Work list coming in a later task' })).toBeInTheDocument();
-    expect(screen.getByTestId('identity-role')).toHaveTextContent('inspector');
+    expect(screen.getByTestId('identity-role')).toHaveTextContent('Inspector');
     expect(world.store.entries()[refreshTokenKey(world.server.origin)]).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Sign out' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(world.store.entries()[refreshTokenKey(world.server.origin)]).toBeUndefined();
 

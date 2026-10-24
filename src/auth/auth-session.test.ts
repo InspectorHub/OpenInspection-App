@@ -7,24 +7,27 @@ const AUTH_URL = 'https://oi.example.test/oauth/authorize?x=1';
 const CALLBACK = 'io.inspectorhub.app:/oauth/callback?code=c&state=s';
 
 interface Fakes {
-  browser: BrowserLike & { opened: string[]; closed: number; finish(): void };
+  browser: BrowserLike & { opened: string[]; closed: number; log: string[]; finish(): void };
   app: AppLike & { listeners: number; open(url: string): void };
 }
 
-function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolean; appListenerGate?: Promise<void> } = {}): Fakes {
+function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolean; appListenerGate?: Promise<void>; openGate?: Promise<void> } = {}): Fakes {
   let browserListenerFailures = options.browserListenerFailsOnce ? 1 : 0;
   const finishedListeners = new Set<() => void>();
   const urlListeners = new Set<(e: { url: string }) => void>();
   const browser = {
     opened: [] as string[],
     closed: 0,
-    open: (o: { url: string }) => {
-      if (options.openFails) return Promise.reject(new Error('no browser'));
+    log: [] as string[],
+    open: async (o: { url: string }) => {
+      if (options.openFails) throw new Error('no browser');
+      await options.openGate;
       browser.opened.push(o.url);
-      return Promise.resolve();
+      browser.log.push('tab-exists');
     },
     close: () => {
       browser.closed += 1;
+      browser.log.push('close');
       return Promise.resolve();
     },
     addListener: (_event: 'browserFinished', cb: () => void) => {
@@ -344,5 +347,34 @@ describe('Android auth session (Custom Tab)', () => {
       f.app.open(CALLBACK);
       await pending;
     });
+  });
+
+  it('a cancel that lands while the tab is still opening closes it once it exists', async () => {
+    let openTab: () => void = () => undefined;
+    const openGate = new Promise<void>((resolve) => {
+      openTab = resolve;
+    });
+    const f = fakes({ openGate });
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    const pending = session.start(AUTH_URL, SCHEME);
+    const outcome = codeOf(pending);
+    await vi.advanceTimersByTimeAsync(0);
+    session.cancel();
+    expect(await outcome).toBe('sign_in_cancelled');
+    expect(f.browser.log).toEqual(['close']);
+
+    openTab();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.browser.log).toEqual(['close', 'tab-exists', 'close']);
+  });
+
+  it('control: a login that is still waiting when the tab opens does not close it', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    const pending = session.start(AUTH_URL, SCHEME);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.browser.log).toEqual(['tab-exists']);
+    f.app.open(CALLBACK);
+    await pending;
   });
 });

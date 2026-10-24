@@ -169,10 +169,12 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
           end(p, 'sign_in_expired');
         }, timeoutMs);
         ensureListeners()
-          .then(() => {
+          .then(async () => {
             // A cancel or the time limit may have ended this login while the listeners were registering.
-            if (pending === p) return deps.browser.open({ url });
-            return undefined;
+            if (pending !== p) return;
+            await deps.browser.open({ url });
+            // ...or while the tab was opening, when the close that ended it ran before the tab existed.
+            if (pending !== p) deps.browser.close().catch(() => undefined);
           })
           .catch(() => {
             if (pending !== p) return;

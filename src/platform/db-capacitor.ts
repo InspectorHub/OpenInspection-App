@@ -110,6 +110,13 @@ async function readUserVersion(conn: SqliteDbConnectionLike): Promise<number> {
   return row?.user_version ?? 0;
 }
 
+/** Closes the named connection through the real plugin; a connection that is not open is not an error. */
+export async function closeRealCapacitorDb(name: string): Promise<void> {
+  const sqlite = new SQLiteConnection(CapacitorSQLite);
+  if (!(await sqlite.isConnection(name, false)).result) return;
+  await sqlite.closeConnection(name, false);
+}
+
 /** Thin real-plugin wiring; everything above is unit-tested with fakes. */
 export function openRealCapacitorDb(
   options: Omit<OpenCapacitorDbOptions, 'platform' | 'version' | 'upgrades'> &

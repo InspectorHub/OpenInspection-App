@@ -232,6 +232,7 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
           if (!(err instanceof ClientRejected)) throw err;
           if (retried) throw new AuthError('registration_failed');
           await deps.registrar.forget(origin);
+          // Without this, a cancel during the forget still registers a replacement client before the next attempt notices.
           if (mine.cancelled) throw new AuthError('sign_in_cancelled');
         }
       }

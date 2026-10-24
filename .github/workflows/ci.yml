@@ -18,12 +18,14 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run typecheck
       - run: npx vitest run
       - run: npm run build
+      - name: Release bundle has no development-only UI
+        run: npm run check:bundle
       - run: npx cap sync android
       - name: API types match the engine contract
         run: npm run api:types:check -- "$ENGINE_CONTRACT_URL"
@@ -34,7 +36,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run build

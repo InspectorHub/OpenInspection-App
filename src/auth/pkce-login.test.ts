@@ -644,6 +644,8 @@ describe('registration retry (P1)', () => {
     release();
     expect(await outcome).toBe('sign_in_cancelled');
     expect(r.started).toHaveLength(1);
+    // The cancelled login must not register a replacement client either: that is a request nobody wants.
+    expect(r.server.count('/oauth/register')).toBe(1);
     expect(r.flow.hasPending()).toBe(false);
   });
 

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { isAuthError } from './errors';
 import { createManualClock, type ManualClock } from '../platform/clock';
 import { createHttp, type FetchLike } from './http';
 import { backoffMs, classifyTokenFailure, createTokenManager, type TokenManager, type TokenResponse } from './tokens';
@@ -738,5 +739,106 @@ describe('a stale session check after a new sign-in', () => {
     expect(await check).toMatchObject({ kind: 'retry' });
     expect(await m.getState(r.origin)).toBe('signed_in');
     expect(await m.getAccessToken(r.origin)).toBe(fresh.accessToken);
+  });
+});
+
+/** A secure store whose writes, removes or reads can be switched to never answer. */
+function hangable(inner: MemorySecureStore): { store: MemorySecureStore; hang(ops: Array<'get' | 'set' | 'remove'>): void; release(): void } {
+  let hanging = new Set<string>();
+  const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
+  return {
+    store: {
+      ...inner,
+      get: (key) => (hanging.has('get') ? never() : inner.get(key)),
+      set: (key, value) => (hanging.has('set') ? never() : inner.set(key, value)),
+      remove: (key) => (hanging.has('remove') ? never() : inner.remove(key)),
+    },
+    hang: (ops) => {
+      hanging = new Set(ops);
+    },
+    release: () => {
+      hanging = new Set();
+    },
+  };
+}
+
+describe('a secure store that never answers', () => {
+  const STORE_TIMEOUT_MS = 10_000;
+  let hung: ReturnType<typeof hangable>;
+  let m: TokenManager;
+
+  beforeEach(async () => {
+    hung = hangable(r.store);
+    m = createTokenManager({ http: createHttp({ fetch: r.fetch }), store: hung.store, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a hung adopt write fails as storage_failed, sign-out is not stuck behind it, and sign-in works afterwards', async () => {
+    const fresh = await issueTokens(r.server, r.clientId);
+    hung.hang(['set']);
+    const adopt = m.adopt(r.origin, fresh);
+    const adoptOutcome = adopt.then(
+      () => 'resolved',
+      (err: unknown) => (isAuthError(err) ? err.code : 'other'),
+    );
+    const signOut = m.signOut(r.origin);
+    const signOutOutcome = signOut.then(() => 'resolved');
+    await vi.advanceTimersByTimeAsync(STORE_TIMEOUT_MS + 1);
+    expect(await adoptOutcome).toBe('storage_failed');
+    expect(await signOutOutcome).toBe('resolved');
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBeUndefined();
+    expect(await m.getState(r.origin)).toBe('signed_out');
+
+    hung.release();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    expect(await m.getState(r.origin)).toBe('signed_in');
+    expect((await m.refresh(r.origin)).kind).toBe('ok');
+  });
+
+  it('a hung remove makes sign-out fail as storage_failed and leaves the marker down, so a refresh and a second sign-out work', async () => {
+    hung.hang(['remove']);
+    const outcome = m.signOut(r.origin).then(
+      () => 'resolved',
+      (err: unknown) => (isAuthError(err) ? err.code : 'other'),
+    );
+    await vi.advanceTimersByTimeAsync(STORE_TIMEOUT_MS + 1);
+    expect(await outcome).toBe('storage_failed');
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBeTruthy();
+
+    hung.release();
+    expect((await m.refresh(r.origin)).kind).toBe('ok');
+    await m.signOut(r.origin);
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBeUndefined();
+  });
+
+  it('a hung read during a refresh answers retry/storage, and the next refresh is not blocked', async () => {
+    hung.hang(['get']);
+    const first = m.refresh(r.origin);
+    await vi.advanceTimersByTimeAsync(STORE_TIMEOUT_MS + 1);
+    expect(await first).toMatchObject({ kind: 'retry', reason: 'storage' });
+    hung.release();
+    expect((await m.refresh(r.origin, { ignoreBackoff: true })).kind).toBe('ok');
+  });
+
+  it('a hung write of a rotated token answers retry/storage, and the next refresh is not blocked', async () => {
+    hung.hang(['set']);
+    const first = m.refresh(r.origin);
+    await vi.advanceTimersByTimeAsync(STORE_TIMEOUT_MS + 1);
+    expect(await first).toMatchObject({ kind: 'retry', reason: 'storage' });
+    hung.release();
+    expect((await m.refresh(r.origin, { ignoreBackoff: true })).kind).toBe('ok');
+  });
+
+  it('control: with a store that answers, nothing waits for the timeout and no timer is left behind', async () => {
+    await m.signOut(r.origin);
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBeUndefined();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    expect((await m.refresh(r.origin)).kind).toBe('ok');
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

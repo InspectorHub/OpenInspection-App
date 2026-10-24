@@ -10,6 +10,8 @@ export const REFRESH_EARLY_MS = 60_000;
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 300_000;
 const REVOKE_TIMEOUT_MS = 5_000;
+/** How long one secure-store call may take before it is given up on. */
+export const STORE_TIMEOUT_MS = 10_000;
 const MAX_TOKEN_LENGTH = 4096;
 const MAX_EXPIRES_IN_SEC = 31_536_000;
 
@@ -117,6 +119,10 @@ export interface TokenDeps {
   clock: Clock;
   getClientId(origin: string): Promise<string | null>;
   random?: () => number;
+  /** Bounds every secure-store call; defaults to `STORE_TIMEOUT_MS`. */
+  storeTimeoutMs?: number;
+  /** Timer functions for that bound; default to the globals. */
+  timers?: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
 }
 
 export type SessionCheck =
@@ -150,8 +156,40 @@ function formBody(values: Record<string, string>): { headers: Record<string, str
   return { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(values).toString() };
 }
 
+/**
+ * One token manager serves one app. `adopt` and `signOut` for the same origin must not be interleaved by
+ * callers: the UI runs them one at a time (a sign-in screen and a signed-in screen are never up together).
+ *
+ * Every secure-store call is bounded (`storeTimeoutMs`). A call that never answers is treated as a failed
+ * one: `adopt` and `signOut` reject `storage_failed`, a refresh answers `retry`/`storage`, and the markers
+ * that guard the origin are always released. A write that was abandoned this way may still land later;
+ * the store gives no way to cancel it.
+ */
 export function createTokenManager(deps: TokenDeps): TokenManager {
   const random = deps.random ?? Math.random;
+  const storeTimeoutMs = deps.storeTimeoutMs ?? STORE_TIMEOUT_MS;
+  /** Rejects when `call` has not settled in time; the timer never outlives the call. */
+  function bounded<T>(call: () => Promise<T>): Promise<T> {
+    const timers = deps.timers ?? { setTimeout, clearTimeout };
+    return new Promise<T>((resolve, reject) => {
+      const timer = timers.setTimeout(() => {
+        reject(new Error('secure store timed out'));
+      }, storeTimeoutMs);
+      call().then(
+        (value) => {
+          timers.clearTimeout(timer);
+          resolve(value);
+        },
+        (err: unknown) => {
+          timers.clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error('secure store failed'));
+        },
+      );
+    });
+  }
+  const storeGet = (key: string): Promise<string | null> => bounded(() => deps.store.get(key));
+  const storeSet = (key: string, value: string): Promise<void> => bounded(() => deps.store.set(key, value));
+  const storeRemove = (key: string): Promise<void> => bounded(() => deps.store.remove(key));
   const generations = new Map<string, number>();
   const flights = new Map<string, Promise<RefreshResult>>();
   const relogin = new Set<string>();
@@ -205,7 +243,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     const key = refreshTokenKey(origin);
     let current: string | null;
     try {
-      current = await deps.store.get(key);
+      current = await storeGet(key);
     } catch {
       return retry(origin, 'storage', null);
     }
@@ -255,7 +293,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     }
 
     try {
-      await deps.store.set(key, next.refreshToken);
+      await storeSet(key, next.refreshToken);
     } catch {
       // The old token stays; the server accepts it once more.
       return retry(origin, 'storage', null);
@@ -340,7 +378,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
         await earlier;
         await running?.catch(() => undefined);
         try {
-          await deps.store.set(refreshTokenKey(origin), tokens.refreshToken);
+          await storeSet(refreshTokenKey(origin), tokens.refreshToken);
         } catch {
           throw new AuthError('storage_failed');
         }
@@ -365,7 +403,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     getState: async (origin) => {
       if (isSigningOut(origin)) return 'signed_out';
       if (relogin.has(origin)) return 'relogin_required';
-      return (await deps.store.get(refreshTokenKey(origin))) ? 'signed_in' : 'signed_out';
+      return (await storeGet(refreshTokenKey(origin))) ? 'signed_in' : 'signed_out';
     },
     useOrigin,
     signOut: async (origin) => {
@@ -381,9 +419,9 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
         await adopting.get(origin);
         await flights.get(origin)?.catch(() => undefined);
         const key = refreshTokenKey(origin);
-        stored = await deps.store.get(key).catch(() => null);
+        stored = await storeGet(key).catch(() => null);
         try {
-          await deps.store.remove(key);
+          await storeRemove(key);
         } catch {
           throw new AuthError('storage_failed');
         }

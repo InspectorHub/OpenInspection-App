@@ -50,6 +50,8 @@ export async function boot(open: () => Promise<AppServices>, options: { allowIns
   try {
     return { services, screen: await decideScreen(services, options) };
   } catch {
+    // The database is open but the first read failed: close it rather than leave the connection behind.
+    await services.close().catch(() => undefined);
     return { services: null, screen: { kind: 'open_failed' } };
   }
 }
