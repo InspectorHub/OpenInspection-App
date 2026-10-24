@@ -15,9 +15,10 @@ export interface AuthSession {
   /**
    * Resolves with the callback URL. Rejects `sign_in_cancelled` after `cancel()`,
    * `sign_in_expired` when no callback arrives within the time limit, and
-   * `sign_in_in_progress` when a login is already waiting.
+   * `sign_in_in_progress` when a login is already waiting. A callback URL that `accept` refuses is
+   * ignored as if it had never arrived: the login keeps waiting and the browser stays open.
    */
-  start(url: string, callbackScheme: string): Promise<string>;
+  start(url: string, callbackScheme: string, accept?: (callbackUrl: string) => boolean): Promise<string>;
   /** Ends the waiting login as cancelled and closes the browser. No effect when nothing is waiting. */
   cancel(): void;
   /**
@@ -72,6 +73,7 @@ export interface AndroidAuthSessionDeps {
 
 interface PendingStart {
   scheme: string;
+  accept: ((callbackUrl: string) => boolean) | undefined;
   resolve(url: string): void;
   reject(error: AuthError): void;
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -102,7 +104,9 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
   const timeoutMs = deps.timeoutMs ?? PENDING_LOGIN_TTL_MS;
   const closedListeners = new Set<() => void>();
   let pending: PendingStart | null = null;
-  let listening: Promise<void> | null = null;
+  /** Each plugin registration is tracked on its own, so a retry repeats only the one that failed. */
+  let appRegistration: Promise<unknown> | null = null;
+  let browserRegistration: Promise<unknown> | null = null;
 
   function settle(p: PendingStart): void {
     clearTimeout(p.timer);
@@ -116,34 +120,47 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
     p.reject(new AuthError(code));
   }
 
-  function ensureListeners(): Promise<void> {
-    if (!listening) {
-      listening = (async () => {
-        await deps.app.addListener('appUrlOpen', ({ url }) => {
-          const p = pending;
-          if (!p || !isCallbackUrl(url, p.scheme)) return;
-          settle(p);
-          deps.browser.close().catch(() => undefined);
-          p.resolve(url);
-        });
-        await deps.browser.addListener('browserFinished', () => {
-          if (!pending) return;
-          for (const listener of [...closedListeners]) listener();
-        });
-      })();
-      listening.catch(() => {
-        listening = null;
+  function ensureListeners(): Promise<unknown> {
+    if (!appRegistration) {
+      const registration = deps.app.addListener('appUrlOpen', ({ url }) => {
+        const p = pending;
+        if (!p || !isCallbackUrl(url, p.scheme) || (p.accept && !p.accept(url))) return;
+        settle(p);
+        deps.browser.close().catch(() => undefined);
+        p.resolve(url);
+      });
+      appRegistration = registration;
+      registration.catch(() => {
+        if (appRegistration === registration) appRegistration = null;
       });
     }
-    return listening;
+    if (!browserRegistration) {
+      const registration = deps.browser.addListener('browserFinished', () => {
+        if (!pending) return;
+        for (const listener of [...closedListeners]) {
+          try {
+            listener();
+          } catch {
+            // A faulty listener is unsubscribed so it cannot fail every later report, and the error is
+            // dropped: it belongs to the UI, and the plugin dispatch must not see it.
+            closedListeners.delete(listener);
+          }
+        }
+      });
+      browserRegistration = registration;
+      registration.catch(() => {
+        if (browserRegistration === registration) browserRegistration = null;
+      });
+    }
+    return Promise.all([appRegistration, browserRegistration]);
   }
 
   return {
-    start: (url, callbackScheme) => {
+    start: (url, callbackScheme, accept) => {
       if (pending) return Promise.reject(new AuthError('sign_in_in_progress'));
       if (!isWebUrl(url)) return Promise.reject(new AuthError('sign_in_failed'));
       return new Promise<string>((resolve, reject) => {
-        const p: PendingStart = { scheme: callbackScheme, resolve, reject, timer: undefined };
+        const p: PendingStart = { scheme: callbackScheme, accept, resolve, reject, timer: undefined };
         pending = p;
         p.timer = setTimeout(() => {
           end(p, 'sign_in_expired');

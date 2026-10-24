@@ -155,6 +155,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   const relogin = new Set<string>();
   /** Origins whose sign-out has started and not yet finished (a count, so overlapping sign-outs nest). */
   const signingOut = new Map<string, number>();
+  /** Origins whose sign-in is storing its token; settles once the write finished or failed. */
+  const adopting = new Map<string, Promise<void>>();
   const backoff = new Map<string, { until: number; attempt: number }>();
   let activeOrigin: string | null = null;
   let access: { token: string; expiresAt: number } | null = null;
@@ -210,6 +212,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       return retry(origin, 'storage', null);
     }
     if (!clientId) return { kind: 'relogin' };
+    // Sign-out may have begun while the key and the client id were being read: nothing may be posted then.
+    if (superseded(origin, generation)) return { kind: 'signed_out' };
 
     let res;
     try {
@@ -263,6 +267,9 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   function refresh(origin: string, options: { ignoreBackoff?: boolean } = {}): Promise<RefreshResult> {
     useOrigin(origin);
     if (isSigningOut(origin)) return Promise.resolve({ kind: 'signed_out' });
+    // A new sign-in is writing its token: wait for it, then refresh with the token it stored.
+    const adoption = adopting.get(origin);
+    if (adoption) return adoption.then(() => refresh(origin, options));
     const running = flights.get(origin);
     if (running) return running;
     const waiting = backoff.get(origin);
@@ -293,6 +300,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   }
 
   async function checkWith(origin: string, accessToken: string): Promise<SessionCheck> {
+    const generation = generationOf(origin);
     try {
       const result = await fetchSession(deps.http, origin, accessToken);
       if (result.kind === 'ok') return result;
@@ -300,9 +308,10 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       if (again.kind !== 'ok') return again;
       const second = await fetchSession(deps.http, origin, again.accessToken);
       if (second.kind === 'ok') return second;
-      if (isSigningOut(origin)) return { kind: 'signed_out' };
+      // A sign-out (finished or not) or a new sign-in during the awaits above makes this verdict stale.
+      if (superseded(origin, generation)) return { kind: 'signed_out' };
       relogin.add(origin);
-      access = null;
+      if (activeOrigin === origin) access = null;
       return { kind: 'relogin' };
     } catch (err) {
       return retry(origin, isAuthError(err) && err.code === 'server_timeout' ? 'timeout' : 'network', null);
@@ -310,20 +319,33 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   }
 
   return {
-    adopt: async (origin, tokens) => {
+    adopt: (origin, tokens) => {
       useOrigin(origin);
       // A refresh that began before this sign-in belongs to the previous grant: supersede it, and let it
       // finish (it stores nothing and revokes what it rotated) before the new token is written.
       bumpGeneration(origin);
-      await flights.get(origin)?.catch(() => undefined);
-      try {
-        await deps.store.set(refreshTokenKey(origin), tokens.refreshToken);
-      } catch {
-        throw new AuthError('storage_failed');
-      }
-      access = { token: tokens.accessToken, expiresAt: deps.clock.now() + tokens.expiresInSec * 1000 };
-      relogin.delete(origin);
-      backoff.delete(origin);
+      const running = flights.get(origin);
+      const write = (async (): Promise<void> => {
+        await running?.catch(() => undefined);
+        try {
+          await deps.store.set(refreshTokenKey(origin), tokens.refreshToken);
+        } catch {
+          throw new AuthError('storage_failed');
+        }
+        access = { token: tokens.accessToken, expiresAt: deps.clock.now() + tokens.expiresInSec * 1000 };
+        relogin.delete(origin);
+        backoff.delete(origin);
+      })();
+      // Until the write settles, a refresh would read the previous token; it waits instead.
+      const settled = write.then(
+        () => undefined,
+        () => undefined,
+      );
+      adopting.set(origin, settled);
+      void settled.then(() => {
+        if (adopting.get(origin) === settled) adopting.delete(origin);
+      });
+      return write;
     },
     getAccessToken,
     refresh,

@@ -8,7 +8,7 @@ import { createAndroidAuthSession } from './auth-session';
 import { AuthError, isAuthError } from './errors';
 import { createHttp, type FetchLike } from './http';
 import { buildAuthorizeUrl, createLoginFlow, parseCallback, type LoginFlow } from './pkce-login';
-import { createRegistrar } from './registration';
+import { createRegistrar, type Registrar } from './registration';
 import { loadClientId, loadIdentity, refreshTokenKey, saveIdentity } from './server-config';
 import { createFakeServer, s256, type FakeServer } from './test-support/fake-server';
 import { createMemorySecureStore, type MemorySecureStore } from './test-support/memory-secure-store';
@@ -25,14 +25,15 @@ interface Rig {
   started: string[];
 }
 
-async function rig(options: { server?: FakeServer; session?: (authUrl: string, server: FakeServer, clock: ManualClock) => Promise<string>; fetch?: FetchLike; cancelSession?: () => void; authSession?: AuthSession } = {}): Promise<Rig> {
+async function rig(options: { server?: FakeServer; session?: (authUrl: string, server: FakeServer, clock: ManualClock) => Promise<string>; fetch?: FetchLike; cancelSession?: () => void; authSession?: AuthSession; wrapRegistrar?: (registrar: Registrar) => Registrar } = {}): Promise<Rig> {
   const server = options.server ?? createFakeServer();
   const db = await createSqlJsDb();
   await migrate(db, 0);
   const store = createMemorySecureStore();
   const clock = createManualClock(5_000_000);
   const http = createHttp({ fetch: options.fetch ?? server.fetch });
-  const registrar = createRegistrar({ http, db });
+  const realRegistrar = createRegistrar({ http, db });
+  const registrar = options.wrapRegistrar ? options.wrapRegistrar(realRegistrar) : realRegistrar;
   const tokens = createTokenManager({ http, store, clock, getClientId: (origin) => loadClientId(db, origin), random: () => 1 });
   const started: string[] = [];
   const authSession: AuthSession = options.authSession ?? {
@@ -424,6 +425,99 @@ describe('a callback delivered through handleCallback while signIn waits', () =>
     expect(await outcome).toBe('resolved');
     expect(tokenPosts(r.server, 'authorization_code')).toBe(1);
     expect(r.flow.hasPending()).toBe(false);
+  });
+});
+
+describe('a hostile callback with the wrong state does not consume the pending login', () => {
+  function withState(callback: string, state: string): string {
+    const url = new URL(callback);
+    url.searchParams.set('state', state);
+    return url.toString();
+  }
+
+  it('handleCallback: a wrong-state URL is ignored (no exchange, still pending) and the genuine callback then succeeds', async () => {
+    let seen = '';
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const r = await rig({
+      session: async (authUrl, server) => {
+        seen = await server.authorize(authUrl);
+        await gate;
+        return seen;
+      },
+    });
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    while (seen === '') await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(await r.flow.handleCallback(withState(seen, 'forged-state-value-0123456789'))).toBeNull();
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(0);
+    expect(r.flow.hasPending()).toBe(true);
+    const genuine = await r.flow.handleCallback(seen);
+    expect(genuine?.origin).toBe(r.server.origin);
+    open();
+    expect(await outcome).toBe('resolved');
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(1);
+  });
+
+  it('with the real Android session: a hostile appUrlOpen is ignored and the genuine one completes the login', async () => {
+    const urlListeners: ((e: { url: string }) => void)[] = [];
+    const opened: string[] = [];
+    const session = createAndroidAuthSession({
+      browser: {
+        open: ({ url }) => {
+          opened.push(url);
+          return Promise.resolve();
+        },
+        close: () => Promise.resolve(),
+        addListener: () => Promise.resolve({ remove: () => Promise.resolve() }),
+      },
+      app: {
+        addListener: (_event, listener) => {
+          urlListeners.push(listener);
+          return Promise.resolve({ remove: () => Promise.resolve() });
+        },
+      },
+    });
+    const r = await rig({ authSession: session });
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    while (opened.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    const genuine = await r.server.authorize(opened[0] ?? '');
+    for (const l of urlListeners) l({ url: withState(genuine, 'forged-state-value-0123456789') });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(0);
+    expect(r.flow.hasPending()).toBe(true);
+    for (const l of urlListeners) l({ url: genuine });
+    expect(await outcome).toBe('resolved');
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(1);
+  });
+});
+
+describe('cancel() between signIn() and the browser opening', () => {
+  it('never opens the browser when the cancel lands while the client id is being ensured', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    const r = await rig({
+      wrapRegistrar: (real) => ({
+        ...real,
+        ensureClientId: async (origin) => {
+          entered = true;
+          await gate;
+          return real.ensureClientId(origin);
+        },
+      }),
+    });
+    const outcome = codeOf(r.flow.signIn(r.server.origin));
+    while (!entered) await new Promise((resolve) => setTimeout(resolve, 1));
+    r.flow.cancel();
+    release();
+    expect(await outcome).toBe('sign_in_cancelled');
+    expect(r.started).toEqual([]);
+    expect(r.flow.hasPending()).toBe(false);
+    await expect(r.flow.signIn(r.server.origin)).resolves.toBeDefined();
   });
 });
 

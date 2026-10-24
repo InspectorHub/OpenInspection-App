@@ -504,6 +504,123 @@ describe('adopt supersedes a stale refresh flight', () => {
   });
 });
 
+/** A promise whose release is under the test's control. */
+function gateOf(): { gate: Promise<void>; release: () => void } {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { gate, release };
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !condition(); i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  expect(condition()).toBe(true);
+}
+
+describe('checkSession when sign-out overtakes the second session request', () => {
+  /** The first session request answers 401 at once; the second waits at a gate, then answers 401 too. */
+  function gatedSecondSession(): { m: TokenManager; release: () => void; secondStarted: () => boolean } {
+    const { gate, release } = gateOf();
+    let sessionCalls = 0;
+    const fetchWith: FetchLike = async (url, init) => {
+      if (new URL(url).pathname === '/api/client/session') {
+        sessionCalls += 1;
+        if (sessionCalls === 1) return new Response('{}', { status: 401 });
+        await gate;
+        return new Response('{}', { status: 401 });
+      }
+      return r.server.fetch(url, init);
+    };
+    const m = createTokenManager({ http: createHttp({ fetch: fetchWith }), store: r.store, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    return { m, release, secondStarted: () => sessionCalls === 2 };
+  }
+
+  it('does not mark a signed-out origin as needing re-login', async () => {
+    const { m, release, secondStarted } = gatedSecondSession();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await until(secondStarted);
+    await m.signOut(r.origin);
+    release();
+    expect(await check).toEqual({ kind: 'signed_out' });
+    expect(await m.getState(r.origin)).toBe('signed_out');
+  });
+
+  it('positive control: the same flow without a sign-out asks for re-login', async () => {
+    const { m, release, secondStarted } = gatedSecondSession();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await until(secondStarted);
+    release();
+    expect(await check).toEqual({ kind: 'relogin' });
+    expect(await m.getState(r.origin)).toBe('relogin_required');
+  });
+
+  it('a re-login verdict for one origin never wipes the cached access token of another', async () => {
+    const { m, release, secondStarted } = gatedSecondSession();
+    await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    const check = m.checkSession(r.origin);
+    await until(secondStarted);
+    m.useOrigin('https://other.example.test');
+    await m.adopt('https://other.example.test', { accessToken: 'other-access', refreshToken: 'other-refresh', expiresInSec: 3600 });
+    release();
+    await check;
+    expect(await m.getAccessToken('https://other.example.test')).toBe('other-access');
+  });
+});
+
+describe('adopt holds a guard across its store write', () => {
+  it('a refresh started while the new token is being written neither posts the old token nor marks re-login', async () => {
+    const { gate, release } = gateOf();
+    let setStarted = false;
+    const slowStore: MemorySecureStore = {
+      ...r.store,
+      set: async (key, value) => {
+        setStarted = true;
+        await gate;
+        await r.store.set(key, value);
+      },
+    };
+    const old = r.store.entries()[refreshTokenKey(r.origin)] ?? '';
+    const m = createTokenManager({ http: createHttp({ fetch: r.server.fetch }), store: slowStore, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    const fresh = await issueTokens(r.server, r.clientId);
+    const adopting = m.adopt(r.origin, fresh);
+    await until(() => setStarted);
+    const refreshing = m.refresh(r.origin);
+    release();
+    await adopting;
+    await refreshing;
+    expect(sentRefreshTokens(r.server)).not.toContain(old);
+    expect(await m.getState(r.origin)).toBe('signed_in');
+  });
+});
+
+describe('a refresh that is overtaken before its POST', () => {
+  it('sends nothing when sign-out begins while the client id is still being read', async () => {
+    const { gate, release } = gateOf();
+    let lookups = 0;
+    const m = createTokenManager({
+      http: createHttp({ fetch: r.server.fetch }),
+      store: r.store,
+      clock: r.clock,
+      getClientId: async () => {
+        lookups += 1;
+        if (lookups === 1) await gate;
+        return r.clientId;
+      },
+      random: () => 1,
+    });
+    const inFlight = m.refresh(r.origin);
+    await until(() => lookups === 1);
+    const signingOut = m.signOut(r.origin);
+    release();
+    const [result] = await Promise.all([inFlight, signingOut]);
+    expect(result.kind).toBe('signed_out');
+    expect(refreshPosts(r.server)).toBe(0);
+  });
+});
+
 describe('storage and backoff edges', () => {
   it('a failing client-id lookup is a retryable result for every caller, not a rejection', async () => {
     const m = createTokenManager({ http: createHttp({ fetch: r.fetch }), store: r.store, clock: r.clock, getClientId: () => Promise.reject(new Error('db locked')), random: () => 1 });

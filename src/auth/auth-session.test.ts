@@ -11,7 +11,8 @@ interface Fakes {
   app: AppLike & { listeners: number; open(url: string): void };
 }
 
-function fakes(options: { openFails?: boolean } = {}): Fakes {
+function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolean } = {}): Fakes {
+  let browserListenerFailures = options.browserListenerFailsOnce ? 1 : 0;
   const finishedListeners = new Set<() => void>();
   const urlListeners = new Set<(e: { url: string }) => void>();
   const browser = {
@@ -27,6 +28,10 @@ function fakes(options: { openFails?: boolean } = {}): Fakes {
       return Promise.resolve();
     },
     addListener: (_event: 'browserFinished', cb: () => void) => {
+      if (browserListenerFailures > 0) {
+        browserListenerFailures -= 1;
+        return Promise.reject(new Error('plugin not ready'));
+      }
       finishedListeners.add(cb);
       return Promise.resolve({ remove: () => Promise.resolve(void finishedListeners.delete(cb)) });
     },
@@ -234,6 +239,53 @@ describe('Android auth session (Custom Tab)', () => {
     const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
     expect(await codeOf(session.start(AUTH_URL, SCHEME))).toBe('sign_in_failed');
     expect(await codeOf(session.start(AUTH_URL, SCHEME))).toBe('sign_in_failed');
+  });
+
+  it('a throwing browser-closed listener does not skip later listeners and does not propagate into the plugin dispatch', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    let later = 0;
+    session.onBrowserClosed(() => {
+      throw new Error('listener bug');
+    });
+    session.onBrowserClosed(() => {
+      later += 1;
+    });
+    const pending = session.start(AUTH_URL, SCHEME);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(() => f.browser.finish()).not.toThrow();
+    expect(later).toBe(1);
+    expect(() => f.browser.finish()).not.toThrow();
+    expect(later).toBe(2);
+    f.app.open(CALLBACK);
+    await pending;
+  });
+
+  it('does not register appUrlOpen twice when the browser listener failed after the app listener succeeded', async () => {
+    const f = fakes({ browserListenerFailsOnce: true });
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    expect(await codeOf(session.start(AUTH_URL, SCHEME))).toBe('sign_in_failed');
+    const again = session.start(AUTH_URL, SCHEME);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.app.listeners).toBe(1);
+    f.app.open(CALLBACK);
+    expect(await again).toBe(CALLBACK);
+  });
+
+  it('ignores a callback the accept predicate refuses and keeps waiting for one it accepts', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    const genuine = 'io.inspectorhub.app:/oauth/callback?code=c&state=good';
+    const pending = session.start(AUTH_URL, SCHEME, (url) => url.includes('state=good'));
+    await vi.advanceTimersByTimeAsync(0);
+    f.app.open('io.inspectorhub.app:/oauth/callback?code=evil&state=bad');
+    let settled = false;
+    void pending.then(() => (settled = true), () => (settled = true));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(settled).toBe(false);
+    expect(f.browser.closed).toBe(0);
+    f.app.open(genuine);
+    expect(await pending).toBe(genuine);
   });
 
   it('only opens http and https URLs', async () => {

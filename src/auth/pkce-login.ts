@@ -81,6 +81,11 @@ interface Pending {
   deliver(url: string): void;
 }
 
+/** One pass of the login; `cancelled` is set by the UI's cancel, wherever the pass has got to. */
+interface Attempt {
+  cancelled: boolean;
+}
+
 function single(params: URLSearchParams, name: string): string | null {
   const all = params.getAll(name);
   return all.length === 1 ? (all[0] ?? null) : null;
@@ -91,6 +96,7 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
   let pending: Pending | null = null;
   let running: Promise<SignInResult> | null = null;
   let runningOrigin: string | null = null;
+  let current: Attempt | null = null;
 
   /** Consumes the pending login: it can be taken once, and never after its TTL. */
   function take(): Pending | null {
@@ -159,9 +165,10 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
       pending = null;
       throw new AuthError('callback_invalid');
     }
+    // The state is compared before the pending login is taken: a callback that is not ours must not use it up.
+    if (pending && single(params, 'state') !== pending.state) throw new AuthError('callback_invalid');
     const p = take();
     if (!p) throw new AuthError('sign_in_expired');
-    if (single(params, 'state') !== p.state) throw new AuthError('callback_invalid');
     if (params.has('error')) throw new AuthError('sign_in_denied');
     const issuers = params.getAll('iss');
     if (issuers.length > 1 || (issuers.length === 1 && issuers[0]?.replace(/\/$/, '') !== p.origin)) throw new AuthError('callback_invalid');
@@ -171,6 +178,16 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
   }
 
   async function attempt(origin: string): Promise<SignInResult> {
+    const mine: Attempt = { cancelled: false };
+    current = mine;
+    try {
+      return await runAttempt(origin, mine);
+    } finally {
+      if (current === mine) current = null;
+    }
+  }
+
+  async function runAttempt(origin: string, mine: Attempt): Promise<SignInResult> {
     let verifier: string;
     let challenge: string;
     try {
@@ -180,6 +197,8 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
       throw new AuthError('crypto_unavailable');
     }
     const clientId = await deps.registrar.ensureClientId(origin);
+    // A cancel that landed while the client id was being ensured must stop the browser from opening.
+    if (mine.cancelled) throw new AuthError('sign_in_cancelled');
     const state = generateRandomState();
     let delivered: (url: string) => void = () => undefined;
     let fromDelivery = false;
@@ -199,7 +218,8 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
     };
     let callback: string;
     try {
-      callback = await Promise.race([deps.authSession.start(buildAuthorizeUrl({ origin, clientId, challenge, state }), CALLBACK_SCHEME), delivery]);
+      const accept = (url: string): boolean => single(parseCallbackUrl(url, CALLBACK_SCHEME) ?? new URLSearchParams(), 'state') === state;
+      callback = await Promise.race([deps.authSession.start(buildAuthorizeUrl({ origin, clientId, challenge, state }), CALLBACK_SCHEME, accept), delivery]);
     } catch (err) {
       pending = null;
       throw isAuthError(err) ? err : new AuthError('sign_in_failed');
@@ -239,11 +259,14 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
       if (!parseCallbackUrl(url, CALLBACK_SCHEME)) return Promise.resolve(null);
       const waiting = pending;
       if (!waiting || !running || deps.clock.now() - waiting.createdAt > ttl) return Promise.resolve(null);
+      // A URL that carries someone else's state is not an answer to this login: leave the login pending.
+      if (single(parseCallbackUrl(url, CALLBACK_SCHEME) ?? new URLSearchParams(), 'state') !== waiting.state) return Promise.resolve(null);
       waiting.deliver(url);
       return running;
     },
     hasPending: () => pending !== null && deps.clock.now() - pending.createdAt <= ttl,
     cancel: () => {
+      if (current) current.cancelled = true;
       deps.authSession.cancel();
     },
     onBrowserClosed: (listener) => deps.authSession.onBrowserClosed(listener),
