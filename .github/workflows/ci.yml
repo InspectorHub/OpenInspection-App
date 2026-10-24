@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  ENGINE_CONTRACT_URL: https://raw.githubusercontent.com/InspectorHub/OpenInspection/main/contracts/native-contract.openapi.json
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run
+      - run: npm run build
+      - run: npx cap sync android
+      - name: API types match the engine contract
+        run: npm run api:types:check -- "$ENGINE_CONTRACT_URL"
+
+  ios-sync:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync ios
