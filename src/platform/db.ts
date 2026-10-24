@@ -83,12 +83,21 @@ export interface DbTimers {
 
 export interface DbOptions {
   /**
-   * How long a call made while a transaction is open may wait for it before it
-   * is rejected (default 30_000). Only a re-entrant call can reach this limit
-   * for good: it waits for a transaction that is itself waiting for it.
+   * How long a queued call may wait behind one running transaction before it is
+   * rejected (default 30_000). The bound restarts each time a different
+   * transaction starts running, so time spent behind other queued work never
+   * counts; a call is rejected only when a single transaction has been running
+   * longer than this while the call waited.
    */
   deadlockTimeoutMs?: number;
   timers?: DbTimers;
+}
+
+interface Waiter {
+  timer: unknown;
+  abandoned: boolean;
+  started: boolean;
+  expire?: () => void;
 }
 
 const globalTimers: DbTimers = {
@@ -110,11 +119,16 @@ const globalTimers: DbTimers = {
  * Re-entry: a call made on the outer `Db` from inside the transaction callback
  * queues behind the very transaction that is awaiting it. The webview has no
  * async context to tell that apart from an unrelated caller, so the wait is
- * bounded instead: after `deadlockTimeoutMs` the queued call is removed from
- * the queue (it never runs) and rejects with an error pointing at the `tx`
- * handle. Neither the connection nor the transaction is affected; the
- * transaction proceeds as soon as its callback handles the error. The bound
- * covers only the wait; a call that has started is never cut short.
+ * bounded instead. The bound is per running transaction: each time a
+ * transaction starts running, every call still waiting gets a fresh
+ * `deadlockTimeoutMs`, and the clock stops when that transaction ends. A call
+ * therefore rejects only if one single transaction runs longer than the limit
+ * while it waits; any number of shorter transactions ahead of it never add up.
+ * A rejected call is removed from the queue (it never runs) with an error
+ * pointing at the `tx` handle. Neither the connection nor the transaction is
+ * affected; the transaction proceeds as soon as its callback handles the
+ * error. The bound covers only the wait; a call that has started is never cut
+ * short.
  */
 export function createDb(connection: TransactionalConnection, options: DbOptions = {}): Db {
   const queue = new SerialQueue();
@@ -127,28 +141,50 @@ export function createDb(connection: TransactionalConnection, options: DbOptions
 
   const unusableError = () => new Error(UNUSABLE_MESSAGE, { cause: unusable });
 
+  /** Calls enqueued and not yet started; each one's timer measures one running transaction. */
+  const waiting = new Set<Waiter>();
+
+  const disarm = (waiter: Waiter) => {
+    if (waiter.timer === undefined) return;
+    timers.clearTimeout(waiter.timer);
+    waiter.timer = undefined;
+  };
+  const arm = (waiter: Waiter) => {
+    disarm(waiter);
+    waiter.timer = timers.setTimeout(() => waiter.expire?.(), deadlockTimeoutMs);
+  };
+  /** A transaction became the running one: every waiting call starts a fresh bound. */
+  const armAll = () => {
+    for (const waiter of waiting) arm(waiter);
+  };
+  const disarmAll = () => {
+    for (const waiter of waiting) disarm(waiter);
+  };
+
   const queued = <T>(task: () => Promise<T>): Promise<T> => {
     if (unusable !== null) return Promise.reject(unusableError());
     const guarded = () => (unusable !== null ? Promise.reject(unusableError()) : task());
-    if (!transactionRunning) return queue.run(guarded);
     return new Promise<T>((resolve, reject) => {
-      let abandoned = false;
-      let started = false;
-      const timer = timers.setTimeout(() => {
-        if (started) return;
-        abandoned = true;
+      const waiter: Waiter = { timer: undefined, abandoned: false, started: false };
+      waiter.expire = () => {
+        if (waiter.started) return;
+        waiter.abandoned = true;
+        waiting.delete(waiter);
         reject(
           new Error(
             `Db call waited more than ${String(deadlockTimeoutMs)} ms behind an open transaction; ` +
               'it may have been issued from inside the transaction callback — use the tx handle',
           ),
         );
-      }, deadlockTimeoutMs);
+      };
+      waiting.add(waiter);
+      if (transactionRunning) arm(waiter);
       queue
         .run(() => {
-          timers.clearTimeout(timer);
-          if (abandoned) return Promise.resolve(undefined as T);
-          started = true;
+          waiting.delete(waiter);
+          disarm(waiter);
+          if (waiter.abandoned) return Promise.resolve(undefined as T);
+          waiter.started = true;
           return guarded();
         })
         .then(resolve, reject);
@@ -180,6 +216,7 @@ export function createDb(connection: TransactionalConnection, options: DbOptions
       queued(async () => {
         const state: TransactionState = { nestedFailed: false, nestedCause: undefined };
         transactionRunning = true;
+        armAll();
         try {
           await connection.begin();
           try {
@@ -197,6 +234,7 @@ export function createDb(connection: TransactionalConnection, options: DbOptions
           }
         } finally {
           transactionRunning = false;
+          disarmAll();
         }
       }),
   };

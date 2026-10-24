@@ -217,6 +217,44 @@ describe('Db (sql.js test double)', () => {
       expect(rows.map((r) => r.name)).toEqual(['slow', 'waiter']);
     });
 
+    it('does not time out a caller that waits behind several short transactions in a row', async () => {
+      vi.useFakeTimers();
+      const timed = await createSqlJsDb({ deadlockTimeoutMs: 500 });
+      await timed.execute('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+      const slow = (name: string) =>
+        timed.transaction(async (tx) => {
+          await tx.run('INSERT INTO items (name) VALUES (?)', [name]);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        });
+      const a = slow('a');
+      await Promise.resolve();
+      const b = slow('b');
+      const c = timed.run('INSERT INTO items (name) VALUES (?)', ['c']);
+      const settled = Promise.all([a, b, c]);
+      await vi.advanceTimersByTimeAsync(2000);
+      await settled;
+      const rows = await timed.query<{ name: string }>('SELECT name FROM items ORDER BY id');
+      expect(rows.map((r) => r.name)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('positive control: a queued call behind one over-long transaction rejects and never runs', async () => {
+      vi.useFakeTimers();
+      const timed = await createSqlJsDb({ deadlockTimeoutMs: 500 });
+      await timed.execute('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+      const txn = timed.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['slow']);
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+      await Promise.resolve();
+      const waiter = timed.run('INSERT INTO items (name) VALUES (?)', ['never']);
+      const caught = expect(waiter).rejects.toThrow(/waited more than 500 ms behind an open transaction/);
+      await vi.advanceTimersByTimeAsync(2000);
+      await caught;
+      await txn;
+      const rows = await timed.query<{ name: string }>('SELECT name FROM items ORDER BY id');
+      expect(rows.map((r) => r.name)).toEqual(['slow']);
+    });
+
     it('keeps calls through the tx handle working', async () => {
       const out = await db.transaction(async (tx) => {
         await tx.run('INSERT INTO items (name) VALUES (?)', ['x']);
