@@ -27,9 +27,20 @@ import type { SessionProbe, VisibleClient, VisibleFailure } from './visible-clie
  *  - A quarantined inspection that is still missing is never purged, whatever it holds: it stays until a person acts.
  *  - MASS GUARD: when more than half of the candidates and more than five of them are missing, or when EVERY candidate is
  *    missing (even a single one), the answer is more likely wrong than every inspection having been deleted
- *    (wrong company, wrong environment, a server fault that still answers 200). Every would-be purge becomes a quarantine,
- *    `massSuspicious` is set for the interface to say so, and nothing is un-quarantined on such an answer.
+ *    (wrong company, wrong environment, a server fault that still answers 200). Every would-be purge becomes a quarantine
+ *    with the reason `mass_suspicious`, `massSuspicious` is set for the interface to say so, and nothing is un-quarantined
+ *    on such an answer. The ratio counts only candidates that are not already quarantined (they stay in `keep` while
+ *    missing). A single local inspection, or an answer that lists none of them (`allMissing`), is therefore never
+ *    purged automatically; the interface can offer an explicit "no longer on the server, remove from this device" action
+ *    for those ids, and that action runs the same executor re-check.
+ *  - The plan names the account it was decided for, the time it was decided (`planIsStale`), a fingerprint per id
+ *    that has an action and a fixed reason code per purge and quarantine, so the executor can verify all of them.
  *  - A queued write that names no usable inspection refuses the whole run (`refused`), before the request and again after.
+ *
+ * Known limits that need a person, not code here (the reconcile interface must offer actions for them): a media row has no
+ * automatic exit, so any media row quarantines its inspection for good; a stale queued write with no inspection id
+ * refuses the whole reconcile with no way to clear it; and beyond `DEFAULT_MAX_CANDIDATES` the first ids in id order are
+ * always the ones processed, so the rest wait (a rotating start offset would fix that, and is not done).
  *
  * Not a purge reason, ever: how old a package is, how long ago it was refreshed, or how long it has been missing.
  */
@@ -39,6 +50,12 @@ export const DEFAULT_MAX_RUN_MS = 120_000;
 /** More than this many missing, and more than `MASS_FRACTION` of the candidates, is a suspicious answer. */
 export const MASS_MIN_MISSING = 5;
 export const MASS_FRACTION = 0.5;
+/** A plan older than this is never carried out; the executor decides again instead. */
+export const DEFAULT_PLAN_MAX_AGE_MS = 5 * 60_000;
+/** The reason on a purge decision: the server does not list it and nothing here is unsent. */
+export const REASON_NOT_VISIBLE = 'not_visible_nothing_unsent';
+/** The reason on a quarantine that only exists because the answer as a whole looked wrong. */
+export const REASON_MASS_SUSPICIOUS = 'mass_suspicious';
 
 export interface ReconcileLimits {
   /** Ids sent per run; the rest are deferred to a later run. Ids are taken in id order. */
@@ -80,6 +97,12 @@ export interface ReconcileProof {
   convertedToQuarantine: number;
 }
 
+/** A plan older than `maxAgeMs` on the injected clock (or one from the future) is stale and must not be carried out. */
+export function planIsStale(plan: Pick<ReconcilePlan, 'decidedAt'>, now: number, maxAgeMs: number = DEFAULT_PLAN_MAX_AGE_MS): boolean {
+  const age = now - plan.decidedAt;
+  return !Number.isFinite(age) || age < 0 || age > maxAgeMs;
+}
+
 export interface ReconcilePlan {
   kind: 'plan';
   purge: string[];
@@ -92,6 +115,18 @@ export interface ReconcilePlan {
   /** Packages of another account or of nobody; never sent, never decided. */
   unknownOwner: string[];
   massSuspicious: boolean;
+  /** True when the server listed none of the candidates. With `candidateCount` this tells "the server lost everything" from a normal reconcile. */
+  allMissing: boolean;
+  /** Packages sent to the server in this run (the same number as `proof.candidates`). */
+  candidateCount: number;
+  /** The account the plan was decided for. The executor must check it is still the signed-in one. */
+  account: Account;
+  /** Injected-clock time at which the plan was returned; see `planIsStale`. */
+  decidedAt: number;
+  /** For every id with an action (purge, quarantine, unquarantine): the fingerprint of the local facts the decision rested on. */
+  fingerprints: Record<string, string>;
+  /** For every purge and quarantine: why, as fixed codes (an `UnsentReason`, `REASON_NOT_VISIBLE` or `REASON_MASS_SUSPICIOUS`). */
+  reasons: Record<string, string[]>;
   proof: ReconcileProof;
 }
 
@@ -259,12 +294,22 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
     convertedToQuarantine: 0,
   };
 
-  const finish = async (plan: Omit<ReconcilePlan, 'kind' | 'proof' | 'unknownOwner' | 'deferred'> & { deferred: string[] }): Promise<ReconcileResult> => {
+  type Decided = Omit<ReconcilePlan, 'kind' | 'proof' | 'unknownOwner' | 'deferred' | 'account' | 'decidedAt' | 'candidateCount'> & { deferred: string[] };
+  const finish = async (plan: Decided): Promise<ReconcileResult> => {
     if (!(await gate())) return stopped();
-    return { kind: 'plan', ...plan, deferred: [...plan.deferred, ...local.deferredBeyondBound], unknownOwner: local.unknownOwner, proof };
+    return {
+      kind: 'plan',
+      ...plan,
+      deferred: [...plan.deferred, ...local.deferredBeyondBound],
+      unknownOwner: local.unknownOwner,
+      candidateCount: ids.length,
+      account: { tenantId: account.tenantId, userId: account.userId },
+      decidedAt: deps.clock.now(),
+      proof,
+    };
   };
 
-  if (ids.length === 0) return finish({ purge: [], quarantine: [], unquarantine: [], keep: [], deferred: [], massSuspicious: false });
+  if (ids.length === 0) return finish({ purge: [], quarantine: [], unquarantine: [], keep: [], deferred: [], massSuspicious: false, allMissing: false, fingerprints: {}, reasons: {} });
 
   const before = await fingerprints(deps.db, new Set(ids));
 
@@ -309,9 +354,13 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
   if ((await unattributableOutboxRows(deps.db)) > 0) return { kind: 'refused', reason: 'null_inspection_id' };
 
   const missing = local.candidates.filter((c) => !answer.visible.has(c.id));
-  const total = local.candidates.length;
   proof.missing = missing.length;
-  const massSuspicious = (missing.length > MASS_MIN_MISSING && missing.length > total * MASS_FRACTION) || missing.length === total;
+  // The ratio is taken over the candidates that are not already quarantined: an inspection that was set aside earlier
+  // and is still missing would otherwise keep every later, ordinary deletion looking like a mass event.
+  const fresh = local.candidates.filter((c) => !c.quarantined);
+  const freshMissing = missing.filter((c) => !c.quarantined).length;
+  const massSuspicious = fresh.length > 0 && ((freshMissing > MASS_MIN_MISSING && freshMissing > fresh.length * MASS_FRACTION) || freshMissing === fresh.length);
+  const allMissing = missing.length === local.candidates.length;
 
   // The predicate is read now, after the answer, for the inspections that need it.
   const unsent = new Map<string, UnsentReason[]>();
@@ -330,6 +379,7 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
   const changed = (id: string): boolean => before.get(id) !== after.get(id);
 
   const plan = { purge: [] as string[], quarantine: [] as string[], unquarantine: [] as string[], keep: [] as string[], deferred: [] as string[] };
+  const reasons: Record<string, string[]> = {};
   for (const candidate of local.candidates) {
     const { id } = candidate;
     if (answer.visible.has(id)) {
@@ -343,12 +393,17 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
       plan.deferred.push(id);
     } else if (unsent.has(id)) {
       plan.quarantine.push(id);
+      reasons[id] = [...(unsent.get(id) ?? [])];
     } else if (massSuspicious) {
       plan.quarantine.push(id);
+      reasons[id] = [REASON_MASS_SUSPICIOUS];
       proof.convertedToQuarantine += 1;
     } else {
       plan.purge.push(id);
+      reasons[id] = [REASON_NOT_VISIBLE];
     }
   }
-  return finish({ ...plan, massSuspicious });
+  const fingerprintsOfActions: Record<string, string> = {};
+  for (const id of [...plan.purge, ...plan.quarantine, ...plan.unquarantine]) fingerprintsOfActions[id] = after.get(id) ?? '';
+  return finish({ ...plan, massSuspicious, allMissing, fingerprints: fingerprintsOfActions, reasons });
 }

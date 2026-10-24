@@ -674,8 +674,12 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       if (!isValidInspectionId(inspectionId)) throw new RangeError('Invalid inspection id');
       // Close first and wait: a write still in flight must land before the rows are deleted, not after.
       await Promise.all([...(live.get(inspectionId) ?? [])].map((entry) => entry.close()));
-      await deleteDocRows(deps.db, resultsDocName(inspectionId));
-      await clearSyncProof(deps.db, resultsDocName(inspectionId));
+      // One transaction: the rows and their proof go together or not at all. A stale marker must never outlive the
+      // rows it described, and a failure to clear it must not leave the rows deleted while the purge reports failure.
+      await deps.db.transaction(async (tx) => {
+        await deleteDocRows(tx, resultsDocName(inspectionId));
+        await clearSyncProof(tx, resultsDocName(inspectionId));
+      });
     },
     onLockChange: () => {
       for (const group of live.values()) for (const entry of group) entry.reevaluate();

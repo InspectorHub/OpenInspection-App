@@ -2,7 +2,7 @@ import * as Y from 'yjs';
 import { vi } from 'vitest';
 import type { Http, HttpRequest, HttpResponse } from '../../auth/http';
 import type { SessionCheck } from '../../auth/tokens';
-import { recordServerStateVector } from '../../collab/sync-proof';
+import { recordServerDeleteSet, recordServerStateVector } from '../../collab/sync-proof';
 import { createManualClock, type ManualClock } from '../../platform/clock';
 import type { Db } from '../../platform/db';
 import { createSqlJsDb } from '../../platform/db-sqljs';
@@ -71,7 +71,7 @@ export interface PackageOptions {
 }
 
 /** Every table that holds inspection data. The lease row is excluded: a run takes it and gives it back. */
-const DATA_TABLES = ['work_package', 'outbox', 'media', 'ydoc_updates', 'ydoc_sync', 'resource_cache', 'device_state'];
+export const DATA_TABLES = ['work_package', 'outbox', 'media', 'ydoc_updates', 'ydoc_sync', 'resource_cache', 'device_state'];
 
 export async function createReconcileWorld(): Promise<ReconcileWorld> {
   const db = await createSqlJsDb();
@@ -183,6 +183,23 @@ export async function createReconcileWorld(): Promise<ReconcileWorld> {
     },
   });
   return world;
+}
+
+/**
+ * Puts data into EVERY table the hash looks at, around packages p001..p004 (which must exist): a document with a covering
+ * marker and a delete-set row for p001, a cached resource of a candidate and one of nobody, device state, a photo of p002,
+ * and a queued write of p004. A decision that writes anywhere then moves the hash, whichever outcome it ends in.
+ */
+export async function seedEveryTable(world: ReconcileWorld): Promise<void> {
+  const rows = await world.ydoc('p001');
+  await world.cover('p001', rows);
+  await recordServerDeleteSet(world.db, 'results-p001', Y.encodeStateAsUpdate(new Y.Doc()), 2);
+  await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES ('acct', 'k-candidate', 'e1', '{}', 5, 'p001')");
+  await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES ('acct', 'k-global', NULL, '{}', 6, NULL)");
+  await world.db.run("INSERT INTO device_state (key, value) VALUES ('seed-a', '1')");
+  await world.db.run("INSERT INTO device_state (key, value) VALUES ('seed-b', '2')");
+  await world.media('p002', 'uploaded');
+  await world.outbox('p004', 'pending');
 }
 
 /** Packages p1..pN, all the signed-in account's and server-confirmed. */

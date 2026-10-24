@@ -1,8 +1,10 @@
+import * as Y from 'yjs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AuthError } from '../auth/errors';
-import type { ReconcileResult } from './reconcile-decision';
+import { recordServerDeleteSet, recordServerStateVector } from '../collab/sync-proof';
+import { planIsStale, REASON_MASS_SUSPICIOUS, REASON_NOT_VISIBLE, type ReconcilePlan, type ReconcileResult } from './reconcile-decision';
 import { acquireLease, SYNC_LEASE } from './lease';
-import { ALICE, BOB, TOKEN, jsonReply, seedPackages, createReconcileWorld, visibleReply, type ReconcileWorld } from './test-support/reconcile-world';
+import { ALICE, BOB, DATA_TABLES, TOKEN, jsonReply, seedEveryTable, seedPackages, createReconcileWorld, visibleReply, type ReconcileWorld } from './test-support/reconcile-world';
 
 let world: ReconcileWorld;
 
@@ -767,6 +769,15 @@ describe('the decision never touches inspection data', () => {
       'plan',
     ],
     [
+      'a plan with an un-quarantine',
+      async () => {
+        await seedPackages(world, 12);
+        await world.pkg('q001', { quarantine: 'reconcile_missing' });
+        hide('p003');
+      },
+      'plan',
+    ],
+    [
       'busy',
       async () => {
         await seedPackages(world, 4);
@@ -848,19 +859,47 @@ describe('the decision never touches inspection data', () => {
     ],
   ];
 
-  it.each(scenarios)('%s leaves every table byte-identical', async (_name, setup, kind) => {
+  async function count(table: string): Promise<number> {
+    const rows = await world.db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`);
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  it.each(scenarios)('%s leaves every table byte-identical, and every table had data to lose', async (name, setup, kind) => {
     await setup();
+    await seedEveryTable(world);
+    for (const table of DATA_TABLES) expect(await count(table), `${table} is empty before the run`).toBeGreaterThan(0);
+    expect(await count('ydoc_sync')).toBeGreaterThanOrEqual(2);
     const before = await world.hash();
+    const leaseBefore = JSON.stringify(await world.db.query('SELECT * FROM lease'));
     const result = await world.decide();
     expect(result.kind).toBe(kind);
     expect(await world.hash()).toBe(before);
+    const leaseAfter = JSON.stringify(await world.db.query('SELECT * FROM lease'));
+    expect(leaseAfter, name).toBe(kind === 'busy' ? leaseBefore : '[]');
   });
 
-  it('the instrument sees a change: the hash moves when a row is written', async () => {
-    await seedPackages(world, 2);
+  it.each([
+    ['work_package', "UPDATE work_package SET pinned = 1 WHERE inspection_id = 'p002'"],
+    ['outbox', "UPDATE outbox SET attempts = attempts + 1 WHERE inspection_id = 'p004'"],
+    ['media', "UPDATE media SET attempts = attempts + 1 WHERE inspection_id = 'p002'"],
+    ['ydoc_updates', "DELETE FROM ydoc_updates WHERE doc_name = 'results-p001'"],
+    ['ydoc_sync (state vector row)', "UPDATE ydoc_sync SET updated_at = 99 WHERE doc_name = 'results-p001'"],
+    ['ydoc_sync (delete set row)', "DELETE FROM ydoc_sync WHERE doc_name = 'ds:results-p001'"],
+    ['resource_cache (a candidate)', "UPDATE resource_cache SET fetched_at = 99 WHERE key = 'k-candidate'"],
+    ['resource_cache (not a candidate)', "DELETE FROM resource_cache WHERE key = 'k-global'"],
+    ['device_state', "UPDATE device_state SET value = 'changed' WHERE key = 'seed-a'"],
+  ])('the instrument sees a change: the hash moves when %s is written', async (_table, statement) => {
+    await seedPackages(world, 4);
+    await seedEveryTable(world);
     const before = await world.hash();
-    await world.outbox('p001', 'pending');
+    await world.db.run(statement);
     expect(await world.hash()).not.toBe(before);
+  });
+
+  it('control: the hash does not move on its own', async () => {
+    await seedPackages(world, 4);
+    await seedEveryTable(world);
+    expect(await world.hash()).toBe(await world.hash());
   });
 });
 
@@ -893,5 +932,328 @@ describe('what a result may contain', () => {
     expect(text).not.toContain(TOKEN);
     expect(text).not.toContain('secret server wording');
     expect(ALICE.userId.length).toBeGreaterThan(0);
+  });
+});
+
+describe('what a plan carries for the executor', () => {
+  it('names the account it was decided for and the injected time it was decided at', async () => {
+    await seedPackages(world, 10);
+    hide('p003');
+    world.server.hook = () => {
+      world.clock.advance(1234);
+    };
+    const started = world.clock.now();
+    const result = plan(await world.decide());
+    expect(result.account).toEqual(ALICE);
+    expect(result.decidedAt).toBe(started + 1234);
+    expect(result.candidateCount).toBe(10);
+    expect(result.allMissing).toBe(false);
+  });
+
+  it('carries a fingerprint for every id with an action and for no other id', async () => {
+    await seedPackages(world, 12);
+    await world.outbox('p002', 'pending');
+    await world.pkg('q001', { quarantine: 'reconcile_missing' });
+    hide('p001', 'p002');
+    const result = plan(await world.decide());
+    expect(result.purge).toEqual(['p001']);
+    expect(result.quarantine).toEqual(['p002']);
+    expect(result.unquarantine).toEqual(['q001']);
+    expect(Object.keys(result.fingerprints).sort()).toEqual(['p001', 'p002', 'q001']);
+    for (const fingerprint of Object.values(result.fingerprints)) expect(fingerprint.length).toBeGreaterThan(2);
+  });
+
+  it('a fingerprint moves when the local facts of that id move', async () => {
+    await seedPackages(world, 10);
+    hide('p003');
+    const first = plan(await world.decide());
+    await world.db.run('UPDATE work_package SET pinned = 1 WHERE inspection_id = ?', ['p003']);
+    await world.outbox('p003', 'pending');
+    const second = plan(await world.decide());
+    expect(first.fingerprints.p003).toBeDefined();
+    expect(second.quarantine).toEqual(['p003']);
+    expect(second.fingerprints.p003).not.toBe(first.fingerprints.p003);
+  });
+
+  it('gives a fixed reason code to every purge and quarantine, and none to the rest', async () => {
+    await seedPackages(world, 12);
+    await world.outbox('p002', 'pending');
+    await world.media('p004', 'uploaded');
+    hide('p001', 'p002', 'p004');
+    const result = plan(await world.decide());
+    expect(result.reasons).toEqual({ p001: [REASON_NOT_VISIBLE], p002: ['outbox_pending'], p004: ['media_uploaded_unresolved'] });
+  });
+
+  it('an empty plan carries empty maps', async () => {
+    const result = plan(await world.decide());
+    expect(result.fingerprints).toEqual({});
+    expect(result.reasons).toEqual({});
+    expect(result.candidateCount).toBe(0);
+    expect(result.allMissing).toBe(false);
+    expect(result.account).toEqual(ALICE);
+  });
+
+  it('no result other than a plan carries an inspection id', async () => {
+    const outcomes: [string, () => Promise<ReconcileResult>][] = [
+      ['locked', () => ((world.state.locked = true), world.decide())],
+      ['no_account', () => ((world.state.account = null), world.decide())],
+      ['account_mismatch', () => ((world.state.sessionIdentity = BOB), world.decide())],
+      ['unavailable', () => ((world.server.script = [jsonReply(403, {})]), world.decide())],
+      ['auth', () => ((world.state.token = null), world.decide())],
+      ['halt', () => ((world.server.script = [jsonReply(426, {})]), world.decide())],
+      ['failed', () => ((world.server.script = [jsonReply(500, {})]), world.decide())],
+      ['invalid', () => ((world.server.script = [jsonReply(200, {})]), world.decide())],
+      ['refused', async () => (await world.outbox(null, 'pending'), world.decide())],
+      ['busy', async () => (await acquireLease(world.db, SYNC_LEASE, { clock: world.clock }), world.decide())],
+      [
+        'lease_lost',
+        () => {
+          world.server.hook = async () => {
+            await world.db.run("UPDATE lease SET holder = 'someone-else'");
+          };
+          return world.decide();
+        },
+      ],
+    ];
+    for (const [name, run] of outcomes) {
+      world = await createReconcileWorld();
+      await seedPackages(world, 10);
+      hide('p003');
+      const result = await run();
+      expect(result.kind, name).toBe(name);
+      expect(JSON.stringify(result), name).not.toMatch(/p0\d\d/);
+      expect(Object.keys(result).filter((key) => ['purge', 'quarantine', 'unquarantine', 'keep', 'deferred', 'fingerprints', 'reasons'].includes(key)), name).toEqual([]);
+    }
+  });
+});
+
+describe('planIsStale', () => {
+  const decided = { decidedAt: 1_000_000 };
+
+  it('is fresh up to and including the maximum age, and stale one millisecond later', () => {
+    expect(planIsStale(decided, 1_000_000)).toBe(false);
+    expect(planIsStale(decided, 1_000_000 + 5 * 60_000)).toBe(false);
+    expect(planIsStale(decided, 1_000_000 + 5 * 60_000 + 1)).toBe(true);
+  });
+
+  it('takes the limit from the caller', () => {
+    expect(planIsStale(decided, 1_000_000 + 1000, 1000)).toBe(false);
+    expect(planIsStale(decided, 1_000_000 + 1001, 1000)).toBe(true);
+  });
+
+  it('a plan from the future (the clock went backwards) and a time that is not a number are stale', () => {
+    expect(planIsStale(decided, 999_999)).toBe(true);
+    expect(planIsStale(decided, Number.NaN)).toBe(true);
+    expect(planIsStale({ decidedAt: Number.NaN }, 1_000_000)).toBe(true);
+  });
+
+  it('works on a real plan against the injected clock', async () => {
+    await seedPackages(world, 3);
+    const result: ReconcilePlan = plan(await world.decide());
+    expect(planIsStale(result, world.clock.now())).toBe(false);
+    world.clock.advance(5 * 60_000 + 1);
+    expect(planIsStale(result, world.clock.now())).toBe(true);
+  });
+});
+
+describe('a single inspection, or an answer that lists none of them', () => {
+  it('is never purged: it is quarantined with the reason the interface can act on', async () => {
+    await seedPackages(world, 1);
+    hide('p001');
+    const result = plan(await world.decide());
+    expect(result.purge).toEqual([]);
+    expect(result.quarantine).toEqual(['p001']);
+    expect(result.reasons).toEqual({ p001: [REASON_MASS_SUSPICIOUS] });
+    expect(result.allMissing).toBe(true);
+    expect(result.candidateCount).toBe(1);
+    expect(result.massSuspicious).toBe(true);
+  });
+
+  it('an empty answer for ten inspections says allMissing with the count, and quarantines all of them', async () => {
+    await seedPackages(world, 10);
+    world.server.script = [visibleReply([])];
+    const result = plan(await world.decide());
+    expect(result.allMissing).toBe(true);
+    expect(result.candidateCount).toBe(10);
+    expect(Object.keys(result.reasons)).toHaveLength(10);
+    for (const reasons of Object.values(result.reasons)) expect(reasons).toEqual([REASON_MASS_SUSPICIOUS]);
+  });
+
+  it('control: an ordinary deletion is not allMissing and its reason is not mass_suspicious', async () => {
+    await seedPackages(world, 10);
+    hide('p003');
+    const result = plan(await world.decide());
+    expect(result.allMissing).toBe(false);
+    expect(result.reasons.p003).toEqual([REASON_NOT_VISIBLE]);
+  });
+
+  it('an inspection that also holds unsent work is quarantined for that, not marked as a guard conversion', async () => {
+    await seedPackages(world, 1);
+    await world.outbox('p001', 'pending');
+    hide('p001');
+    const result = plan(await world.decide());
+    expect(result.reasons).toEqual({ p001: ['outbox_pending'] });
+    expect(result.proof.convertedToQuarantine).toBe(0);
+  });
+
+  it('when nothing but quarantined inspections is left and all of them are missing, nothing is suspicious and they stay', async () => {
+    await world.pkg('q001', { quarantine: 'reconcile_missing' });
+    await world.pkg('q002', { quarantine: 'reconcile_missing' });
+    hide('q001', 'q002');
+    const result = plan(await world.decide());
+    expect(result.massSuspicious).toBe(false);
+    expect(result.allMissing).toBe(true);
+    expect(sorted(result.keep)).toEqual(['q001', 'q002']);
+    expect(result.quarantine).toEqual([]);
+    expect(result.purge).toEqual([]);
+  });
+});
+
+describe('the mass guard counts only inspections that are not yet quarantined', () => {
+  async function withQuarantinedMissing(quarantined: number, fresh: number): Promise<string[]> {
+    const ids = await seedPackages(world, fresh);
+    for (let i = 1; i <= quarantined; i += 1) {
+      const id = `q${String(i).padStart(3, '0')}`;
+      await world.pkg(id, { quarantine: 'reconcile_missing' });
+      hide(id);
+    }
+    return ids;
+  }
+
+  it('8 quarantined-missing and 2 of 10 new ones missing is an ordinary reconcile: the two are purged', async () => {
+    await withQuarantinedMissing(8, 10);
+    hide('p001', 'p002');
+    const result = plan(await world.decide());
+    expect(result.massSuspicious).toBe(false);
+    expect(sorted(result.purge)).toEqual(['p001', 'p002']);
+    expect(result.keep).toHaveLength(8 + 8);
+    expect(result.allMissing).toBe(false);
+  });
+
+  it('control: 6 of 10 new ones missing is still suspicious with the same 8 quarantined-missing', async () => {
+    await withQuarantinedMissing(8, 10);
+    hide('p001', 'p002', 'p003', 'p004', 'p005', 'p006');
+    const result = plan(await world.decide());
+    expect(result.massSuspicious).toBe(true);
+    expect(result.purge).toEqual([]);
+    expect(sorted(result.quarantine)).toEqual(['p001', 'p002', 'p003', 'p004', 'p005', 'p006']);
+    expect(result.keep).toHaveLength(8 + 4);
+  });
+
+  it('every new one missing is suspicious even when a quarantined one is listed again by the server', async () => {
+    await seedPackages(world, 3);
+    await world.pkg('q001', { quarantine: 'reconcile_missing' });
+    hide('p001', 'p002', 'p003');
+    const result = plan(await world.decide());
+    expect(result.massSuspicious).toBe(true);
+    expect(result.unquarantine).toEqual([]);
+    expect(result.purge).toEqual([]);
+  });
+});
+
+describe('what the run re-reads after the answer', () => {
+  it('an account that disappears while the request is in flight is "no_account", not a storage failure', async () => {
+    await seedPackages(world, 10);
+    world.server.hook = () => {
+      world.state.account = null;
+    };
+    hide('p003');
+    expect(await world.decide()).toEqual({ kind: 'no_account' });
+  });
+
+  it('a queued write without an inspection that only the unsent read sees still refuses the run', async () => {
+    await seedPackages(world, 10);
+    hide('p003');
+    let globalChecks = 0;
+    const wrap = (inner: typeof world.db): typeof world.db => ({
+      ...inner,
+      query: async <T>(sql: string, params?: unknown[]): Promise<T[]> => {
+        const rows = await inner.query<T>(sql, params);
+        if (!sql.startsWith('SELECT inspection_id, op, COUNT(*) AS n FROM outbox GROUP BY')) return rows;
+        globalChecks += 1;
+        return globalChecks === 3 ? [...rows, { inspection_id: null, op: 'inspection.update', n: 1 } as T] : rows;
+      },
+      transaction: (fn) => inner.transaction((tx) => fn(wrap(tx))),
+    });
+    const result = await world.decide({ db: wrap(world.db) });
+    expect(globalChecks).toBe(3);
+    expect(result).toEqual({ kind: 'refused', reason: 'null_inspection_id' });
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['the string "false"', 'false'],
+    ['0', 0],
+  ])('a lock check that answers %s instead of a boolean counts as locked', async (_name, answer) => {
+    await seedPackages(world, 10);
+    const result = await world.decide({ isLocked: () => answer as never });
+    expect(result).toEqual({ kind: 'locked' });
+    expect(world.allRequests).toHaveLength(0);
+  });
+
+  it('control: a lock check that answers exactly false proceeds', async () => {
+    await seedPackages(world, 10);
+    expect((await world.decide({ isLocked: () => false })).kind).toBe('plan');
+  });
+});
+
+describe('the fingerprint covers the sync proof rows', () => {
+  async function missingWithHook(change: () => Promise<void>): Promise<Extract<ReconcileResult, { kind: 'plan' }>> {
+    await seedPackages(world, 10);
+    world.server.hook = change;
+    hide('p003');
+    return plan(await world.decide());
+  }
+
+  it('control: without a change the missing inspection is purged', async () => {
+    const result = await missingWithHook(() => Promise.resolve());
+    expect(result.purge).toEqual(['p003']);
+  });
+
+  it('a state vector that appears while the request is in flight defers the inspection', async () => {
+    const result = await missingWithHook(() => recordServerStateVector(world.db, 'results-p003', Y.encodeStateVector(new Y.Doc()), 7));
+    expect(result.deferred).toEqual(['p003']);
+    expect(result.purge).toEqual([]);
+  });
+
+  it('a state vector that is rewritten while the request is in flight defers the inspection', async () => {
+    await seedPackages(world, 10);
+    await recordServerStateVector(world.db, 'results-p003', Y.encodeStateVector(new Y.Doc()), 1);
+    world.server.hook = () => recordServerStateVector(world.db, 'results-p003', Y.encodeStateVector(new Y.Doc()), 2);
+    hide('p003');
+    const result = plan(await world.decide());
+    expect(result.deferred).toEqual(['p003']);
+    expect(result.purge).toEqual([]);
+  });
+
+  it('a delete set that appears while the request is in flight defers the inspection', async () => {
+    const result = await missingWithHook(() => recordServerDeleteSet(world.db, 'results-p003', Y.encodeStateAsUpdate(new Y.Doc()), 7));
+    expect(result.deferred).toEqual(['p003']);
+    expect(result.purge).toEqual([]);
+  });
+
+  it('a proof row of another inspection does not defer this one', async () => {
+    const result = await missingWithHook(() => recordServerDeleteSet(world.db, 'results-p005', Y.encodeStateAsUpdate(new Y.Doc()), 7));
+    expect(result.deferred).toEqual([]);
+    expect(result.purge).toEqual(['p003']);
+  });
+});
+
+describe('an un-quarantine is decided on the same facts it was fingerprinted on', () => {
+  it('control: a quarantined inspection listed again with nothing changing is un-quarantined', async () => {
+    await seedPackages(world, 5);
+    await world.pkg('q001', { quarantine: 'reconcile_missing' });
+    expect(plan(await world.decide()).unquarantine).toEqual(['q001']);
+  });
+
+  it('is deferred when something about it changed while the request was in flight', async () => {
+    await seedPackages(world, 5);
+    await world.pkg('q001', { quarantine: 'reconcile_missing' });
+    world.server.hook = () => world.outbox('q001', 'pending');
+    const result = plan(await world.decide());
+    expect(result.deferred).toEqual(['q001']);
+    expect(result.unquarantine).toEqual([]);
+    expect(result.fingerprints.q001).toBeUndefined();
   });
 });

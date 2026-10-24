@@ -285,6 +285,8 @@ describe('a 200 that is not the server answer', () => {
     ['html with a 200', json(200, '<html>captive portal</html>', { 'content-type': 'text/html' }, { json: undefined })],
     ['a json body without a content type', json(200, { success: true, data: { visible: ['aa'] } }, {})],
     ['a plain text content type', json(200, { success: true, data: { visible: ['aa'] } }, { 'content-type': 'text/plain' })],
+    ['application/problem+json, which is not application/json', json(200, { success: true, data: { visible: ['aa'] } }, { 'content-type': 'application/problem+json' })],
+    ['text/json, which is not application/json', json(200, { success: true, data: { visible: ['aa'] } }, { 'content-type': 'text/json' })],
     ['a 204', json(204, '', {}, { json: undefined })],
   ])('%s is invalid and is never read as everything missing', async (_name, reply) => {
     const r = rig();

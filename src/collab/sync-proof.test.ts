@@ -187,6 +187,54 @@ describe('docIsCovered', () => {
     expect(await docIsCovered(db, DOC)).toBe(true);
   });
 
+  describe('a history with holes is never covered, however the clocks look', () => {
+    it('a missing middle update leaves the later one pending: the state vector looks covered, the document is not', async () => {
+      const { doc, rows } = localDoc();
+      doc.getMap<unknown>('m').set('a', 1);
+      doc.getMap<unknown>('n').set('b', 2);
+      doc.getMap<unknown>('o').set('c', 3);
+      expect(rows).toHaveLength(3);
+      await store([rows[0] as Uint8Array, rows[2] as Uint8Array]);
+      await recordServerStateVector(db, DOC, serverState([rows[0] as Uint8Array]).sv, 1);
+      expect(await docIsCovered(db, DOC)).toBe(false);
+    });
+
+    it('control: the complete history with the same kind of marker is covered', async () => {
+      const { doc, rows } = localDoc();
+      doc.getMap<unknown>('m').set('a', 1);
+      doc.getMap<unknown>('n').set('b', 2);
+      doc.getMap<unknown>('o').set('c', 3);
+      await store(rows);
+      await recordServerStateVector(db, DOC, serverState(rows).sv, 1);
+      expect(await docIsCovered(db, DOC)).toBe(true);
+    });
+
+    it('a stored deletion of an item whose creation is not stored is pending: an empty local state vector and a server delete set that contains the deletion do not make it covered', async () => {
+      const { doc, rows } = localDoc();
+      doc.getMap<unknown>('m').set('k', 1);
+      doc.getMap<unknown>('m').delete('k');
+      expect(rows).toHaveLength(2);
+      await store([rows[1] as Uint8Array]);
+      const probe = new Y.Doc();
+      Y.applyUpdate(probe, rows[1] as Uint8Array);
+      expect(probe.store.pendingDs).not.toBeNull();
+      expect(Y.decodeStateVector(Y.encodeStateVector(probe)).size).toBe(0);
+      await recordServerStateVector(db, DOC, serverState(rows).sv, 1);
+      await recordServerDeleteSet(db, DOC, Y.encodeStateAsUpdate(serverState(rows).doc), 2);
+      expect(await docIsCovered(db, DOC)).toBe(false);
+    });
+
+    it('control: with the creation stored too, the same deletion is covered by the same markers', async () => {
+      const { doc, rows } = localDoc();
+      doc.getMap<unknown>('m').set('k', 1);
+      doc.getMap<unknown>('m').delete('k');
+      await store(rows);
+      await recordServerStateVector(db, DOC, serverState(rows).sv, 1);
+      await recordServerDeleteSet(db, DOC, Y.encodeStateAsUpdate(serverState(rows).doc), 2);
+      expect(await docIsCovered(db, DOC)).toBe(true);
+    });
+  });
+
   describe('deletions, which a state vector does not describe', () => {
     async function offlineDeletion(): Promise<{ serverSv: Uint8Array; serverUpdate: Uint8Array; rows: Uint8Array[] }> {
       const server = new Y.Doc();

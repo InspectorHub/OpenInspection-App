@@ -338,6 +338,67 @@ describe('the proof follows the stored document', () => {
     expect(await readSyncMarker(world.db, deleteSetKey(resultsDocName('insp-2')))).not.toBeNull();
   });
 
+  it('a purge whose proof cannot be cleared rejects and leaves the document rows in place: rows and proof go together or not at all', async () => {
+    const failing = (inner: Db): Db => ({
+      ...inner,
+      run: (sql, params) => (sql.includes('DELETE FROM ydoc_sync') ? Promise.reject(new Error('disk full')) : inner.run(sql, params)),
+      transaction: (fn) => inner.transaction((tx) => fn(failing(tx))),
+    });
+    world = await createWorld(failing);
+    await withProofRows('insp-1');
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [DOC, Y.encodeStateAsUpdate(new Y.Doc())]);
+    await expect(world.connector.purge('insp-1')).rejects.toThrow();
+    expect(await world.db.query('SELECT id FROM ydoc_updates WHERE doc_name = ?', [DOC])).toHaveLength(1);
+    expect(await readSyncMarker(world.db, DOC)).not.toBeNull();
+  });
+
+  it('control: the same purge on a healthy database removes the rows and the proof', async () => {
+    await withProofRows('insp-1');
+    await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [DOC, Y.encodeStateAsUpdate(new Y.Doc())]);
+    await world.connector.purge('insp-1');
+    expect(await world.db.query('SELECT id FROM ydoc_updates WHERE doc_name = ?', [DOC])).toEqual([]);
+    expect(await readSyncMarker(world.db, DOC)).toBeNull();
+  });
+
+  it('a restore whose proof cannot be cleared is reported, and the stale marker never makes the new document look covered until the next step 1', async () => {
+    let failNext = true;
+    const failingOnce = (inner: Db): Db => ({
+      ...inner,
+      run: (sql, params) => {
+        if (failNext && sql.includes('DELETE FROM ydoc_sync')) {
+          failNext = false;
+          return Promise.reject(new Error('disk full'));
+        }
+        return inner.run(sql, params);
+      },
+      transaction: (fn) => inner.transaction((tx) => fn(failingOnce(tx))),
+    });
+    world = await createWorld(failingOnce);
+    const { handle, socket } = await openSocket(world);
+    await withProofRows('insp-1');
+    const step1sBefore = socket.sent.filter((m) => kindOf(m) === syncProtocol.messageYjsSyncStep1).length;
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await vi.waitFor(() => {
+      expect(world.proofErrors).toHaveLength(1);
+      expect(socket.sent.filter((m) => kindOf(m) === syncProtocol.messageYjsSyncStep1).length).toBeGreaterThan(step1sBefore);
+    });
+    expect(await readSyncMarker(world.db, DOC)).not.toBeNull();
+
+    handle.doc.getMap<unknown>('m').set('after', 1);
+    await vi.waitFor(async () => {
+      expect(await world.db.query('SELECT id FROM ydoc_updates WHERE doc_name = ?', [DOC])).not.toHaveLength(0);
+    });
+    expect(await docIsCovered(world.db, DOC)).toBe(false);
+
+    const remote = server(handle.doc);
+    socket.serverSends(serverStep1(remote));
+    await vi.waitFor(async () => {
+      expect(await docIsCovered(world.db, DOC)).toBe(true);
+    });
+    expect([...((await readSyncMarker(world.db, DOC))?.coveredState ?? [])]).toEqual([...Y.encodeStateVector(remote)]);
+    handle.destroy();
+  });
+
   it('control: opening and closing a connection on its own leaves the proof rows in place', async () => {
     await withProofRows('insp-1');
     const { handle } = await openSocket(world);

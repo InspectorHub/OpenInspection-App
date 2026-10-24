@@ -4,10 +4,18 @@ import * as Y from 'yjs';
 import { readSyncMarker, writeSyncMarker } from '../offline/sync-marker';
 import type { Db } from '../platform/db';
 
+// Optional engine-side acknowledgement (a change to the engine's results document object; none is made here). Today
+// the server answers a client's sync step 1 with a step 2 and applies a client's step 2 or update with no reply. After
+// applying an update it could send one small frame back to that socket only: a new MSG_ACK frame (byte 3) carrying the
+// server state vector as it is after the apply, coalesced to at most one per socket per 250 ms with the newest vector.
+// A client that does not know the byte ignores it, so the frame can ship before the clients. The native connector
+// would record it exactly like the state vector of a step 1, which recognises every applied update at once and
+// shortens the conservative hole described below to the updates still in flight.
+
 /**
  * Proof that the server already holds everything a device has stored for one results document.
  *
- * The sync protocol gives a client no acknowledgement of the updates it sent (see `engineAckProposal`), so the
+ * The sync protocol gives a client no acknowledgement of the updates it sent (see the note above), so the
  * only thing a client can ever learn about the server is what the SERVER ITSELF says it has: its state vector in
  * its sync step 1, and the deleted ranges in its sync step 2. The connector records exactly those two things,
  * at the moment it observes them, and nothing else: never on connect, never on a socket opening, never when the
@@ -208,23 +216,3 @@ export async function docIsCovered(db: Db, docName: string, options: CoverageOpt
     scratch.destroy();
   }
 }
-
-/**
- * Proposal for the engine (a change to `server/durable-objects/inspection-doc.ts`; none is made here): the optional
- * acknowledgement that would make the marker exact instead of one handshake behind.
- *
- * Today the document object answers a client's sync step 1 with a step 2 and applies a client's step 2 or update
- * with no reply at all. After applying a client's update it could send one small frame back to that socket only:
- *
- *   byte 3 (MSG_ACK), then the server state vector as it is AFTER applying the update.
- *
- * `MSG_ACK` is a new framing byte next to `MSG_SYNC = 0` and `MSG_RESTORE = 2`. A client that does not know the byte
- * already ignores it (`onFrame` returns for any kind other than the two it knows), so the frame can ship before the
- * clients, and the web editor is unaffected. The native connector would record that state vector exactly like the
- * one from a step 1 (`recordServerStateVector`), which makes every update the server has applied recognised at
- * once, and shortens the conservative hole to the updates still in flight. To keep the frame rate bounded the
- * object can coalesce: at most one ack per socket per 250 ms, always carrying the newest vector.
- * The same frame sent once right after the object applied a client's step 2 would let a device that edited offline
- * and then synced learn that it is covered without a second connection.
- */
-export type engineAckProposal = null;

@@ -1100,6 +1100,17 @@ describe('purge waits for the connection to finish', () => {
         if (sql.startsWith('DELETE FROM ydoc_updates')) log.push('delete');
         return real.run(sql, params);
       },
+      // The purge deletes inside a transaction; its statements are logged the same way.
+      transaction: (fn) =>
+        real.transaction((tx) =>
+          fn({
+            ...tx,
+            run: (sql, params) => {
+              if (sql.startsWith('DELETE FROM ydoc_updates')) log.push('delete');
+              return tx.run(sql, params);
+            },
+          }),
+        ),
     }));
     const handle = connect(world);
     await handle.persistenceSynced;
