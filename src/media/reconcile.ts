@@ -2,7 +2,7 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import type { AppStatePort } from '../offline/lock-monitor';
 import type { Clock } from '../platform/clock';
 import type { Network } from '../platform/network';
-import { MediaError } from './errors';
+import { isMediaError, MediaError } from './errors';
 import { isExpectedKey, MAX_UPLOAD_ATTEMPTS, type NativeUploader } from './native-uploader';
 import type { ResolveResult } from './pending-doc';
 import type { MediaKind, MediaRow, MediaStore } from './store';
@@ -68,6 +68,13 @@ export interface ReconcileDeps {
   appState?: AppStatePort;
   /** Must be the clock the uploader was given: both read the same backoff instants. */
   clock: Clock;
+  /**
+   * The data-layer block (`createBlockedGuard`). Rows of a blocked inspection are skipped: not started, not finished,
+   * not failed, not counted and not waited for (they wake again through `trigger()` when the block is lifted). Asked once per
+   * inspection per run; a guard that rejects counts as blocked. Without it nothing is skipped, so the composition root
+   * must pass the real guard.
+   */
+  isBlocked?: (inspectionId: string) => Promise<boolean>;
   timers?: TimerPort;
   /**
    * The slow fallback timer, armed only while the reconciler is started and the last run was cut short (signed
@@ -131,6 +138,8 @@ interface RunReport {
   wake: number | null;
   /** Every id the scan listed, when it listed the whole table. */
   seen: Set<string> | null;
+  /** The guard's answer per inspection, for this run only. */
+  blockedAnswers: Map<string, Promise<boolean>>;
 }
 
 export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
@@ -184,6 +193,22 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     if (run.wake === null || at < run.wake) run.wake = at;
   }
 
+  /** True when the inspection of a row is blocked (or the guard cannot say). Asked once per inspection per run. */
+  function isBlockedFor(inspectionId: string, run: RunReport): Promise<boolean> {
+    if (deps.isBlocked === undefined) return Promise.resolve(false);
+    const known = run.blockedAnswers.get(inspectionId);
+    if (known !== undefined) return known;
+    const asked = (async (): Promise<boolean> => {
+      try {
+        return (await deps.isBlocked?.(inspectionId)) !== false;
+      } catch {
+        return true;
+      }
+    })();
+    run.blockedAnswers.set(inspectionId, asked);
+    return asked;
+  }
+
   /** A failed document step or local delete: the row stays `uploaded` with its file, and wakes itself with a growing wait. */
   function noteDocFailure(row: MediaRow, run: RunReport, error: unknown): void {
     report(error);
@@ -210,6 +235,8 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     try {
       resolved = await resolveDocument(row, key);
     } catch (error) {
+      // The inspection became blocked while this row was in flight: nothing happened, nothing is counted against it.
+      if (isMediaError(error) && error.code === 'BLOCKED') return false;
       noteDocFailure(row, run, error);
       return false;
     }
@@ -243,6 +270,8 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
         run.blocked = true;
         return true;
       }
+      // A blocked inspection's rows are left exactly as they are: no upload, no document step, no failure, no wait.
+      if (await isBlockedFor(row.inspectionId, run)) return false;
       // A stored key that is not this photo's own is never resolved into a document: the uploader sends the photo again.
       if (row.state === 'uploaded' && isExpectedKey(row.uploadedKey, row)) {
         const wait = missing.get(row.pendingId);
@@ -281,6 +310,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
         if (!(await finish(row, outcome.key, run))) run.outstanding = true;
         return false;
       }
+      if (!outcome.ok && outcome.code === 'BLOCKED') return false;
       if (outcome.halt) {
         run.blocked = true;
         return true;
@@ -323,7 +353,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
   }
 
   async function runOnce(): Promise<RunReport> {
-    const run: RunReport = { total: { retried: 0, confirmed: 0 }, blocked: false, incomplete: false, outstanding: false, wake: null, seen: null };
+    const run: RunReport = { total: { retried: 0, confirmed: 0 }, blocked: false, incomplete: false, outstanding: false, wake: null, seen: null, blockedAnswers: new Map() };
     if (!(await allowed())) {
       run.blocked = true;
       return run;

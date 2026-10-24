@@ -17,6 +17,7 @@ export const MEDIA_ERROR_CODES = [
   'DOC_FAILED',
   'TOO_LONG',
   'DISK_FULL',
+  'BLOCKED',
 ] as const;
 
 export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];
@@ -36,6 +37,7 @@ const MESSAGES: Record<MediaErrorCode, string> = {
   DOC_FAILED: 'The inspection document could not be updated',
   TOO_LONG: 'The video is too long',
   DISK_FULL: 'There is not enough free space on the device',
+  BLOCKED: 'The inspection is not available on this device',
 };
 
 export class MediaError extends Error {

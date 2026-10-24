@@ -106,6 +106,13 @@ export interface ReplayDeps {
   newToken?: () => string;
   /** The server could not see the target inspection (403/404): ask the server whether it is still visible. Once per inspection per run. */
   onNeedsReconcile?: (inspectionId: string) => void;
+  /**
+   * The data-layer block (`createBlockedGuard`). A write of a blocked inspection (quarantined or being purged) is not
+   * sent: it stays `pending` exactly as it was, is not failed, not waited and not a halt, and the lines of other
+   * inspections go on. Asked right before the row is attempted and again right before its request; a guard that
+   * rejects counts as blocked. Without it nothing is checked, so the composition root must pass the real guard.
+   */
+  isBlocked?: (inspectionId: string) => Promise<boolean>;
   /** A run stopped early for a reason the person may need to act on (sign in again, update the app). */
   onHalt?: (reason: HaltReason) => void;
   onProgress?: (progress: ReplayProgress) => void;
@@ -131,11 +138,12 @@ export interface Replayer {
 
 type Decision =
   | { kind: 'sent' }
+  | { kind: 'blocked' }
   | { kind: 'failed'; code: OutboxErrorCode }
   | { kind: 'waiting'; code: OutboxErrorCode; delayMs: number; needsCheck: boolean }
   | { kind: 'halt'; reason: HaltReason };
 
-type Sent = { kind: 'response'; res: HttpResponse } | { kind: 'halt'; reason: HaltReason } | { kind: 'transient'; retryAfterMs: number | null };
+type Sent = { kind: 'response'; res: HttpResponse } | { kind: 'halt'; reason: HaltReason } | { kind: 'transient'; retryAfterMs: number | null } | { kind: 'blocked' };
 
 interface RunReport {
   result: ReplayResult;
@@ -216,6 +224,16 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     return stopped ? 'stopped' : null;
   }
 
+  /** True when the guard says the inspection is blocked, or cannot say. Without a guard nothing is blocked. */
+  async function isBlocked(inspectionId: string | null): Promise<boolean> {
+    if (deps.isBlocked === undefined || inspectionId === null) return false;
+    try {
+      return (await deps.isBlocked(inspectionId)) !== false;
+    } catch {
+      return true;
+    }
+  }
+
   async function currentAccount(): Promise<Account | null> {
     try {
       return await deps.account();
@@ -252,6 +270,8 @@ export function createReplayer(deps: ReplayDeps): Replayer {
       if (blocked !== null) return { kind: 'halt', reason: blocked };
       const who = await currentAccount();
       if (who === null || !sameAccount(who, row.tenantId, row.userId)) return { kind: 'halt', reason: 'no_account' };
+      // A purge or a quarantine that began while the token was fetched: nothing is sent and nothing is recorded.
+      if (await isBlocked(row.inspectionId)) return { kind: 'blocked' };
       let res: HttpResponse;
       try {
         res = await deps.http.request({
@@ -332,6 +352,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     }
     const sent = await send(lease, def, row, path, def.body(payload));
     if (sent.kind === 'halt') return sent;
+    if (sent.kind === 'blocked') return sent;
     if (sent.kind === 'transient') return { kind: 'waiting', code: 'network', delayMs: delayFor(row, sent.retryAfterMs), needsCheck: false };
     return triage(def, row, sent.res);
   }
@@ -377,12 +398,15 @@ export function createReplayer(deps: ReplayDeps): Replayer {
           return;
         }
         attempted.add(row.idempotencyKey);
+        // A blocked inspection's write stays exactly as it is: not sent, not failed, not waiting, not a halt.
+        if (await isBlocked(row.inspectionId)) continue;
         progressed = true;
         const decision = await attempt(lease, row);
         if (decision.kind === 'halt') {
           result.halted = decision.reason;
           return;
         }
+        if (decision.kind === 'blocked') continue;
         if (decision.kind === 'sent') {
           const def = findCommand(registry, row.op);
           await completeRow(deps.db, row, def?.createsInspection === true);

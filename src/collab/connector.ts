@@ -70,10 +70,24 @@ export type CollabStatus =
   | 'storage_failed'
   /** Several sockets in a row never opened and nothing synced. Still retrying, at the backoff ceiling. */
   | 'unreachable'
+  /** The inspection is quarantined or being purged: the document is never opened and no ticket is asked for. */
+  | 'blocked'
   | 'closed';
 
 /** Reasons a connection stops trying until something outside it changes. */
-type Halt = 'locked' | 'denied' | 'upgrade_required' | 'signed_out' | 'auth_rejected';
+type Halt = 'locked' | 'denied' | 'upgrade_required' | 'signed_out' | 'auth_rejected' | 'blocked';
+
+/**
+ * `connect` refused the inspection because it is quarantined or being purged (or because that could not be checked).
+ * It is the rejection of `persistenceSynced`; the handle's document is never stored and never connected.
+ */
+export class CollabBlockedError extends Error {
+  readonly code = 'blocked';
+  constructor() {
+    super('This inspection is not available on this device');
+    this.name = 'CollabBlockedError';
+  }
+}
 
 export interface SocketHandlers {
   open(): void;
@@ -116,6 +130,12 @@ export interface CollabConnectorDeps {
   onProofError?: (error: unknown) => void;
   /** The time stamped on a sync proof. Defaults to the system clock. */
   clock?: Clock;
+  /**
+   * The data-layer block (`createBlockedGuard`). When given, a connection is made only after it answered `false`; an
+   * answer of `true`, or a rejection, refuses the connection (see `CollabBlockedError`) and is asked again before every
+   * ticket request. Without it nothing is checked: the composition root must pass the real guard.
+   */
+  isBlocked?: (inspectionId: string) => Promise<boolean>;
 }
 
 export interface NativeCollabConnector extends FieldCollabConnector {
@@ -126,6 +146,12 @@ export interface NativeCollabConnector extends FieldCollabConnector {
    * document itself (the photo upload step, when no editor is open) asks first: there is one live connection per inspection.
    */
   isOpen(inspectionId: string): boolean;
+  /**
+   * Closes every live connection of one inspection and waits for the writes already started. Stored rows and the sync
+   * proof stay: this is the quarantine's way to stop a connection, not a purge. Rejects with `RangeError` for an id that
+   * could not be an inspection id.
+   */
+  closeFor(inspectionId: string): Promise<void>;
 }
 
 /** A connection that is still shutting down is tracked until it has finished, so a purge can wait for it. */
@@ -214,7 +240,8 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     const endpoints = collabEndpoints(origin, inspectionId);
 
     let doc = new Y.Doc();
-    let persistence = new SqlitePersistence(deps.db, docName, doc, { onError: report, timers });
+    /** Absent until the guard (when there is one) has answered `free`. */
+    let persistence: SqlitePersistence | null = null;
     let socket: CollabSocket | null = null;
     let destroyed = false;
     let restoring = false;
@@ -465,7 +492,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
      * document and its stored rows and pull the restored state on the open socket.
      */
     async function handleRestore(): Promise<void> {
-      if (destroyed || restoring) return;
+      if (destroyed || restoring || persistence === null) return;
       restoring = true;
       try {
         doc.off('update', forward);
@@ -548,6 +575,11 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
           return;
         }
         if (stale()) return;
+        if (await blockedNow()) {
+          if (!stale()) stop('blocked');
+          return;
+        }
+        if (stale()) return;
         status('connecting');
         const outcome = await requestTicket();
         if (stale()) return;
@@ -568,6 +600,16 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
             void attempt();
           }
         }
+      }
+    }
+
+    /** True when the guard says blocked, or cannot say. Without a guard nothing is blocked. */
+    async function blockedNow(): Promise<boolean> {
+      if (deps.isBlocked === undefined) return false;
+      try {
+        return (await deps.isBlocked(inspectionId)) !== false;
+      } catch {
+        return true;
       }
     }
 
@@ -624,7 +666,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       stopOnNetwork();
       doc.off('update', forward);
       dropSocket();
-      const finishing = persistence.destroy();
+      const finishing = persistence?.destroy() ?? Promise.resolve();
       doc.destroy();
       status('closed');
       closing = finishing.finally(() => {
@@ -640,21 +682,52 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     group.add(entry);
     live.set(inspectionId, group);
 
-    const firstPersistence = persistence;
+    let markPersisted: () => void = () => undefined;
+    let refusePersisted: (reason: unknown) => void = () => undefined;
     // A store that fails to open leaves this pending and never opens the socket: the editor must not open on an
-    // empty document whose edits would not be saved. The failure itself has already been reported.
-    const persistenceSynced = new Promise<void>((resolve) => {
-      firstPersistence.whenSynced.then(
+    // empty document whose edits would not be saved. The failure itself has already been reported. A blocked
+    // inspection rejects it instead, with a typed error.
+    const persistenceSynced = new Promise<void>((resolve, reject) => {
+      markPersisted = resolve;
+      refusePersisted = reject;
+    });
+    // A caller that never awaits the handle must not produce an unhandled rejection for a refusal.
+    persistenceSynced.catch(() => undefined);
+
+    function startPersistence(): void {
+      if (destroyed) return;
+      const created = new SqlitePersistence(deps.db, docName, doc, { onError: report, timers });
+      persistence = created;
+      created.whenSynced.then(
         () => {
           persisted = true;
-          resolve();
+          markPersisted();
           if (destroyed) return;
           notify(opts.onChange);
           void attempt();
         },
         failStorage,
       );
-    });
+    }
+
+    /** The document is never read, stored or connected: the handle only reports why. */
+    function refuseBlocked(): void {
+      status('blocked');
+      refusePersisted(new CollabBlockedError());
+      void close();
+    }
+
+    if (deps.isBlocked === undefined) {
+      startPersistence();
+    } else {
+      void (async () => {
+        const blocked = await blockedNow();
+        // A purge or a destroy that came first already closed this connection; nothing is started for it.
+        if (destroyed) return;
+        if (blocked) refuseBlocked();
+        else startPersistence();
+      })();
+    }
 
     return {
       get doc() {
@@ -680,6 +753,10 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         await deleteDocRows(tx, resultsDocName(inspectionId));
         await clearSyncProof(tx, resultsDocName(inspectionId));
       });
+    },
+    closeFor: async (inspectionId) => {
+      if (!isValidInspectionId(inspectionId)) throw new RangeError('Invalid inspection id');
+      await Promise.all([...(live.get(inspectionId) ?? [])].map((entry) => entry.close()));
     },
     onLockChange: () => {
       for (const group of live.values()) for (const entry of group) entry.reevaluate();

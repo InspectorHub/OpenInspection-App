@@ -113,6 +113,12 @@ export interface NativeUploaderDeps {
   onError?: (error: unknown) => void;
   /** How rows of another kind than a photo (a video clip) get a destination and finish. Without it such a row is left untouched. */
   video?: KindStrategy;
+  /**
+   * The data-layer block (`createBlockedGuard`). A row of a blocked inspection is neither minted, started, finished nor
+   * recorded as failed: the upload answers `BLOCKED` and the row stays as it is. A guard that rejects counts as blocked.
+   * Without it nothing is checked, so the composition root must pass the real guard.
+   */
+  isBlocked?: (inspectionId: string) => Promise<boolean>;
 }
 
 export interface NativeUploader extends MediaUploader {
@@ -138,6 +144,14 @@ export interface NativeUploader extends MediaUploader {
   retry(pendingId: string): Promise<boolean>;
   /** Forgets the backoff memory of every photo not in `keep`, so a photo that is gone leaves nothing behind. */
   forgetExcept(keep: ReadonlySet<string>): void;
+  /**
+   * Stops the uploads of one inspection that are in flight in this process: asks the plugin to drop them, settles each
+   * as `BLOCKED` without recording a failure, and resolves when they have ended. An upload that has not reached the
+   * plugin yet stops at the next block check, so this is meant to run after the inspection became blocked. Uploads of
+   * other inspections are untouched. An upload the plugin kept from an earlier process cannot be listed and is not
+   * reached; its transfer ends on its own and finds no row.
+   */
+  cancelFor(inspectionId: string): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -163,7 +177,7 @@ function toOutcome(f: Failure): UploadOutcome {
   return { ok: false, code: f.code, retryable: f.retryable, retryAfterMs: f.retryAfterMs, halt: f.halt };
 }
 
-type Terminal = { kind: 'completed' | 'failed'; statusCode: number | null } | { kind: 'timeout' };
+type Terminal = { kind: 'completed' | 'failed'; statusCode: number | null } | { kind: 'timeout' } | { kind: 'cancelled' };
 
 interface ParsedEvent {
   name: 'uploading' | 'completed' | 'failed';
@@ -246,6 +260,10 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   const active = new Map<string, Promise<UploadOutcome>>();
   const waiters = new Map<string, { settle(terminal: Terminal): void; pendingId: string; onProgress: ((pendingId: string, percent: number) => void) | undefined; touch(): void }>();
   const early = new Map<string, ParsedEvent>();
+  /** The inspection of every upload in flight in this process, by photo. */
+  const inspectionOf = new Map<string, string>();
+  /** Inspections a `cancelFor` is working on: an upload that registers meanwhile is cancelled at once. */
+  const cancelling = new Map<string, number>();
   let starting = 0;
   let listener: Promise<{ remove(): Promise<void> }> | null = null;
 
@@ -310,6 +328,18 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       return true;
     }
   }
+
+  /** True when the guard says blocked or cannot say. Without a guard nothing is blocked. */
+  async function blocked(inspectionId: string): Promise<boolean> {
+    if (deps.isBlocked === undefined) return false;
+    try {
+      return (await deps.isBlocked(inspectionId)) !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  const blockedOutcome = (): UploadOutcome => toOutcome(failure('BLOCKED', { retryable: true }));
 
   /** An authenticated JSON POST to the pinned origin. A 401 refreshes the session once; everything else is answered, never thrown. */
   async function authedPost(path: string, body: unknown): Promise<AuthedResult> {
@@ -413,6 +443,12 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       timer = arm(silenceMs);
     };
     waiters.set(id, { settle, pendingId: row.pendingId, onProgress: options.onProgress, touch });
+    if (cancelling.has(row.inspectionId)) {
+      // A cancel was asked for while this start was in flight: it could not see the upload yet.
+      waiters.delete(id);
+      void deps.plugin.removeUpload({ id }).catch(() => undefined);
+      settle({ kind: 'cancelled' });
+    }
     const queued = early.get(id);
     if (queued !== undefined && queued.name !== 'uploading') {
       early.delete(id);
@@ -483,6 +519,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
    */
   async function completeWith(row: MediaRow, strategy: KindStrategy, key: string, marked: boolean): Promise<UploadOutcome> {
     if (await locked()) return settleFailure(row, failure('LOCKED', { retryable: true, halt: true }), marked);
+    if (await blocked(row.inspectionId)) return blockedOutcome();
     if (!marked) {
       try {
         if (!(await deps.store.markState(row.pendingId, 'uploading', { attempts: row.attempts }))) return toOutcome(failure('NOT_FOUND', { retryable: false }));
@@ -531,6 +568,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       return toOutcome(failure('NOT_FOUND', { retryable: false }));
     }
     if (row.inspectionId !== ref.inspectionId) return toOutcome(failure('INVALID', { retryable: false }));
+    // First of all, before the row is read any further or anything is sent: a blocked inspection's rows are left alone.
+    if (await blocked(row.inspectionId)) return blockedOutcome();
     const strategy = deps.video !== undefined && deps.video.kind === row.kind ? deps.video : undefined;
     if (row.kind !== 'photo' && strategy === undefined) return toOutcome(failure('UNSUPPORTED_KIND', { retryable: false }));
     // A key that is not this row's own (a tampered row) is never reused or handed on: the file is sent again.
@@ -567,6 +606,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       if (!minted.ok) return settleFailure(row, minted.failure, marked);
       // Signing out or locking while the url was being minted must not start the transfer.
       if (await locked()) return settleFailure(row, failure('LOCKED', { retryable: true, halt: true }), marked);
+      // Nor may a purge or a quarantine that began meanwhile: the row stays as it is, nothing is recorded.
+      if (await blocked(row.inspectionId)) return blockedOutcome();
       if (!marked) {
         // Starting costs no attempt: only a recorded failure does, so a process that keeps being killed cannot fail a good file.
         try {
@@ -579,6 +620,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       }
       const terminal = await runUpload(row, { url: minted.url, sendClientHeaders: minted.sendClientHeaders, title: strategy?.notificationTitle ?? NOTIFICATION_TITLE, silenceTimeout: strategy !== undefined }, options);
       if (terminal === 'start-failed') return settleFailure(row, failure('FILE', { retryable: true }), marked);
+      if (terminal.kind === 'cancelled') return blockedOutcome();
       if (terminal.kind === 'timeout') return settleFailure(row, failure('TIMEOUT', { retryable: true }), marked);
       if (terminal.statusCode === null) {
         const code = terminal.kind === 'failed' ? 'NETWORK' : 'SERVER';
@@ -620,6 +662,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     if (!isValidMediaId(ref.pendingId) || !isValidMediaId(ref.inspectionId)) return Promise.resolve(toOutcome(failure('INVALID', { retryable: false })));
     const running = active.get(ref.pendingId);
     if (running) return running;
+    inspectionOf.set(ref.pendingId, ref.inspectionId);
     const run = doUpload(ref, options)
       .catch((error: unknown): UploadOutcome => {
         report(error);
@@ -627,6 +670,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       })
       .finally(() => {
         active.delete(ref.pendingId);
+        inspectionOf.delete(ref.pendingId);
       });
     active.set(ref.pendingId, run);
     return run;
@@ -665,6 +709,26 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     upload: async (rec) => {
       const outcome = await uploadDetailed({ pendingId: rec.pendingId, inspectionId: rec.inspectionId });
       return outcome.ok ? { ok: true, key: outcome.key } : { ok: false, error: outcome.code };
+    },
+    cancelFor: async (inspectionId) => {
+      cancelling.set(inspectionId, (cancelling.get(inspectionId) ?? 0) + 1);
+      try {
+        const mine = new Set([...inspectionOf].filter(([, owner]) => owner === inspectionId).map(([pendingId]) => pendingId));
+        const removals: Promise<void>[] = [];
+        for (const [id, waiter] of [...waiters]) {
+          if (!mine.has(waiter.pendingId)) continue;
+          waiters.delete(id);
+          removals.push(deps.plugin.removeUpload({ id }).catch(() => undefined));
+          waiter.settle({ kind: 'cancelled' });
+        }
+        await Promise.all(removals);
+        const flights = [...mine].map((pendingId) => active.get(pendingId)).filter((flight): flight is Promise<UploadOutcome> => flight !== undefined);
+        await Promise.allSettled(flights);
+      } finally {
+        const left = (cancelling.get(inspectionId) ?? 1) - 1;
+        if (left <= 0) cancelling.delete(inspectionId);
+        else cancelling.set(inspectionId, left);
+      }
     },
     dispose: async () => {
       const registered = listener;

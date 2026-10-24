@@ -190,6 +190,13 @@ export interface MediaStoreDeps {
   files: Files;
   /** Called after a NEW row was stored (not for a repeated put), so the uploader can be started. A throw is ignored. */
   onStored?: (pendingId: string) => void;
+  /**
+   * The data-layer block (`createBlockedGuard`). A photo or clip for a blocked inspection is refused with `BLOCKED`
+   * before anything is written, and checked again between the file and the row so a purge that began meanwhile does
+   * not get a row back. A guard that rejects counts as blocked. Without it nothing is checked, so the composition root
+   * must pass the real guard.
+   */
+  isBlocked?: (inspectionId: string) => Promise<boolean>;
 }
 
 const COLUMNS = 'pending_id, inspection_id, kind, path, content_type, meta, state, attempts, uploaded_key, created_at';
@@ -341,6 +348,16 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
   /** A put for an id waits for the one before it, so two puts of one id never write the file at the same time. */
   const putChain = new Map<string, Promise<void>>();
 
+  /** True when the guard says blocked or cannot say. Without a guard nothing is blocked. */
+  async function blocked(inspectionId: string): Promise<boolean> {
+    if (deps.isBlocked === undefined) return false;
+    try {
+      return (await deps.isBlocked(inspectionId)) !== false;
+    } catch {
+      return true;
+    }
+  }
+
   async function rawRow(pendingId: string): Promise<Record<string, unknown> | null> {
     const rows = await db.query<Record<string, unknown>>(`SELECT ${COLUMNS} FROM media WHERE pending_id = ?`, [pendingId]);
     return rows[0] ?? null;
@@ -353,6 +370,7 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
     if (rec.blob.size === 0) throw new MediaError('EMPTY');
     if (rec.blob.size > MAX_MEDIA_BYTES) throw new MediaError('TOO_LARGE');
 
+    if (await blocked(rec.inspectionId)) throw new MediaError('BLOCKED');
     const existing = await rawRow(rec.pendingId);
     if (existing) {
       // A repeated put (a retried save) must not touch a file that may already be uploading.
@@ -374,6 +392,10 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       await files.write(path, bytes);
     } catch {
       throw new MediaError('WRITE_FAILED');
+    }
+    if (await blocked(rec.inspectionId)) {
+      await files.remove(path).catch(() => undefined);
+      throw new MediaError('BLOCKED');
     }
     try {
       await db.run(
@@ -402,6 +424,7 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
     if (declared === 0) throw new MediaError('EMPTY');
     if (declared > MAX_VIDEO_BYTES) throw new MediaError('TOO_LARGE');
 
+    if (await blocked(rec.inspectionId)) throw new MediaError('BLOCKED');
     const existing = await rawRow(rec.pendingId);
     if (existing) {
       if (existing.inspection_id === rec.inspectionId && existing.kind === 'video') return;
@@ -432,6 +455,10 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
     if (written !== declared) {
       await files.remove(path).catch(() => undefined);
       throw new MediaError('READ_FAILED');
+    }
+    if (await blocked(rec.inspectionId)) {
+      await files.remove(path).catch(() => undefined);
+      throw new MediaError('BLOCKED');
     }
     try {
       await db.run(

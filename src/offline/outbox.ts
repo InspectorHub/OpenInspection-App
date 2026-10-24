@@ -12,7 +12,7 @@ export interface Account {
   userId: string;
 }
 
-export type OutboxFailure = 'enqueue_failed' | 'id_in_use' | 'invalid_account';
+export type OutboxFailure = 'enqueue_failed' | 'id_in_use' | 'invalid_account' | 'blocked';
 
 /** Carries a fixed code only. A refused enqueue means the write was NOT stored: the caller keeps the user's input. */
 export class OutboxError extends Error {
@@ -131,6 +131,10 @@ async function nextSeq(tx: Db): Promise<number> {
  * - For a command that creates the inspection, the local `work_package` row is stored in the same transaction
  *   with `server_confirmed = 0`, so the pair can never be half written.
  *
+ * - A write for an inspection that is quarantined or being purged is refused with `OutboxError('blocked')`. The
+ *   check reads the package row inside the same transaction that would store the write, so it cannot interleave with
+ *   the tombstone's own transaction: a write is either stored before the tombstone or refused after it.
+ *
  * Rejects with `RegistryError` (the command is invalid) or `OutboxError` (it could not be stored). Either way
  * nothing was queued and the caller must keep the person's input.
  */
@@ -145,6 +149,11 @@ export async function enqueue(deps: OutboxDeps, op: string, input: unknown, opti
 
   const store = (): Promise<OutboxRow> =>
     deps.db.transaction(async (tx) => {
+      if (inspectionId !== null) {
+        const flags = await tx.query<{ purging: number; quarantine_source: string | null }>('SELECT purging, quarantine_source FROM work_package WHERE inspection_id = ?', [inspectionId]);
+        const flag = flags[0];
+        if (flag !== undefined && (Number(flag.purging) !== 0 || flag.quarantine_source !== null)) throw new OutboxError('blocked');
+      }
       if (def.createsInspection === true && inspectionId !== null) {
         const existing = await tx.query<{ tenant_id: string | null; user_id: string | null }>('SELECT tenant_id, user_id FROM work_package WHERE inspection_id = ?', [inspectionId]);
         const owner = existing[0];

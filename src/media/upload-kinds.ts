@@ -20,7 +20,9 @@ export type UploadFailureCode =
   /** The file is larger than the engine accepts; sending it cannot help. */
   | 'TOO_LARGE'
   /** Every attempt is used and nothing more is remembered about why; `retry()` is the way out. */
-  | 'GIVEN_UP';
+  | 'GIVEN_UP'
+  /** The inspection is quarantined or being purged: nothing was sent, nothing was recorded, the row is as it was. */
+  | 'BLOCKED';
 
 export interface Failure {
   code: UploadFailureCode;

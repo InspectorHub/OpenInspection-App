@@ -78,6 +78,12 @@ export interface DocPorts {
 export interface WithDocDeps {
   db: Db;
   docs: DocPorts;
+  /**
+   * The data-layer block (`createBlockedGuard`). A blocked inspection's document is not changed, live or stored: the
+   * call rejects with `BLOCKED` before anything is read or written. A guard that rejects counts as blocked. Without it
+   * nothing is checked, so the composition root must pass the real guard.
+   */
+  isBlocked?: (inspectionId: string) => Promise<boolean>;
   timers?: TimerPort;
   /** Receives storage failures of the short-lived persistence. */
   onError?: (error: unknown) => void;
@@ -122,6 +128,15 @@ export function createWithDoc(deps: WithDocDeps): WithDoc {
   const timers = deps.timers ?? realTimers;
   return async <T>(inspectionId: string, fn: (doc: Y.Doc) => T): Promise<T> => {
     if (!isValidMediaId(inspectionId)) throw new MediaError('INVALID_ID');
+    if (deps.isBlocked !== undefined) {
+      let blocked: boolean;
+      try {
+        blocked = (await deps.isBlocked(inspectionId)) !== false;
+      } catch {
+        blocked = true;
+      }
+      if (blocked) throw new MediaError('BLOCKED');
+    }
     if (deps.docs.isOpen(inspectionId)) {
       const live = deps.docs.liveDoc(inspectionId);
       if (live === null) throw new MediaError('DOC_BUSY');

@@ -221,7 +221,7 @@ async function readLocal(db: Db, account: Account, registry: CommandRegistry, ma
  * rows, and the package row. It moves when a row is added, removed or changed. One transaction, grouped queries,
  * no id list in any statement.
  */
-async function fingerprints(db: Db, ids: ReadonlySet<string>): Promise<Map<string, string>> {
+export async function fingerprints(db: Db, ids: ReadonlySet<string>): Promise<Map<string, string>> {
   return db.transaction(async (tx) => {
     const parts = new Map<string, string[]>();
     const add = (id: string | null, label: string): void => {
@@ -253,6 +253,39 @@ async function fingerprints(db: Db, ids: ReadonlySet<string>): Promise<Map<strin
     const out = new Map<string, string>();
     for (const id of ids) out.set(id, JSON.stringify([...(parts.get(id) ?? [])].sort()));
     return out;
+  });
+}
+
+/**
+ * The fingerprint of ONE inspection, byte for byte what `fingerprints` returns for it, but with every statement filtered
+ * to that inspection so it reads only its own rows. The executor compares it with the plan's inside the transaction that
+ * sets the tombstone, where a scan of the whole queue, media and document tables would not be short. A test pins the two
+ * implementations together.
+ */
+export async function fingerprintOf(db: Db, id: string): Promise<string> {
+  return db.transaction(async (tx) => {
+    const parts: string[] = [];
+    const queue = await tx.query<{ state: string; n: number; hi: number; a: number }>(
+      'SELECT state, COUNT(*) AS n, COALESCE(MAX(seq), 0) AS hi, COALESCE(SUM(attempts), 0) AS a FROM outbox WHERE inspection_id = ? GROUP BY state',
+      [id],
+    );
+    for (const row of queue) parts.push(`o:${row.state}:${String(row.n)}:${String(row.hi)}:${String(row.a)}`);
+    const media = await tx.query<{ state: string; n: number; hi: number; a: number; k: number }>(
+      "SELECT state, COUNT(*) AS n, COALESCE(MAX(created_at), 0) AS hi, COALESCE(SUM(attempts), 0) AS a, COALESCE(SUM(LENGTH(COALESCE(uploaded_key, ''))), 0) AS k FROM media WHERE inspection_id = ? GROUP BY state",
+      [id],
+    );
+    for (const row of media) parts.push(`m:${row.state}:${String(row.n)}:${String(row.hi)}:${String(row.a)}:${String(row.k)}`);
+    const docs = await tx.query<{ n: number; hi: number; b: number }>('SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS hi, COALESCE(SUM(LENGTH(data)), 0) AS b FROM ydoc_updates WHERE doc_name = ?', [`results-${id}`]);
+    const doc = docs[0];
+    if (doc !== undefined && Number(doc.n) > 0) parts.push(`y:${String(doc.n)}:${String(doc.hi)}:${String(doc.b)}`);
+    const proofs = await tx.query<{ doc_name: string; updated_at: number; l: number | null }>('SELECT doc_name, updated_at, LENGTH(covered_state) AS l FROM ydoc_sync WHERE doc_name IN (?, ?)', [`results-${id}`, `ds:results-${id}`]);
+    for (const row of proofs) parts.push(`s:${row.doc_name.startsWith('ds:') ? 'ds' : 'sv'}:${String(row.updated_at)}:${String(row.l)}`);
+    const packages = await tx.query<{ server_confirmed: number; purging: number; quarantine_source: string | null; package_gen: number; tenant_id: string | null; user_id: string | null }>(
+      'SELECT server_confirmed, purging, quarantine_source, package_gen, tenant_id, user_id FROM work_package WHERE inspection_id = ?',
+      [id],
+    );
+    for (const row of packages) parts.push(`w:${String(row.server_confirmed)}:${String(row.purging)}:${row.quarantine_source ?? '-'}:${String(row.package_gen)}:${row.tenant_id ?? '-'}:${row.user_id ?? '-'}`);
+    return JSON.stringify(parts.sort());
   });
 }
 
