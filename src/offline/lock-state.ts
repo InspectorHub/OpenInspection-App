@@ -9,6 +9,17 @@ export type LockOutcome = { locked: false } | { locked: true; reason: LockReason
 
 const REVOKED_MARK = 'revoked';
 
+let writeVersion = 0;
+
+/**
+ * Counts the writes that change what an evaluation would answer (a verification, a refresh, a
+ * revocation). A caller reads it before and after an evaluation: if it moved, the answer was loaded
+ * from state that has since changed and is stale.
+ */
+export function lockStateVersion(): number {
+  return writeVersion;
+}
+
 /** A stored non-negative integer, or null. Anything else (garbage, a float, an unsafe magnitude) is not a number to us. */
 function parseStoredInteger(value: string | undefined): number | null {
   if (value === undefined || !/^\d+$/.test(value)) return null;
@@ -60,7 +71,8 @@ export async function touchMaxSeen(db: Db, now: number): Promise<void> {
  * accepts this device; it cannot prove that the local clock is right, and the clock is the
  * thing the lock is protecting.
  *
- * Verification also clears a revocation: the server has just accepted this device.
+ * This is the session-confirmed path: the session endpoint (or a sign-in for the same identity) has
+ * just accepted this device, so it also clears a revocation. A refresh alone does not; see `recordRefreshed`.
  */
 export async function recordVerified(db: Db, now: number, offlineMaxDays: number | null): Promise<void> {
   const at = String(Math.trunc(now));
@@ -72,11 +84,24 @@ export async function recordVerified(db: Db, now: number, offlineMaxDays: number
     }
     await tx.run("DELETE FROM device_state WHERE key = 'locked_reason'");
   });
+  writeVersion += 1;
+}
+
+/**
+ * Records a token refresh that succeeded without the session endpoint being asked. It moves
+ * `last_verified_at` forward and nothing else: a revocation is never cleared by it, and the latest
+ * time seen is not touched. A revoked device stays revoked until the session endpoint accepts it or
+ * the same person signs in again.
+ */
+export async function recordRefreshed(db: Db, now: number): Promise<void> {
+  await writeDeviceState(db, 'last_verified_at', String(Math.trunc(now)));
+  writeVersion += 1;
 }
 
 /** The server definitively ended this device's access (see `tokens.onRevoked`). Idempotent. */
 export async function setRevoked(db: Db): Promise<void> {
   await writeDeviceState(db, 'locked_reason', REVOKED_MARK);
+  writeVersion += 1;
 }
 
 /** The company name shown on the revoked screen: stored text, trimmed, bounded, or null. React escapes it on render. */

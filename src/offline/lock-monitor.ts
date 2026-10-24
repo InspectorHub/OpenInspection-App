@@ -1,9 +1,12 @@
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
-import { evaluateAndPersist, type LockOutcome } from './lock-state';
+import { evaluateAndPersist, lockStateVersion, type LockOutcome } from './lock-state';
 
 /** How often the lock is re-evaluated while the app is in the foreground. */
 export const LOCK_CHECK_INTERVAL_MS = 60_000;
+
+/** Evaluations repeated when the state changed under them; a run that never settles reports nothing and the next trigger decides. */
+const MAX_STALE_RETRIES = 3;
 
 /** Foreground/background transitions of the app. `onChange` returns an unsubscribe function. */
 export interface AppStatePort {
@@ -60,7 +63,7 @@ export interface LockMonitorDeps {
   /** Omitted where there is no resume signal; the interval still runs. */
   appState?: AppStatePort;
   onOutcome(outcome: LockOutcome): void;
-  /** An evaluation that threw. Neither locks nor unlocks: the last known screen stays. */
+  /** An evaluation that threw. The monitor itself neither locks nor unlocks; the caller decides what repeated failures mean. */
   onError?(err: unknown): void;
 }
 
@@ -87,8 +90,14 @@ export function startLockMonitor(deps: LockMonitorDeps): LockMonitor {
     const run = async (): Promise<void> => {
       if (stopped) return;
       try {
-        const outcome = await evaluateAndPersist(deps.db, deps.clock.now());
-        if (!stopped) deps.onOutcome(outcome);
+        for (let attempt = 0; attempt < MAX_STALE_RETRIES && !stopped; attempt += 1) {
+          const version = lockStateVersion();
+          const outcome = await evaluateAndPersist(deps.db, deps.clock.now());
+          // A verification or revocation recorded while this one was loading makes the answer stale: ask again.
+          if (version !== lockStateVersion()) continue;
+          if (!stopped) deps.onOutcome(outcome);
+          return;
+        }
       } catch (err) {
         if (!stopped) deps.onError?.(err);
       }

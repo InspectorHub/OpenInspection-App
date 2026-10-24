@@ -4,7 +4,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import { DAY_MS } from './lock';
-import { evaluateAndPersist, loadLockState, loadTenantName, MAX_TENANT_NAME_LENGTH, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
+import { evaluateAndPersist, loadLockState, loadTenantName, MAX_TENANT_NAME_LENGTH, recordRefreshed, recordVerified, setRevoked, touchMaxSeen } from './lock-state';
 import { countWaitingUploads } from './waiting';
 
 const NOW = 1_800_000_000_000;
@@ -54,6 +54,15 @@ describe('loadLockState', () => {
   it('any locked_reason other than revoked is not a revocation', async () => {
     await put('locked_reason', 'expired');
     expect((await loadLockState(db)).revoked).toBe(false);
+  });
+});
+
+describe('recordRefreshed', () => {
+  it('moves only the verification time: keeps the revocation, the limit and the latest time seen', async () => {
+    await recordVerified(db, NOW, 14);
+    await setRevoked(db);
+    await recordRefreshed(db, NOW + 5000);
+    expect(await loadLockState(db)).toEqual({ lastVerifiedAt: NOW + 5000, maxSeenTime: NOW, offlineMaxDays: 14, revoked: true });
   });
 });
 

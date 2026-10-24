@@ -10,7 +10,7 @@ import type { Db } from '../platform/db';
 import { closeRealCapacitorDb, openRealCapacitorDb } from '../platform/db-capacitor';
 import { createRealFiles, type Files } from '../platform/files';
 import { createRealSecureStore, type SecureStore } from '../platform/secure-store';
-import { recordVerified, setRevoked } from '../offline/lock-state';
+import { recordRefreshed, recordVerified, setRevoked } from '../offline/lock-state';
 
 export type ClientPlatform = 'android' | 'ios';
 
@@ -56,7 +56,7 @@ export function composeWith(parts: ComposeParts): AppServices {
     store,
     clock,
     getClientId: (origin) => loadClientId(db, origin),
-    onVerified: (event) => recordVerified(db, event.at, event.offlineMaxDays),
+    onVerified: (event) => (event.sessionConfirmed ? recordVerified(db, event.at, event.offlineMaxDays) : recordRefreshed(db, event.at)),
     onRevoked: () => setRevoked(db),
   });
   const flow = createLoginFlow({ http, db, registrar, tokens, authSession: parts.authSession, clock });

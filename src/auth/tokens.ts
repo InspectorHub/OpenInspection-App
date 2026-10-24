@@ -129,11 +129,13 @@ export interface TokenDeps {
   /** Timer functions for that bound; default to the globals. */
   timers?: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
   /**
-   * Called after the server accepted this device: a token refresh succeeded, or the session check
-   * answered. `offlineMaxDays` is the tenant's limit when the session check supplied it, otherwise null.
+   * Called after the server accepted this device. `sessionConfirmed` is true when the session endpoint
+   * answered ok (`offlineMaxDays` is then the tenant's limit); false for a token refresh alone, which
+   * proves the grant is alive but not that the device is still allowed, so it must not undo a
+   * revocation (`offlineMaxDays` is null then).
    * Best effort: a failure here is swallowed, which can only leave the offline lock stricter.
    */
-  onVerified?(event: { at: number; offlineMaxDays: number | null }): Promise<void> | void;
+  onVerified?(event: { at: number; offlineMaxDays: number | null; sessionConfirmed: boolean }): Promise<void> | void;
   /**
    * Called when the session endpoint kept answering 401 after a successful token refresh: the only
    * definitive "this device is no longer allowed" signal. A refresh that is refused (400 invalid_grant)
@@ -229,7 +231,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       // Recording is best effort; see the hook documentation.
     }
   }
-  const verified = (offlineMaxDays: number | null): Promise<void> => notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays }));
+  const refreshed = (): Promise<void> => notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays: null, sessionConfirmed: false }));
+  const sessionConfirmed = (offlineMaxDays: number): Promise<void> => notify(() => deps.onVerified?.({ at: deps.clock.now(), offlineMaxDays, sessionConfirmed: true }));
 
   const generationOf = (origin: string): number => generations.get(origin) ?? 0;
   const bumpGeneration = (origin: string): void => {
@@ -332,7 +335,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     if (activeOrigin === origin) access = { token: next.accessToken, expiresAt };
     relogin.delete(origin);
     backoff.delete(origin);
-    await verified(null);
+    await refreshed();
     return { kind: 'ok', accessToken: next.accessToken, expiresAt };
   }
 
@@ -377,14 +380,14 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     try {
       const result = await fetchSession(deps.http, origin, accessToken);
       if (result.kind === 'ok') {
-        await verified(result.session.offlineMaxDays);
+        await sessionConfirmed(result.session.offlineMaxDays);
         return result;
       }
       const again = await refresh(origin, { ignoreBackoff: true });
       if (again.kind !== 'ok') return again;
       const second = await fetchSession(deps.http, origin, again.accessToken);
       if (second.kind === 'ok') {
-        await verified(second.session.offlineMaxDays);
+        await sessionConfirmed(second.session.offlineMaxDays);
         return second;
       }
       // A sign-out (finished or not) or a new sign-in during the awaits above makes this verdict stale.

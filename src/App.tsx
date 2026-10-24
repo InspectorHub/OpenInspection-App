@@ -23,6 +23,9 @@ export interface AppProps {
   scheduler?: Scheduler;
 }
 
+/** Consecutive failed mid-session evaluations after which the work screen is locked. */
+const LOCK_FAILURES_BEFORE_CLOSING = 2;
+
 /** Applies a lock evaluation to the current screen: only the work screens and the lock screen are affected. */
 function applyOutcome(screen: Screen, outcome: LockOutcome): Screen {
   if (screen.kind !== 'signed_in' && screen.kind !== 'locked') return screen;
@@ -59,12 +62,22 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   const lockWatched = screen.kind === 'signed_in' || screen.kind === 'locked';
   useEffect(() => {
     if (!services || !lockWatched) return undefined;
+    let failures = 0;
     const monitor = startLockMonitor({
       db: services.db,
       clock: services.clock,
       scheduler,
       appState,
-      onOutcome: (outcome) => setScreen((current) => applyOutcome(current, outcome)),
+      onOutcome: (outcome) => {
+        failures = 0;
+        setScreen((current) => applyOutcome(current, outcome));
+      },
+      onError: () => {
+        failures += 1;
+        // One transient error must not lock a working inspector; two in a row fail closed, as the sign-in path does.
+        // A lock that is already showing keeps its own reason. The next good evaluation brings the work screen back.
+        if (failures >= LOCK_FAILURES_BEFORE_CLOSING) setScreen((current) => (current.kind === 'signed_in' ? { kind: 'locked', origin: current.origin, identity: current.identity, reason: 'expired' } : current));
+      },
     });
     return () => monitor.stop();
   }, [services, lockWatched, scheduler, appState]);

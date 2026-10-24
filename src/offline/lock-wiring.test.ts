@@ -104,6 +104,55 @@ describe('revoked comes only from a definitive signal', () => {
     expect(await lockedKey(world)).toBeNull();
   });
 
+  async function revokeViaSession(world: World): Promise<void> {
+    world.server.queue('/api/client/session', unauthorized);
+    world.server.queue('/api/client/session', unauthorized);
+    expect((await world.services.tokens.checkSession(world.server.origin, { ignoreBackoff: true })).kind).toBe('relogin');
+    expect((await loadLockState(world.db)).revoked).toBe(true);
+  }
+
+  it('a refresh-only success does not clear a revocation, now or after a restart, and moves only the verification time', async () => {
+    const world = await createSignedInWorld();
+    await revokeViaSession(world);
+    const before = await loadLockState(world.db);
+    world.clock.advance(1000);
+    expect((await world.services.tokens.refresh(world.server.origin, { ignoreBackoff: true })).kind).toBe('ok');
+    expect((await world.services.tokens.getAccessToken(world.server.origin))?.length).toBeGreaterThan(0);
+    const after = await loadLockState(world.db);
+    expect(after.revoked).toBe(true);
+    expect(after.lastVerifiedAt).toBe(START + 1000);
+    expect(after.maxSeenTime).toBe(before.maxSeenTime);
+    expect(await lockedKey(world)).toBe('revoked');
+    expect(await decideScreen(restartOffline(world).services, SECURE)).toMatchObject({ kind: 'locked', reason: 'revoked' });
+  });
+
+  it('a refresh that succeeds and a session fetch that then fails on the network leaves the revocation in place', async () => {
+    const world = await createSignedInWorld();
+    await revokeViaSession(world);
+    world.server.queue('/api/client/session', () => {
+      throw new TypeError('network down');
+    });
+    expect((await world.services.tokens.checkSession(world.server.origin, { ignoreBackoff: true })).kind).toBe('retry');
+    expect((await loadLockState(world.db)).revoked).toBe(true);
+    expect(await decideScreen(restartOffline(world).services, SECURE)).toMatchObject({ kind: 'locked', reason: 'revoked' });
+  });
+
+  it('control: a session-confirmed success clears the revocation', async () => {
+    const world = await createSignedInWorld();
+    await revokeViaSession(world);
+    expect((await world.services.tokens.checkSession(world.server.origin, { ignoreBackoff: true })).kind).toBe('ok');
+    expect((await loadLockState(world.db)).revoked).toBe(false);
+    expect((await decideScreen(restartOffline(world).services, SECURE)).kind).toBe('signed_in');
+  });
+
+  it('control: a sign-in for a different identity does not clear the revocation', async () => {
+    const world = await createSignedInWorld();
+    await revokeViaSession(world);
+    world.server.queue('/api/client/session', session('inspector', 'someone-else'));
+    await expect(world.services.flow.signIn(world.server.origin)).rejects.toMatchObject({ code: 'identity_mismatch' });
+    expect((await loadLockState(world.db)).revoked).toBe(true);
+  });
+
   it('signing in successfully again clears a revocation', async () => {
     const world = await createSignedInWorld();
     world.server.queue('/api/client/session', session('client'));

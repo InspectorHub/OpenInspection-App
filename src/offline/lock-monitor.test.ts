@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { rowCounts, seedLocalData } from '../app/test-support/world';
 import { createManualClock, type ManualClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
@@ -129,6 +130,42 @@ describe('app resume', () => {
   });
 });
 
+describe('locking mid-session deletes nothing', () => {
+  const DATA_TABLES = ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package'];
+
+  async function expectDataKept(before: Record<string, number>): Promise<void> {
+    const after = await rowCounts(db);
+    for (const table of DATA_TABLES) {
+      expect(before[table], `${table} was seeded`).toBeGreaterThan(0);
+      expect(after[table], table).toBe(before[table]);
+    }
+  }
+
+  it('an interval tick that locks leaves every data row in place', async () => {
+    const { scheduler, outcomes, reported, monitor } = setup();
+    await seedLocalData(db);
+    const before = await rowCounts(db);
+    clock.advance(31 * DAY_MS);
+    scheduler.tick();
+    await reported(1);
+    expect(outcomes[0]).toEqual({ locked: true, reason: 'expired' });
+    await expectDataKept(before);
+    monitor.stop();
+  });
+
+  it('a resume that locks leaves every data row in place', async () => {
+    const { appState, outcomes, reported, monitor } = setup();
+    await seedLocalData(db);
+    const before = await rowCounts(db);
+    await setRevoked(db);
+    appState.emit(true);
+    await reported(1);
+    expect(outcomes[0]).toEqual({ locked: true, reason: 'revoked' });
+    await expectDataKept(before);
+    monitor.stop();
+  });
+});
+
 describe('stop', () => {
   it('removes the interval and the resume listener and ignores a result still in flight', async () => {
     const { scheduler, appState, outcomes, monitor } = setup();
@@ -178,6 +215,50 @@ describe('an evaluation that fails', () => {
     await monitor.checkNow();
     expect(outcomes).toEqual([]);
     expect(errors).toHaveLength(1);
+    monitor.stop();
+  });
+});
+
+describe('a verification recorded while an evaluation is loading', () => {
+  it('discards the stale answer and evaluates again, so a locked screen is never reported after the unlock', async () => {
+    await setRevoked(db);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const loading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let gated = true;
+    const slow: Db = {
+      ...db,
+      query: async <T,>(sql: string, params?: unknown[]): Promise<T[]> => {
+        const rows = await db.query<T>(sql, params);
+        if (!gated) return rows;
+        gated = false;
+        entered();
+        await gate;
+        return rows;
+      },
+    };
+    const outcomes: LockOutcome[] = [];
+    const monitor = startLockMonitor({ db: slow, clock, scheduler: fakeScheduler(), onOutcome: (o) => outcomes.push(o) });
+    const running = monitor.checkNow();
+    await loading;
+    await recordVerified(db, NOW, 30);
+    release();
+    await running;
+    expect(outcomes).toEqual([{ locked: false }]);
+    monitor.stop();
+  });
+
+  it('control: with nothing recorded meanwhile, the answer that was loaded is reported', async () => {
+    await setRevoked(db);
+    const outcomes: LockOutcome[] = [];
+    const monitor = startLockMonitor({ db, clock, scheduler: fakeScheduler(), onOutcome: (o) => outcomes.push(o) });
+    await monitor.checkNow();
+    expect(outcomes).toEqual([{ locked: true, reason: 'revoked' }]);
     monitor.stop();
   });
 });
