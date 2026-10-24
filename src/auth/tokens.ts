@@ -103,7 +103,9 @@ export function parseTokenResponse(json: unknown, requireScope: boolean): TokenR
   ) {
     return { ok: false, reason: 'malformed' };
   }
-  if (body.scope === undefined ? requireScope : body.scope !== NATIVE_SCOPE) return { ok: false, reason: 'scope', refreshToken };
+  // A missing scope is acceptable on a refresh (the grant keeps its scope) but not on the first sign-in.
+  const scopeAcceptable = body.scope === undefined ? !requireScope : body.scope === NATIVE_SCOPE;
+  if (!scopeAcceptable) return { ok: false, reason: 'scope', refreshToken };
   return { ok: true, tokens: { accessToken, refreshToken, expiresInSec: expires } };
 }
 
@@ -127,8 +129,12 @@ export interface TokenManager {
   /** The access token for `origin`, refreshing when it is close to expiry; null when there is none to give. */
   getAccessToken(origin: string): Promise<string | null>;
   refresh(origin: string, options?: { ignoreBackoff?: boolean }): Promise<RefreshResult>;
-  /** `/api/client/session` with a fresh token; a 401 that survives one refresh means the session is over. */
-  checkSession(origin: string): Promise<SessionCheck>;
+  /**
+   * `/api/client/session` with a fresh token; a 401 that survives one refresh means the session is over.
+   * A server-set backoff holds the check back; `ignoreBackoff` is for an explicit user action (a pull to
+   * refresh, a "try again" tap), which must not wait out a Retry-After the user cannot see.
+   */
+  checkSession(origin: string, options?: { ignoreBackoff?: boolean }): Promise<SessionCheck>;
   getState(origin: string): Promise<AuthState>;
   /** Makes `origin` the active server, dropping any in-memory token that belonged to another. */
   useOrigin(origin: string): void;
@@ -147,11 +153,19 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   const generations = new Map<string, number>();
   const flights = new Map<string, Promise<RefreshResult>>();
   const relogin = new Set<string>();
+  /** Origins whose sign-out has started and not yet finished (a count, so overlapping sign-outs nest). */
+  const signingOut = new Map<string, number>();
   const backoff = new Map<string, { until: number; attempt: number }>();
   let activeOrigin: string | null = null;
   let access: { token: string; expiresAt: number } | null = null;
 
   const generationOf = (origin: string): number => generations.get(origin) ?? 0;
+  const bumpGeneration = (origin: string): void => {
+    generations.set(origin, generationOf(origin) + 1);
+  };
+  const isSigningOut = (origin: string): boolean => (signingOut.get(origin) ?? 0) > 0;
+  /** True when the flight that started at `generation` has been overtaken by a sign-out or a new sign-in. */
+  const superseded = (origin: string, generation: number): boolean => generationOf(origin) !== generation || isSigningOut(origin);
 
   function useOrigin(origin: string): void {
     if (activeOrigin !== origin) access = null;
@@ -189,7 +203,12 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       return retry(origin, 'storage', null);
     }
     if (!current) return { kind: 'signed_out' };
-    const clientId = await deps.getClientId(origin);
+    let clientId: string | null;
+    try {
+      clientId = await deps.getClientId(origin);
+    } catch {
+      return retry(origin, 'storage', null);
+    }
     if (!clientId) return { kind: 'relogin' };
 
     let res;
@@ -207,7 +226,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     if (res.status !== 200) {
       const failure = classifyTokenFailure(res.status, res.text, res.retryAfterMs);
       if (failure.kind === 'relogin') {
-        if (generationOf(origin) !== generation) return { kind: 'signed_out' };
+        if (superseded(origin, generation)) return { kind: 'signed_out' };
         relogin.add(origin);
         if (activeOrigin === origin) access = null;
         return { kind: 'relogin' };
@@ -219,7 +238,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     if (!parsed.ok) return retry(origin, 'malformed', null);
     const next = parsed.tokens;
 
-    if (generationOf(origin) !== generation) {
+    if (superseded(origin, generation)) {
       // Signed out while the request was in flight: the server has already rotated the grant,
       // so the new token is the live one. Revoke it and store nothing.
       await revoke(origin, next.refreshToken);
@@ -233,6 +252,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       return retry(origin, 'storage', null);
     }
 
+    if (superseded(origin, generation)) return { kind: 'signed_out' };
     const expiresAt = deps.clock.now() + next.expiresInSec * 1000;
     if (activeOrigin === origin) access = { token: next.accessToken, expiresAt };
     relogin.delete(origin);
@@ -242,6 +262,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
 
   function refresh(origin: string, options: { ignoreBackoff?: boolean } = {}): Promise<RefreshResult> {
     useOrigin(origin);
+    if (isSigningOut(origin)) return Promise.resolve({ kind: 'signed_out' });
     const running = flights.get(origin);
     if (running) return running;
     const waiting = backoff.get(origin);
@@ -257,15 +278,17 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
 
   async function getAccessToken(origin: string): Promise<string | null> {
     useOrigin(origin);
+    if (isSigningOut(origin)) return null;
     if (access && access.expiresAt - REFRESH_EARLY_MS > deps.clock.now()) return access.token;
     const result = await refresh(origin);
     return result.kind === 'ok' ? result.accessToken : null;
   }
 
-  async function checkSession(origin: string): Promise<SessionCheck> {
+  async function checkSession(origin: string, options: { ignoreBackoff?: boolean } = {}): Promise<SessionCheck> {
     useOrigin(origin);
+    if (isSigningOut(origin)) return { kind: 'signed_out' };
     if (access && access.expiresAt - REFRESH_EARLY_MS > deps.clock.now()) return checkWith(origin, access.token);
-    const refreshed = await refresh(origin);
+    const refreshed = await refresh(origin, options);
     return refreshed.kind === 'ok' ? checkWith(origin, refreshed.accessToken) : refreshed;
   }
 
@@ -277,6 +300,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       if (again.kind !== 'ok') return again;
       const second = await fetchSession(deps.http, origin, again.accessToken);
       if (second.kind === 'ok') return second;
+      if (isSigningOut(origin)) return { kind: 'signed_out' };
       relogin.add(origin);
       access = null;
       return { kind: 'relogin' };
@@ -288,6 +312,10 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   return {
     adopt: async (origin, tokens) => {
       useOrigin(origin);
+      // A refresh that began before this sign-in belongs to the previous grant: supersede it, and let it
+      // finish (it stores nothing and revokes what it rotated) before the new token is written.
+      bumpGeneration(origin);
+      await flights.get(origin)?.catch(() => undefined);
       try {
         await deps.store.set(refreshTokenKey(origin), tokens.refreshToken);
       } catch {
@@ -301,23 +329,35 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     refresh,
     checkSession,
     getState: async (origin) => {
+      if (isSigningOut(origin)) return 'signed_out';
       if (relogin.has(origin)) return 'relogin_required';
       return (await deps.store.get(refreshTokenKey(origin))) ? 'signed_in' : 'signed_out';
     },
     useOrigin,
     signOut: async (origin) => {
-      generations.set(origin, generationOf(origin) + 1);
-      await flights.get(origin)?.catch(() => undefined);
-      const key = refreshTokenKey(origin);
-      const stored = await deps.store.get(key).catch(() => null);
+      // The marker goes up before the first await and comes down only after the remove, so no refresh can
+      // read the key, post it and store a rotated token in the gap.
+      signingOut.set(origin, (signingOut.get(origin) ?? 0) + 1);
+      bumpGeneration(origin);
+      let stored: string | null;
       try {
-        await deps.store.remove(key);
-      } catch {
-        throw new AuthError('storage_failed');
+        await flights.get(origin)?.catch(() => undefined);
+        const key = refreshTokenKey(origin);
+        stored = await deps.store.get(key).catch(() => null);
+        try {
+          await deps.store.remove(key);
+        } catch {
+          throw new AuthError('storage_failed');
+        }
+        relogin.delete(origin);
+        backoff.delete(origin);
+        if (activeOrigin === origin) access = null;
+        bumpGeneration(origin);
+      } finally {
+        const left = (signingOut.get(origin) ?? 1) - 1;
+        if (left > 0) signingOut.set(origin, left);
+        else signingOut.delete(origin);
       }
-      relogin.delete(origin);
-      backoff.delete(origin);
-      if (activeOrigin === origin) access = null;
       if (stored) await revoke(origin, stored);
     },
     revokeRefreshToken: (origin, refreshToken) => revoke(origin, refreshToken),

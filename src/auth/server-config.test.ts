@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
-import { migrate } from '../platform/schema';
+import { isDeviceStateKey, migrate } from '../platform/schema';
 import { isAuthError } from './errors';
 import { createHttp, type FetchLike } from './http';
 import {
@@ -16,6 +16,7 @@ import {
   saveClientId,
   saveIdentity,
   serverEndpoints,
+  writeDeviceState,
 } from './server-config';
 import { createFakeServer } from './test-support/fake-server';
 
@@ -192,6 +193,21 @@ describe('device_state helpers', () => {
     await clearClientId(db, 'https://a.example.com');
     expect(await loadClientId(db, 'https://a.example.com')).toBeNull();
     expect(await loadClientId(db, 'https://b.example.com')).toBe('client-b');
+  });
+
+  it('every key the auth layer writes is a declared device_state key (positive control: the rows exist)', async () => {
+    await saveClientId(db, 'https://a.example.com', 'client-a');
+    await saveIdentity(db, { userId: 'u1', tenantId: 't1', role: 'manager' });
+    const keys = (await db.query<{ key: string }>('SELECT key FROM device_state')).map((r) => r.key);
+    expect(keys.length).toBeGreaterThanOrEqual(4);
+    for (const key of keys) expect(isDeviceStateKey(key), key).toBe(true);
+  });
+
+  it('writeDeviceState refuses an undeclared key and writes nothing', async () => {
+    await expect(writeDeviceState(db, 'not_a_declared_key', 'x')).rejects.toThrow(/device_state key/i);
+    expect(await db.query('SELECT key FROM device_state')).toEqual([]);
+    await writeDeviceState(db, 'role', 'owner');
+    expect(await db.query('SELECT key, value FROM device_state')).toEqual([{ key: 'role', value: 'owner' }]);
   });
 
   it('round-trips the signed-in identity and reports none when absent', async () => {

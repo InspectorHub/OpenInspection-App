@@ -4,6 +4,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import type { AuthSession } from './auth-session';
+import { createAndroidAuthSession } from './auth-session';
 import { AuthError, isAuthError } from './errors';
 import { createHttp, type FetchLike } from './http';
 import { buildAuthorizeUrl, createLoginFlow, parseCallback, type LoginFlow } from './pkce-login';
@@ -24,7 +25,7 @@ interface Rig {
   started: string[];
 }
 
-async function rig(options: { server?: FakeServer; session?: (authUrl: string, server: FakeServer, clock: ManualClock) => Promise<string>; fetch?: FetchLike } = {}): Promise<Rig> {
+async function rig(options: { server?: FakeServer; session?: (authUrl: string, server: FakeServer, clock: ManualClock) => Promise<string>; fetch?: FetchLike; cancelSession?: () => void; authSession?: AuthSession } = {}): Promise<Rig> {
   const server = options.server ?? createFakeServer();
   const db = await createSqlJsDb();
   await migrate(db, 0);
@@ -34,11 +35,13 @@ async function rig(options: { server?: FakeServer; session?: (authUrl: string, s
   const registrar = createRegistrar({ http, db });
   const tokens = createTokenManager({ http, store, clock, getClientId: (origin) => loadClientId(db, origin), random: () => 1 });
   const started: string[] = [];
-  const authSession: AuthSession = {
+  const authSession: AuthSession = options.authSession ?? {
     start: (url) => {
       started.push(url);
       return options.session ? options.session(url, server, clock) : server.authSession.start(url, 'io.inspectorhub.app');
     },
+    cancel: () => options.cancelSession?.(),
+    onBrowserClosed: (listener) => server.authSession.onBrowserClosed(listener),
   };
   const flow = createLoginFlow({ http, db, registrar, tokens, authSession, clock });
   return { server, db, store, clock, flow, started };
@@ -311,6 +314,116 @@ describe('dismissal and concurrency (P0-12, P1)', () => {
     await a;
     expect(r.started).toHaveLength(1);
     expect(r.server.count('/oauth/register')).toBe(1);
+  });
+});
+
+describe('one login at a time, cancel and expiry (review wave)', () => {
+  it('rejects sign_in_in_progress for a different origin while one is running; the same origin shares the promise (positive control)', async () => {
+    const r = await rig();
+    const a = r.flow.signIn(r.server.origin);
+    expect(await codeOf(r.flow.signIn('https://other.example.test'))).toBe('sign_in_in_progress');
+    expect(r.flow.signIn(r.server.origin)).toBe(a);
+    await expect(a).resolves.toBeDefined();
+    expect(r.started).toHaveLength(1);
+    await expect(r.flow.signIn(r.server.origin)).resolves.toBeDefined();
+  });
+
+  it('cancel() ends the waiting login as cancelled, clears the pending record, and a new login then works', async () => {
+    let reject: (e: Error) => void = () => undefined;
+    const r = await rig({
+      session: () =>
+        new Promise<string>((_resolve, rej) => {
+          reject = rej;
+        }),
+      cancelSession: () => reject(new AuthError('sign_in_cancelled')),
+    });
+    const attempt = r.flow.signIn(r.server.origin);
+    const outcome = codeOf(attempt);
+    while (r.started.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(r.flow.hasPending()).toBe(true);
+    r.flow.cancel();
+    expect(await outcome).toBe('sign_in_cancelled');
+    expect(r.flow.hasPending()).toBe(false);
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(0);
+    r.server.authorizeMode = 'approve';
+    const next = await rig({ server: r.server });
+    await expect(next.flow.signIn(next.server.origin)).resolves.toBeDefined();
+  });
+
+  it('forwards the browser-closed hint without ending the login', async () => {
+    const r = await rig();
+    let hints = 0;
+    r.flow.onBrowserClosed(() => {
+      hints += 1;
+    });
+    await r.flow.signIn(r.server.origin);
+    expect(hints).toBe(0);
+  });
+
+  describe('with the real Android session and fake timers', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a login whose callback never arrives expires, clears both pending records, and a later sign-in works', async () => {
+      const opened: string[] = [];
+      let closed = 0;
+      const never = createAndroidAuthSession({
+        browser: {
+          open: ({ url }) => {
+            opened.push(url);
+            return Promise.resolve();
+          },
+          close: () => {
+            closed += 1;
+            return Promise.resolve();
+          },
+          addListener: () => Promise.resolve({ remove: () => Promise.resolve() }),
+        },
+        app: { addListener: () => Promise.resolve({ remove: () => Promise.resolve() }) },
+        timeoutMs: 60_000,
+      });
+      const r = await rig({ authSession: never });
+      vi.useFakeTimers();
+      const outcome = codeOf(r.flow.signIn(r.server.origin));
+      for (let i = 0; i < 100 && opened.length === 0; i += 1) await vi.advanceTimersByTimeAsync(10);
+      expect(opened).toHaveLength(1);
+      expect(r.flow.hasPending()).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await outcome).toBe('sign_in_expired');
+      expect(r.flow.hasPending()).toBe(false);
+      expect(closed).toBe(1);
+      expect(tokenPosts(r.server, 'authorization_code')).toBe(0);
+      vi.useRealTimers();
+      const again = await rig({ server: r.server });
+      await expect(again.flow.signIn(again.server.origin)).resolves.toBeDefined();
+    });
+  });
+});
+
+describe('a callback delivered through handleCallback while signIn waits', () => {
+  it('settles the signIn exactly once with the success, never sign_in_expired afterwards', async () => {
+    let seen = '';
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const r = await rig({
+      session: async (authUrl, server) => {
+        seen = await server.authorize(authUrl);
+        await gate;
+        return seen;
+      },
+    });
+    const attempt = r.flow.signIn(r.server.origin);
+    const outcome = codeOf(attempt);
+    while (seen === '') await new Promise((resolve) => setTimeout(resolve, 1));
+    const viaCallback = await r.flow.handleCallback(seen);
+    expect(viaCallback?.origin).toBe(r.server.origin);
+    open();
+    expect(await outcome).toBe('resolved');
+    expect(tokenPosts(r.server, 'authorization_code')).toBe(1);
+    expect(r.flow.hasPending()).toBe(false);
   });
 });
 

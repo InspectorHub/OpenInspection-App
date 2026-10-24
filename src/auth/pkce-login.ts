@@ -1,14 +1,14 @@
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier, generateRandomState } from 'oauth4webapi';
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
-import { CALLBACK_SCHEME, parseCallbackUrl, REDIRECT_URI, type AuthSession } from './auth-session';
+import { CALLBACK_SCHEME, parseCallbackUrl, PENDING_LOGIN_TTL_MS, REDIRECT_URI, type AuthSession } from './auth-session';
 import { AuthError, isAuthError } from './errors';
 import type { Http } from './http';
 import type { Registrar } from './registration';
 import { fetchSession, loadIdentity, saveIdentity, serverEndpoints, type SessionInfo } from './server-config';
 import { NATIVE_SCOPE, oauthErrorCode, parseTokenResponse, type TokenManager, type TokenResponse } from './tokens';
 
-export const PENDING_LOGIN_TTL_MS = 10 * 60_000;
+export { PENDING_LOGIN_TTL_MS };
 const MAX_CODE_LENGTH = 2048;
 const ALLOWED_ROLES = ['owner', 'manager', 'inspector'];
 
@@ -28,15 +28,26 @@ export interface SignInResult {
 }
 
 export interface LoginFlow {
-  /** Runs one sign-in; a second call while one is running returns the same promise. */
+  /**
+   * Runs one sign-in. A second call for the same origin while one is running returns the
+   * same promise; a call for another origin rejects `sign_in_in_progress`.
+   */
   signIn(origin: string): Promise<SignInResult>;
   /**
-   * Feeds a callback URL that arrived outside `signIn`. Returns null, with no
-   * network call and no state change, when the URL is not the callback or no
-   * login is waiting for it.
+   * Feeds a callback URL that arrived outside the auth session's own listener. When a login is
+   * waiting for it the URL is handed to that login and the returned promise is that login's own
+   * outcome, so the login settles exactly once. Returns null, with no network call and no state
+   * change, when the URL is not the callback or no login is waiting for it.
    */
   handleCallback(url: string): Promise<SignInResult | null>;
   hasPending(): boolean;
+  /** Ends a login that is waiting for its callback, as `sign_in_cancelled`. For the UI's cancel button. */
+  cancel(): void;
+  /**
+   * The browser reported that it closed. The login is still alive (the callback may be on its way);
+   * a UI can use this to offer a cancel button. Returns an unsubscribe function.
+   */
+  onBrowserClosed(listener: () => void): () => void;
 }
 
 export function buildAuthorizeUrl(args: { origin: string; clientId: string; challenge: string; state: string }): string {
@@ -66,6 +77,8 @@ interface Pending {
   origin: string;
   clientId: string;
   createdAt: number;
+  /** Hands the login a callback URL that reached the app by another route. */
+  deliver(url: string): void;
 }
 
 function single(params: URLSearchParams, name: string): string | null {
@@ -77,6 +90,7 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
   const ttl = deps.ttlMs ?? PENDING_LOGIN_TTL_MS;
   let pending: Pending | null = null;
   let running: Promise<SignInResult> | null = null;
+  let runningOrigin: string | null = null;
 
   /** Consumes the pending login: it can be taken once, and never after its TTL. */
   function take(): Pending | null {
@@ -139,18 +153,14 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
   }
 
   /** Validates a callback against the pending login and exchanges its code. */
-  async function complete(url: string, strict: boolean): Promise<SignInResult | null> {
+  async function complete(url: string): Promise<SignInResult> {
     const params = parseCallbackUrl(url, CALLBACK_SCHEME);
     if (!params) {
-      if (!strict) return null;
       pending = null;
       throw new AuthError('callback_invalid');
     }
     const p = take();
-    if (!p) {
-      if (!strict) return null;
-      throw new AuthError('sign_in_expired');
-    }
+    if (!p) throw new AuthError('sign_in_expired');
     if (single(params, 'state') !== p.state) throw new AuthError('callback_invalid');
     if (params.has('error')) throw new AuthError('sign_in_denied');
     const issuers = params.getAll('iss');
@@ -171,17 +181,32 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
     }
     const clientId = await deps.registrar.ensureClientId(origin);
     const state = generateRandomState();
-    pending = { state, verifier, origin, clientId, createdAt: deps.clock.now() };
+    let delivered: (url: string) => void = () => undefined;
+    let fromDelivery = false;
+    const delivery = new Promise<string>((resolve) => {
+      delivered = resolve;
+    });
+    pending = {
+      state,
+      verifier,
+      origin,
+      clientId,
+      createdAt: deps.clock.now(),
+      deliver: (url) => {
+        fromDelivery = true;
+        delivered(url);
+      },
+    };
     let callback: string;
     try {
-      callback = await deps.authSession.start(buildAuthorizeUrl({ origin, clientId, challenge, state }), CALLBACK_SCHEME);
+      callback = await Promise.race([deps.authSession.start(buildAuthorizeUrl({ origin, clientId, challenge, state }), CALLBACK_SCHEME), delivery]);
     } catch (err) {
       pending = null;
       throw isAuthError(err) ? err : new AuthError('sign_in_failed');
     }
-    const result = await complete(callback, true);
-    if (!result) throw new AuthError('sign_in_failed');
-    return result;
+    // The callback came through `handleCallback`, so the session may still be waiting: release it.
+    if (fromDelivery) deps.authSession.cancel();
+    return complete(callback);
   }
 
   async function run(origin: string): Promise<SignInResult> {
@@ -199,23 +224,28 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
 
   return {
     signIn: (origin) => {
-      if (running) return running;
+      if (running) return runningOrigin === origin ? running : Promise.reject(new AuthError('sign_in_in_progress'));
       const started = run(origin);
       const clear = (): void => {
         running = null;
+        runningOrigin = null;
       };
       started.then(clear, clear);
       running = started;
+      runningOrigin = origin;
       return started;
     },
-    handleCallback: async (url) => {
-      try {
-        return await complete(url, false);
-      } catch (err) {
-        if (err instanceof ClientRejected) throw new AuthError('registration_failed');
-        throw err;
-      }
+    handleCallback: (url) => {
+      if (!parseCallbackUrl(url, CALLBACK_SCHEME)) return Promise.resolve(null);
+      const waiting = pending;
+      if (!waiting || !running || deps.clock.now() - waiting.createdAt > ttl) return Promise.resolve(null);
+      waiting.deliver(url);
+      return running;
     },
     hasPending: () => pending !== null && deps.clock.now() - pending.createdAt <= ttl,
+    cancel: () => {
+      deps.authSession.cancel();
+    },
+    onBrowserClosed: (listener) => deps.authSession.onBrowserClosed(listener),
   };
 }

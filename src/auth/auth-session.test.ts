@@ -117,26 +117,91 @@ describe('Android auth session (Custom Tab)', () => {
     expect(f.app.listeners).toBe(1);
   });
 
-  it('rejects as cancelled when the tab closes and no callback follows', async () => {
+  it('does not cancel when the tab reports finished: it tells listeners and keeps waiting, so a late callback still wins', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    let closedSignals = 0;
+    session.onBrowserClosed(() => {
+      closedSignals += 1;
+    });
+    const pending = session.start(AUTH_URL, SCHEME);
+    await vi.advanceTimersByTimeAsync(0);
+    f.browser.finish();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(closedSignals).toBe(1);
+    f.app.open(CALLBACK);
+    expect(await pending).toBe(CALLBACK);
+  });
+
+  it('cancel() rejects the waiting login as cancelled, closes the tab, and a new login then works', async () => {
     const f = fakes();
     const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
     const pending = session.start(AUTH_URL, SCHEME);
     const outcome = codeOf(pending);
     await vi.advanceTimersByTimeAsync(0);
-    f.browser.finish();
-    await vi.advanceTimersByTimeAsync(5_000);
+    session.cancel();
     expect(await outcome).toBe('sign_in_cancelled');
+    expect(f.browser.closed).toBe(1);
+    f.app.open(CALLBACK);
+    const again = session.start(AUTH_URL, SCHEME);
+    await vi.advanceTimersByTimeAsync(0);
+    f.app.open(CALLBACK);
+    expect(await again).toBe(CALLBACK);
   });
 
-  it('lets a callback that arrives just after the tab closes win (positive control for the dismissal grace)', async () => {
+  it('cancel() with nothing waiting does nothing', () => {
     const f = fakes();
     const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    expect(() => session.cancel()).not.toThrow();
+    expect(f.browser.closed).toBe(0);
+  });
+
+  it('onBrowserClosed returns an unsubscribe that stops the signals', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    let signals = 0;
+    const off = session.onBrowserClosed(() => {
+      signals += 1;
+    });
     const pending = session.start(AUTH_URL, SCHEME);
     await vi.advanceTimersByTimeAsync(0);
+    off();
     f.browser.finish();
-    await vi.advanceTimersByTimeAsync(100);
+    expect(signals).toBe(0);
     f.app.open(CALLBACK);
-    expect(await pending).toBe(CALLBACK);
+    await pending;
+  });
+
+  it('gives up with sign_in_expired when neither the callback nor a close ever arrives, and clears everything', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app, timeoutMs: 10_000 });
+    const pending = session.start(AUTH_URL, SCHEME);
+    const outcome = codeOf(pending);
+    await vi.advanceTimersByTimeAsync(9_999);
+    f.browser.finish();
+    let settled = false;
+    void pending.then(() => (settled = true), () => (settled = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBe('sign_in_expired');
+    expect(f.browser.closed).toBe(1);
+    expect(() => f.app.open(CALLBACK)).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('after an expiry a later login works and is not hit by the old timer', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app, timeoutMs: 10_000 });
+    const first = codeOf(session.start(AUTH_URL, SCHEME));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await first).toBe('sign_in_expired');
+    const second = session.start(AUTH_URL, SCHEME);
+    await vi.advanceTimersByTimeAsync(9_000);
+    f.app.open(CALLBACK);
+    expect(await second).toBe(CALLBACK);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('ignores a callback that arrives when no login is waiting', async () => {
@@ -150,8 +215,7 @@ describe('Android auth session (Custom Tab)', () => {
     const second = session.start(AUTH_URL, SCHEME);
     const outcome = codeOf(second);
     await vi.advanceTimersByTimeAsync(0);
-    f.browser.finish();
-    await vi.advanceTimersByTimeAsync(5_000);
+    session.cancel();
     expect(await outcome).toBe('sign_in_cancelled');
   });
 

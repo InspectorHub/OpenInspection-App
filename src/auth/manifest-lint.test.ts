@@ -66,11 +66,14 @@ function lintManifests(mainXml: string, debugXml: string, stringsXml: string): s
     if (other.attrs['android:exported'] === 'true') problems.push(`${other.tag} must not be exported`);
   }
 
-  const filters = activity ? find(activity, 'intent-filter') : [];
-  const viewFilter = filters.find((f) => find(f, 'action').some((a) => a.attrs['android:name'] === 'android.intent.action.VIEW'));
-  if (!viewFilter) {
-    problems.push('missing VIEW intent filter');
-  } else {
+  // Every VIEW filter of every activity and alias is checked, not just the first. The path attribute is
+  // not a filter: Android ignores `pathPrefix` on a `<data>` that has no host, so the exact callback
+  // match is made in code by `parseCallbackUrl`. It is allowed only in its one harmless form.
+  const viewFilters = [...find(main, 'activity'), ...find(main, 'activity-alias')]
+    .flatMap((a) => find(a, 'intent-filter'))
+    .filter((f) => find(f, 'action').some((a) => a.attrs['android:name'] === 'android.intent.action.VIEW'));
+  if (viewFilters.length === 0) problems.push('missing VIEW intent filter');
+  for (const viewFilter of viewFilters) {
     const cats = find(viewFilter, 'category').map((c) => c.attrs['android:name']);
     if (!cats.includes('android.intent.category.DEFAULT')) problems.push('VIEW filter needs DEFAULT');
     if (!cats.includes('android.intent.category.BROWSABLE')) problems.push('VIEW filter needs BROWSABLE');
@@ -78,7 +81,7 @@ function lintManifests(mainXml: string, debugXml: string, stringsXml: string): s
     const schemes = data.map((d) => resolveString(d.attrs['android:scheme'], strings)).filter(Boolean);
     if (schemes.length !== 1 || schemes[0] !== SCHEME) problems.push(`VIEW filter scheme must be exactly ${SCHEME}`);
     const prefixes = data.map((d) => d.attrs['android:pathPrefix']).filter(Boolean);
-    if (prefixes.length !== 1 || prefixes[0] !== PATH_PREFIX) problems.push(`VIEW filter pathPrefix must be exactly ${PATH_PREFIX}`);
+    if (prefixes.some((prefix) => prefix !== PATH_PREFIX)) problems.push(`VIEW filter pathPrefix, when present, must be exactly ${PATH_PREFIX}`);
     if (data.some((d) => d.attrs['android:host'] !== undefined || d.attrs['android:path'] !== undefined)) {
       problems.push('VIEW filter must not add other hosts or paths');
     }
@@ -118,9 +121,29 @@ describe('Android manifest lint (P0-13)', () => {
     expect(lintManifests(bad, GOOD_DEBUG, STRINGS)).toContain('VIEW filter scheme must be exactly io.inspectorhub.app');
   });
 
-  it('catches a missing or wrong path prefix', () => {
-    expect(lintManifests(GOOD_MAIN.replace(' android:pathPrefix="/oauth/callback"', ''), GOOD_DEBUG, STRINGS)).toContain('VIEW filter pathPrefix must be exactly /oauth/callback');
-    expect(lintManifests(GOOD_MAIN.replace('/oauth/callback', '/'), GOOD_DEBUG, STRINGS)).toContain('VIEW filter pathPrefix must be exactly /oauth/callback');
+  it('allows pathPrefix to be absent (it is not what filters) but refuses a different one', () => {
+    expect(lintManifests(GOOD_MAIN.replace(' android:pathPrefix="/oauth/callback"', ''), GOOD_DEBUG, STRINGS)).toEqual([]);
+    expect(lintManifests(GOOD_MAIN.replace('/oauth/callback', '/'), GOOD_DEBUG, STRINGS)).toContain('VIEW filter pathPrefix, when present, must be exactly /oauth/callback');
+  });
+
+  const SECOND_FILTER = (scheme: string): string => `<intent-filter>
+      <action android:name="android.intent.action.VIEW" />
+      <category android:name="android.intent.category.DEFAULT" />
+      <category android:name="android.intent.category.BROWSABLE" />
+      <data android:scheme="${scheme}" />
+    </intent-filter>`;
+
+  it('checks every VIEW filter, not only the first (positive control: a second correct filter passes)', () => {
+    const withSecond = (scheme: string): string => GOOD_MAIN.replace('</activity>', `${SECOND_FILTER(scheme)}</activity>`);
+    expect(lintManifests(withSecond('io.inspectorhub.app'), GOOD_DEBUG, STRINGS)).toEqual([]);
+    expect(lintManifests(withSecond('evil.app'), GOOD_DEBUG, STRINGS)).toContain('VIEW filter scheme must be exactly io.inspectorhub.app');
+  });
+
+  it('checks the VIEW filters of an activity-alias too (positive control: a correct alias passes)', () => {
+    const withAlias = (scheme: string): string =>
+      GOOD_MAIN.replace('</application>', `<activity-alias android:name=".Alias" android:targetActivity=".MainActivity" android:exported="true">${SECOND_FILTER(scheme)}</activity-alias></application>`);
+    expect(lintManifests(withAlias('io.inspectorhub.app'), GOOD_DEBUG, STRINGS)).toEqual([]);
+    expect(lintManifests(withAlias('evil.app'), GOOD_DEBUG, STRINGS)).toContain('VIEW filter scheme must be exactly io.inspectorhub.app');
   });
 
   it('catches a second exported activity', () => {

@@ -259,6 +259,8 @@ export function createFakeServer(options: FakeServerOptions = {}): FakeServer {
         if (server.authorizeMode === 'dismiss') throw new AuthError('sign_in_cancelled');
         return authorize(url);
       },
+      cancel: () => undefined,
+      onBrowserClosed: () => () => undefined,
     },
   };
 

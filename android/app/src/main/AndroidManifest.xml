@@ -22,6 +22,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Matches on scheme only: Android ignores pathPrefix on a data element without a host.
+                 The exact callback path is enforced in code (parseCallbackUrl). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

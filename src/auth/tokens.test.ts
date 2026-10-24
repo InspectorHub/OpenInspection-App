@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createManualClock, type ManualClock } from '../platform/clock';
 import { createHttp, type FetchLike } from './http';
-import { backoffMs, classifyTokenFailure, createTokenManager, type TokenManager } from './tokens';
+import { backoffMs, classifyTokenFailure, createTokenManager, type TokenManager, type TokenResponse } from './tokens';
 import { refreshTokenKey } from './server-config';
 import { createFakeServer, s256, type FakeServer } from './test-support/fake-server';
 import { createMemorySecureStore, type MemorySecureStore } from './test-support/memory-secure-store';
@@ -18,6 +18,25 @@ interface Rig {
   fetch: FetchLike;
 }
 
+/** Runs one full authorization-code sign-in against the fake for an already registered client. */
+async function issueTokens(server: FakeServer, clientId: string): Promise<TokenResponse> {
+  const http = createHttp({ fetch: server.fetch });
+  const verifier = 'v'.repeat(43);
+  const challenge = await s256(verifier);
+  const callback = await server.authorize(
+    `${server.origin}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: REDIRECT, scope: 'native', code_challenge: challenge, code_challenge_method: 'S256', state: 's' }).toString()}`,
+  );
+  const code = new URL(callback).searchParams.get('code') ?? '';
+  const tok = await http.request({
+    url: `${server.origin}/oauth/token`,
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: clientId, code_verifier: verifier }).toString(),
+  });
+  const body = tok.json as { access_token: string; refresh_token: string; expires_in: number };
+  return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresInSec: body.expires_in };
+}
+
 /** Registers and signs in directly against the fake, then hands the tokens to a manager. */
 async function rig(options: { server?: FakeServer; store?: MemorySecureStore; clock?: ManualClock; fetch?: FetchLike } = {}): Promise<Rig> {
   const server = options.server ?? createFakeServer();
@@ -32,21 +51,8 @@ async function rig(options: { server?: FakeServer; store?: MemorySecureStore; cl
     body: JSON.stringify({ redirect_uris: [REDIRECT] }),
   });
   const clientId = (reg.json as { client_id: string }).client_id;
-  const verifier = 'v'.repeat(43);
-  const challenge = await s256(verifier);
-  const callback = await server.authorize(
-    `${server.origin}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: REDIRECT, scope: 'native', code_challenge: challenge, code_challenge_method: 'S256', state: 's' }).toString()}`,
-  );
-  const code = new URL(callback).searchParams.get('code') ?? '';
-  const tok = await http.request({
-    url: `${server.origin}/oauth/token`,
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: clientId, code_verifier: verifier }).toString(),
-  });
-  const body = tok.json as { access_token: string; refresh_token: string; expires_in: number };
   const manager = createTokenManager({ http, store, clock, getClientId: () => Promise.resolve(clientId), random: () => 1 });
-  await manager.adopt(server.origin, { accessToken: body.access_token, refreshToken: body.refresh_token, expiresInSec: body.expires_in });
+  await manager.adopt(server.origin, await issueTokens(server, clientId));
   return { server, store, clock, manager, clientId, origin: server.origin, fetch };
 }
 
@@ -397,5 +403,126 @@ describe('session check (P0-8, 401 from /api/client/session)', () => {
     await offline.adopt(r.origin, { accessToken: 'a', refreshToken: r.store.entries()[refreshTokenKey(r.origin)] ?? 'x', expiresInSec: 3600 });
     expect(await offline.checkSession(r.origin)).toMatchObject({ kind: 'retry', reason: 'network' });
     expect(await offline.getState(r.origin)).toBe('signed_in');
+  });
+});
+
+describe('sign-out race (marker held for the whole sign-out)', () => {
+  const key = (): string => refreshTokenKey(r.origin);
+
+  it.each([0, 1, 2, 3, 5, 8])('a refresh started %i microtasks after signOut() was called sends nothing and leaves the store empty', async (ticks) => {
+    const before = refreshPosts(r.server);
+    const signingOut = r.manager.signOut(r.origin);
+    for (let i = 0; i < ticks; i += 1) await Promise.resolve();
+    const result = await r.manager.refresh(r.origin);
+    await signingOut;
+    expect(result.kind).toBe('signed_out');
+    expect(refreshPosts(r.server)).toBe(before);
+    expect(r.store.entries()[key()]).toBeUndefined();
+    expect(await r.manager.getState(r.origin)).toBe('signed_out');
+  });
+
+  it('getAccessToken, checkSession and getState answer signed-out during the sign-out even with a cached access token', async () => {
+    const sessionCalls = r.server.count('/api/client/session');
+    const signingOut = r.manager.signOut(r.origin);
+    expect(await r.manager.getAccessToken(r.origin)).toBeNull();
+    expect(await r.manager.checkSession(r.origin)).toEqual({ kind: 'signed_out' });
+    expect(await r.manager.getState(r.origin)).toBe('signed_out');
+    await signingOut;
+    expect(r.server.count('/api/client/session')).toBe(sessionCalls);
+    expect(r.store.entries()[key()]).toBeUndefined();
+  });
+
+  it('a refresh started after the sign-out finished returns signed_out; signing in again then works (positive control)', async () => {
+    await r.manager.signOut(r.origin);
+    const posts = refreshPosts(r.server);
+    expect((await r.manager.refresh(r.origin)).kind).toBe('signed_out');
+    expect(refreshPosts(r.server)).toBe(posts);
+    await r.manager.adopt(r.origin, await issueTokens(r.server, r.clientId));
+    expect(await r.manager.getState(r.origin)).toBe('signed_in');
+    expect((await r.manager.refresh(r.origin)).kind).toBe('ok');
+    expect(refreshPosts(r.server)).toBe(posts + 1);
+    expect(r.store.entries()[key()]).toBeDefined();
+  });
+
+  it('a relogin verdict from a flight that was overtaken by sign-out does not mark the origin', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gated: FetchLike = async (url, init) => {
+      if (typeof init.body === 'string' && init.body.includes('grant_type=refresh_token')) await gate;
+      return r.server.fetch(url, init);
+    };
+    const m = createTokenManager({ http: createHttp({ fetch: gated }), store: r.store, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    r.server.queue('/oauth/token', () => new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 }));
+    const inFlight = m.refresh(r.origin);
+    await Promise.resolve();
+    const signingOut = m.signOut(r.origin);
+    release();
+    await Promise.all([inFlight, signingOut]);
+    expect(await m.getState(r.origin)).toBe('signed_out');
+  });
+});
+
+describe('adopt supersedes a stale refresh flight', () => {
+  function gatedManager(): { m: TokenManager; release: () => void } {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gated: FetchLike = async (url, init) => {
+      if (typeof init.body === 'string' && init.body.includes('grant_type=refresh_token')) await gate;
+      return r.server.fetch(url, init);
+    };
+    const m = createTokenManager({ http: createHttp({ fetch: gated }), store: r.store, clock: r.clock, getClientId: () => Promise.resolve(r.clientId), random: () => 1 });
+    return { m, release: () => release() };
+  }
+
+  it('a flight that finishes after adopt cannot overwrite the fresh sign-in token', async () => {
+    const { m, release } = gatedManager();
+    const inFlight = m.refresh(r.origin);
+    await Promise.resolve();
+    const fresh = await issueTokens(r.server, r.clientId);
+    const adopting = m.adopt(r.origin, fresh);
+    release();
+    const [result] = await Promise.all([inFlight, adopting]);
+    expect(result.kind).toBe('signed_out');
+    expect(r.store.entries()[refreshTokenKey(r.origin)]).toBe(fresh.refreshToken);
+    expect(await m.getAccessToken(r.origin)).toBe(fresh.accessToken);
+  });
+
+  it('a relogin verdict from a flight that began before adopt does not mark the fresh sign-in', async () => {
+    const { m, release } = gatedManager();
+    const fresh = await issueTokens(r.server, r.clientId);
+    r.server.queue('/oauth/token', () => new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 }));
+    const inFlight = m.refresh(r.origin);
+    await Promise.resolve();
+    const adopting = m.adopt(r.origin, fresh);
+    release();
+    await Promise.all([inFlight, adopting]);
+    expect(await m.getState(r.origin)).toBe('signed_in');
+  });
+});
+
+describe('storage and backoff edges', () => {
+  it('a failing client-id lookup is a retryable result for every caller, not a rejection', async () => {
+    const m = createTokenManager({ http: createHttp({ fetch: r.fetch }), store: r.store, clock: r.clock, getClientId: () => Promise.reject(new Error('db locked')), random: () => 1 });
+    const results = await Promise.all([m.refresh(r.origin), m.refresh(r.origin)]);
+    for (const x of results) expect(x).toMatchObject({ kind: 'retry', reason: 'storage' });
+    expect(refreshPosts(r.server)).toBe(0);
+  });
+
+  it('caps a huge Retry-After at one hour', async () => {
+    r.server.queue('/oauth/token', () => new Response('', { status: 429, headers: { 'retry-after': '99999999' } }));
+    expect(await r.manager.refresh(r.origin)).toMatchObject({ kind: 'retry', reason: 'rate_limited', retryAfterMs: 3_600_000 });
+  });
+
+  it('checkSession can bypass a server-set backoff on an explicit user action; without the option it is held back', async () => {
+    const short = await rig({ server: createFakeServer({ accessTtlSec: 100 }) });
+    short.server.queue('/oauth/token', () => new Response('', { status: 503, headers: { 'retry-after': '600' } }));
+    short.clock.advance(50_000);
+    expect(await short.manager.refresh(short.origin)).toMatchObject({ kind: 'retry', reason: 'unavailable' });
+    expect(await short.manager.checkSession(short.origin)).toMatchObject({ kind: 'retry', reason: 'backoff' });
+    expect((await short.manager.checkSession(short.origin, { ignoreBackoff: true })).kind).toBe('ok');
   });
 });

@@ -1,4 +1,5 @@
 import type { Db } from '../platform/db';
+import { assertDeviceStateKey } from '../platform/schema';
 import { AuthError } from './errors';
 import type { Http } from './http';
 
@@ -172,8 +173,14 @@ export async function loadClientId(db: Db, origin: string): Promise<string | nul
   return rows[0]?.value ?? null;
 }
 
+/** The one place the auth layer writes `device_state`: the key must be a declared one. */
+export async function writeDeviceState(db: Db, key: string, value: string): Promise<void> {
+  assertDeviceStateKey(key);
+  await db.run('INSERT OR REPLACE INTO device_state (key, value) VALUES (?, ?)', [key, value]);
+}
+
 export async function saveClientId(db: Db, origin: string, clientId: string): Promise<void> {
-  await db.run('INSERT OR REPLACE INTO device_state (key, value) VALUES (?, ?)', [clientIdKey(origin), clientId]);
+  await writeDeviceState(db, clientIdKey(origin), clientId);
 }
 
 export async function clearClientId(db: Db, origin: string): Promise<void> {
@@ -195,9 +202,8 @@ export async function loadIdentity(db: Db): Promise<StoredIdentity | null> {
 
 export async function saveIdentity(db: Db, identity: StoredIdentity): Promise<void> {
   await db.transaction(async (tx) => {
-    const sql = 'INSERT OR REPLACE INTO device_state (key, value) VALUES (?, ?)';
-    await tx.run(sql, ['user_id', identity.userId]);
-    await tx.run(sql, ['tenant_id', identity.tenantId]);
-    await tx.run(sql, ['role', identity.role]);
+    await writeDeviceState(tx, 'user_id', identity.userId);
+    await writeDeviceState(tx, 'tenant_id', identity.tenantId);
+    await writeDeviceState(tx, 'role', identity.role);
   });
 }

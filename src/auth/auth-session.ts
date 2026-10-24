@@ -7,9 +7,25 @@ export const CALLBACK_PATH = '/oauth/callback';
 /** The one redirect URI this app registers and the engine matches exactly. */
 export const REDIRECT_URI = `${CALLBACK_SCHEME}:${CALLBACK_PATH}`;
 
+/** How long one sign-in may wait for its callback before it is abandoned. */
+export const PENDING_LOGIN_TTL_MS = 10 * 60_000;
+
 /** Opens the system sign-in page and returns the URL the server redirected back to. */
 export interface AuthSession {
+  /**
+   * Resolves with the callback URL. Rejects `sign_in_cancelled` after `cancel()`,
+   * `sign_in_expired` when no callback arrives within the time limit, and
+   * `sign_in_in_progress` when a login is already waiting.
+   */
   start(url: string, callbackScheme: string): Promise<string>;
+  /** Ends the waiting login as cancelled and closes the browser. No effect when nothing is waiting. */
+  cancel(): void;
+  /**
+   * Called when the browser reports that it finished. That is a hint, not a verdict: the callback
+   * may still be on its way, or the report may be spurious. The login stays alive; the UI decides
+   * whether to offer a cancel. Returns an unsubscribe function.
+   */
+  onBrowserClosed(listener: () => void): () => void;
 }
 
 /**
@@ -50,21 +66,15 @@ export interface AppLike {
 export interface AndroidAuthSessionDeps {
   browser: BrowserLike;
   app: AppLike;
-  /**
-   * The Custom Tab reports "finished" both when the user closes it and (on some
-   * devices) just before the callback intent arrives. A callback within this
-   * window still wins; after it, the tab closing means the user gave up.
-   */
-  dismissGraceMs?: number;
+  /** Overall time limit for one login; defaults to `PENDING_LOGIN_TTL_MS`. */
+  timeoutMs?: number;
 }
-
-const DEFAULT_DISMISS_GRACE_MS = 700;
 
 interface PendingStart {
   scheme: string;
   resolve(url: string): void;
   reject(error: AuthError): void;
-  graceTimer: ReturnType<typeof setTimeout> | undefined;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 function isWebUrl(raw: string): boolean {
@@ -81,15 +91,29 @@ function isWebUrl(raw: string): boolean {
  * WebView) and the private-scheme redirect comes back as an `appUrlOpen`
  * event. One listener is registered for the life of the session object, and
  * it ignores every URL that is not exactly the callback.
+ *
+ * `browserFinished` is deliberately not treated as a cancellation. In
+ * @capacitor/browser 8 it fires when the Custom Tab activity returns its
+ * result, and on Android below 14 also when the tab is minimized to
+ * picture-in-picture while it is still alive. A login ends only by a callback,
+ * an explicit `cancel()`, or the overall time limit.
  */
 export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSession {
-  const grace = deps.dismissGraceMs ?? DEFAULT_DISMISS_GRACE_MS;
+  const timeoutMs = deps.timeoutMs ?? PENDING_LOGIN_TTL_MS;
+  const closedListeners = new Set<() => void>();
   let pending: PendingStart | null = null;
   let listening: Promise<void> | null = null;
 
   function settle(p: PendingStart): void {
-    clearTimeout(p.graceTimer);
+    clearTimeout(p.timer);
     if (pending === p) pending = null;
+  }
+
+  function end(p: PendingStart, code: AuthErrorCode): void {
+    if (pending !== p) return;
+    settle(p);
+    deps.browser.close().catch(() => undefined);
+    p.reject(new AuthError(code));
   }
 
   function ensureListeners(): Promise<void> {
@@ -103,14 +127,8 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
           p.resolve(url);
         });
         await deps.browser.addListener('browserFinished', () => {
-          const p = pending;
-          if (!p) return;
-          clearTimeout(p.graceTimer);
-          p.graceTimer = setTimeout(() => {
-            if (pending !== p) return;
-            settle(p);
-            p.reject(new AuthError('sign_in_cancelled'));
-          }, grace);
+          if (!pending) return;
+          for (const listener of [...closedListeners]) listener();
         });
       })();
       listening.catch(() => {
@@ -125,19 +143,28 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
       if (pending) return Promise.reject(new AuthError('sign_in_in_progress'));
       if (!isWebUrl(url)) return Promise.reject(new AuthError('sign_in_failed'));
       return new Promise<string>((resolve, reject) => {
-        const p: PendingStart = { scheme: callbackScheme, resolve, reject, graceTimer: undefined };
+        const p: PendingStart = { scheme: callbackScheme, resolve, reject, timer: undefined };
         pending = p;
-        const fail = (code: AuthErrorCode): void => {
-          if (pending !== p) return;
-          settle(p);
-          reject(new AuthError(code));
-        };
+        p.timer = setTimeout(() => {
+          end(p, 'sign_in_expired');
+        }, timeoutMs);
         ensureListeners()
           .then(() => deps.browser.open({ url }))
           .catch(() => {
-            fail('sign_in_failed');
+            if (pending !== p) return;
+            settle(p);
+            reject(new AuthError('sign_in_failed'));
           });
       });
+    },
+    cancel: () => {
+      if (pending) end(pending, 'sign_in_cancelled');
+    },
+    onBrowserClosed: (listener) => {
+      closedListeners.add(listener);
+      return () => {
+        closedListeners.delete(listener);
+      };
     },
   };
 }

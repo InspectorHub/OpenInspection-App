@@ -145,23 +145,41 @@ export async function migrate(
   return version;
 }
 
-/** Keys stored in `device_state`. */
+/**
+ * Exact keys stored in `device_state`. The registered OAuth client id is not
+ * one of them: it is stored once per server under `client_id:<origin>` (see
+ * `DEVICE_STATE_KEY_PREFIXES`). `user_id`, `tenant_id` and `role` are the
+ * signed-in identity the auth layer checks on every sign-in.
+ */
 export const DEVICE_STATE_KEYS = [
   'server_url',
   'device_id',
-  'client_id',
   'last_verified_at',
   'max_seen_time',
   'offline_max_days',
   'tenant_name',
   'user_id',
+  'tenant_id',
   'role',
   'sync_days',
   'locked_reason',
   'install_marker',
 ] as const;
 
-export type DeviceStateKey = (typeof DEVICE_STATE_KEYS)[number];
+/** Families of per-server keys: the key is the prefix followed by a non-empty suffix. */
+export const DEVICE_STATE_KEY_PREFIXES = ['client_id:'] as const;
+
+export type DeviceStateKey = (typeof DEVICE_STATE_KEYS)[number] | `${(typeof DEVICE_STATE_KEY_PREFIXES)[number]}${string}`;
+
+/** True for a declared exact key or a declared prefix followed by something. */
+export function isDeviceStateKey(key: string): key is DeviceStateKey {
+  if ((DEVICE_STATE_KEYS as readonly string[]).includes(key)) return true;
+  return DEVICE_STATE_KEY_PREFIXES.some((prefix) => key.length > prefix.length && key.startsWith(prefix));
+}
+
+export function assertDeviceStateKey(key: string): asserts key is DeviceStateKey {
+  if (!isDeviceStateKey(key)) throw new Error(`Undeclared device_state key: ${key}`);
+}
 
 export const MEDIA_STATES = ['pending', 'uploading', 'uploaded', 'failed'] as const;
 export type MediaState = (typeof MEDIA_STATES)[number];

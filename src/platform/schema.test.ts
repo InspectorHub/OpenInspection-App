@@ -10,6 +10,9 @@ import {
   assertMediaState,
   assertOutboxState,
   assertQuarantineSource,
+  DEVICE_STATE_KEYS,
+  DEVICE_STATE_KEY_PREFIXES,
+  isDeviceStateKey,
   migrate,
   readSchemaVersion,
   SchemaTooNewError,
@@ -356,6 +359,24 @@ describe('migrate() guards', () => {
     ['has a duplicate', [m(1), m(1)]],
   ])('throws when the migrations list %s', async (_label, list) => {
     await expect(migrate(db, 0, list)).rejects.toThrow(/contiguous|ascending|start at 1/i);
+  });
+});
+
+describe('device_state keys', () => {
+  it('lists the keys the auth layer writes as exact keys, and the per-origin client id as a prefix', () => {
+    expect(DEVICE_STATE_KEYS).toContain('tenant_id');
+    expect(DEVICE_STATE_KEYS).toContain('user_id');
+    expect(DEVICE_STATE_KEYS).toContain('role');
+    expect([...DEVICE_STATE_KEY_PREFIXES]).toEqual(['client_id:']);
+    expect(new Set(DEVICE_STATE_KEYS).size).toBe(DEVICE_STATE_KEYS.length);
+  });
+
+  it.each([...DEVICE_STATE_KEYS, 'client_id:https://a.example.com', 'client_id:http://127.0.0.1:8787'])('accepts %s', (key) => {
+    expect(isDeviceStateKey(key)).toBe(true);
+  });
+
+  it.each(['', 'client_id', 'client_id:', 'Client_id:https://a', ' client_id:https://a', 'client_idx:https://a', 'tenant', 'TENANT_ID', 'refresh_token', 'oi.auth.refresh-token:https://a'])('rejects %j', (key) => {
+    expect(isDeviceStateKey(key)).toBe(false);
   });
 });
 
