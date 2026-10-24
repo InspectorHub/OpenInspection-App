@@ -98,7 +98,7 @@ export async function openCapacitorDb(
   await conn.open();
   const storedVersion = await readUserVersion(conn);
   if (storedVersion > version) {
-    await sqlite.closeConnection(name, false);
+    await sqlite.closeConnection(name, false).catch(() => undefined);
     throw new SchemaTooNewError(storedVersion, version);
   }
   return wrapConnection(conn, options.platform);

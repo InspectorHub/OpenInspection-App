@@ -90,9 +90,10 @@ class FakeSqlite implements SqliteConnectionLike {
     this.calls.push(`createConnection:${name}:${String(enc)}:${mode}:${String(version)}:${String(ro)}`);
     return Promise.resolve(this.conn);
   }
+  failClose = false;
   closeConnection(name: string) {
     this.calls.push(`closeConnection:${name}`);
-    return Promise.resolve();
+    return this.failClose ? Promise.reject(new Error('close failed')) : Promise.resolve();
   }
   addUpgradeStatement(name: string) {
     this.calls.push(`addUpgradeStatement:${name}`);
@@ -140,6 +141,15 @@ describe('openCapacitorDb', () => {
     expect(err).toBeInstanceOf(SchemaTooNewError);
     expect((err as SchemaTooNewError).dbVersion).toBe(opts.version + 1);
     expect((err as SchemaTooNewError).codeVersion).toBe(opts.version);
+    expect(sqlite.calls).toContain('closeConnection:oi');
+  });
+
+  it('still reports SchemaTooNewError when closing the connection itself fails', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.conn.userVersion = opts.version + 1;
+    sqlite.failClose = true;
+    const err = await openCapacitorDb(sqlite, opts).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SchemaTooNewError);
     expect(sqlite.calls).toContain('closeConnection:oi');
   });
 
