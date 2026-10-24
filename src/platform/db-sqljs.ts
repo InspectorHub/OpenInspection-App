@@ -1,11 +1,11 @@
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
-import { createDb, type Db } from './db';
+import { createDb, type Db, type DbOptions } from './db';
 
 /**
  * In-memory SQLite (sql.js) implementing `Db`. Used by unit tests so storage
  * logic runs without a device. BLOBs come back as `Uint8Array`.
  */
-export async function createSqlJsDb(): Promise<Db> {
+export async function createSqlJsDb(options?: DbOptions): Promise<Db> {
   const SQL = await initSqlJs();
   const raw = new SQL.Database();
 
@@ -37,7 +37,7 @@ export async function createSqlJsDb(): Promise<Db> {
       raw.run('ROLLBACK');
       return Promise.resolve();
     },
-  });
+  }, options);
 }
 
 function toSqlValues(params: unknown[] | undefined): SqlValue[] {

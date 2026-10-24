@@ -1,6 +1,6 @@
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { Capacitor } from '@capacitor/core';
-import { createDb, type Db } from './db';
+import { createDb, type Db, type DbOptions } from './db';
 
 /** The platforms the adapter distinguishes; anything that is not Android or iOS is `web`. */
 export type DbPlatform = 'android' | 'ios' | 'web';
@@ -101,7 +101,7 @@ export function toDbPlatform(platform: string): DbPlatform {
   return platform === 'android' || platform === 'ios' ? platform : 'web';
 }
 
-export function wrapConnection(conn: SqliteDbConnectionLike, platform: DbPlatform): Db {
+export function wrapConnection(conn: SqliteDbConnectionLike, platform: DbPlatform, options?: DbOptions): Db {
   const ops = (inTransaction: boolean): Pick<Db, 'execute' | 'query' | 'run'> => ({
     execute: async (sql) => {
       await conn.execute(sql, inTransaction ? false : undefined);
@@ -133,7 +133,7 @@ export function wrapConnection(conn: SqliteDbConnectionLike, platform: DbPlatfor
       await conn.rollbackTransaction();
     },
     hasOpenTransaction: async () => (await conn.isTransactionActive()).result === true,
-  });
+  }, options);
 }
 
 /**

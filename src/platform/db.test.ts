@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from './db';
 import { createSqlJsDb } from './db-sqljs';
 
@@ -115,14 +115,115 @@ describe('Db (sql.js test double)', () => {
     ]);
   });
 
-  it('throws instead of deadlocking when the outer db is used inside a transaction', async () => {
-    await expect(
-      db.transaction(async () => {
-        await db.query('SELECT 1');
-      }),
-    ).rejects.toThrow(/inside (its own|a) transaction/i);
-    await db.run('INSERT INTO items (name) VALUES (?)', ['after']);
-    expect(await db.query('SELECT name FROM items')).toEqual([{ name: 'after' }]);
+  describe('outer-db calls during an open transaction', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const names = async () =>
+      (await db.query<{ name: string }>('SELECT name FROM items ORDER BY id')).map((r) => r.name);
+
+    it('queues an unrelated caller and runs it after the commit', async () => {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const txn = db.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['in-tx']);
+        await gate;
+      });
+      await Promise.resolve();
+      const other = db.run('INSERT INTO items (name) VALUES (?)', ['unrelated']);
+      const seen = db.query<{ name: string }>('SELECT name FROM items ORDER BY id');
+      release();
+      await txn;
+      await other;
+      expect((await seen).map((r) => r.name)).toEqual(['in-tx', 'unrelated']);
+      expect(await names()).toEqual(['in-tx', 'unrelated']);
+    });
+
+    it('still runs a queued caller after the transaction rolls back', async () => {
+      let fail: () => void = () => undefined;
+      const gate = new Promise<void>((_, reject) => {
+        fail = () => reject(new Error('boom'));
+      });
+      const txn = db.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['lost']);
+        await gate;
+      });
+      const caught = expect(txn).rejects.toThrow('boom');
+      await Promise.resolve();
+      const other = db.run('INSERT INTO items (name) VALUES (?)', ['unrelated']);
+      fail();
+      await caught;
+      await other;
+      expect(await names()).toEqual(['unrelated']);
+    });
+
+    it('rejects a re-entrant call after the deadlock timeout, and the transaction still commits', async () => {
+      vi.useFakeTimers();
+      const timed = await createSqlJsDb({ deadlockTimeoutMs: 1000 });
+      await timed.execute('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+      let reentrantError: unknown;
+      const txn = timed.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['a']);
+        await timed.run('INSERT INTO items (name) VALUES (?)', ['ghost']).catch((e: unknown) => {
+          reentrantError = e;
+        });
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['b']);
+        return 'ok';
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await txn).toBe('ok');
+      expect(String((reentrantError as Error).message)).toMatch(
+        /waited more than 1000 ms behind an open transaction.*use the tx handle/i,
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      const rows = await timed.query<{ name: string }>('SELECT name FROM items ORDER BY id');
+      expect(rows.map((r) => r.name)).toEqual(['a', 'b']);
+    });
+
+    it('lets the transaction roll back normally after a re-entrant call timed out', async () => {
+      vi.useFakeTimers();
+      const timed = await createSqlJsDb({ deadlockTimeoutMs: 1000 });
+      await timed.execute('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+      const txn = timed.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['lost']);
+        await timed.run('INSERT INTO items (name) VALUES (?)', ['ghost']);
+      });
+      const caught = expect(txn).rejects.toThrow(/waited more than 1000 ms/);
+      await vi.advanceTimersByTimeAsync(1000);
+      await caught;
+      await timed.run('INSERT INTO items (name) VALUES (?)', ['after']);
+      const rows = await timed.query<{ name: string }>('SELECT name FROM items ORDER BY id');
+      expect(rows.map((r) => r.name)).toEqual(['after']);
+    });
+
+    it('does not time out queued callers behind a long but legitimate transaction', async () => {
+      vi.useFakeTimers();
+      const timed = await createSqlJsDb({ deadlockTimeoutMs: 1000 });
+      await timed.execute('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+      const txn = timed.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['slow']);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      });
+      await Promise.resolve();
+      const other = timed.run('INSERT INTO items (name) VALUES (?)', ['waiter']);
+      await vi.advanceTimersByTimeAsync(600);
+      await txn;
+      await other;
+      await vi.advanceTimersByTimeAsync(5000);
+      const rows = await timed.query<{ name: string }>('SELECT name FROM items ORDER BY id');
+      expect(rows.map((r) => r.name)).toEqual(['slow', 'waiter']);
+    });
+
+    it('keeps calls through the tx handle working', async () => {
+      const out = await db.transaction(async (tx) => {
+        await tx.run('INSERT INTO items (name) VALUES (?)', ['x']);
+        return tx.query<{ name: string }>('SELECT name FROM items');
+      });
+      expect(out).toEqual([{ name: 'x' }]);
+    });
   });
 
   it('positive control: the tx handle reads inside its own transaction', async () => {

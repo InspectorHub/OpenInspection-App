@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   type DbChanges,
   decodeRow,
@@ -232,17 +232,44 @@ describe('BLOB parameter encoding', () => {
 });
 
 describe('transaction safety (capacitor adapter)', () => {
-  it('throws instead of deadlocking when the outer db is used inside a transaction', async () => {
+  it('queues an unrelated outer call behind an open transaction and runs it after commit', async () => {
     const conn = new FakeConn();
     const db = wrapConnection(conn, 'android');
-    await expect(
-      db.transaction(async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const txn = db.transaction(async (tx) => {
+      await tx.query('IN-TX');
+      await gate;
+    });
+    await Promise.resolve();
+    const other = db.query('UNRELATED');
+    release();
+    await txn;
+    await other;
+    expect(conn.calls).toEqual(['begin', 'query:IN-TX:undefined', 'commit', 'query:UNRELATED:undefined']);
+  });
+
+  it('turns a re-entrant outer call into a timeout error and never runs it', async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = new FakeConn();
+      const db = wrapConnection(conn, 'android', { deadlockTimeoutMs: 500 });
+      const txn = db.transaction(async () => {
         await db.query('INNER');
-      }),
-    ).rejects.toThrow(/inside (its own|a) transaction/i);
-    expect(conn.calls).toEqual(['begin', 'rollback']);
-    await db.run('AFTER', []);
-    expect(conn.calls).toContain('run:AFTER:[]:undefined');
+      });
+      const caught = expect(txn).rejects.toThrow(/waited more than 500 ms behind an open transaction/);
+      await vi.advanceTimersByTimeAsync(500);
+      await caught;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(conn.calls).toEqual(['begin', 'rollback']);
+      await db.run('AFTER', []);
+      expect(conn.calls).toContain('run:AFTER:[]:undefined');
+      expect(conn.calls).not.toContain('query:INNER:undefined');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('positive control: the tx handle works inside the same transaction', async () => {

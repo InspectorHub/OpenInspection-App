@@ -70,42 +70,90 @@ function transactionHandle(ops: Statements, state: TransactionState): Db {
   return handle;
 }
 
-const IN_TRANSACTION_MESSAGE =
-  'Db was used from inside its own transaction callback; use the tx handle passed to the callback instead';
 const UNUSABLE_MESSAGE =
   'Database connection is unusable: a transaction could not be rolled back and may still be open';
 
+const DEFAULT_DEADLOCK_TIMEOUT_MS = 30_000;
+
+/** Timer functions; injectable so tests can drive the deadlock timeout without real waiting. */
+export interface DbTimers {
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+export interface DbOptions {
+  /**
+   * How long a call made while a transaction is open may wait for it before it
+   * is rejected (default 30_000). Only a re-entrant call can reach this limit
+   * for good: it waits for a transaction that is itself waiting for it.
+   */
+  deadlockTimeoutMs?: number;
+  timers?: DbTimers;
+}
+
+const globalTimers: DbTimers = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 /**
  * A `Db` over one connection: top-level calls run strictly in order, a
- * transaction holds the queue until it ends, and the three failure modes that
- * would otherwise corrupt or hang the connection are surfaced as errors.
+ * transaction holds the queue until it ends, and the failure modes that would
+ * otherwise corrupt or hang the connection are surfaced as errors.
  *
- * Re-entry: awaiting the outer `Db` inside a transaction callback would queue
- * behind the very transaction waiting on it, so any outer-`Db` call made while
- * a transaction callback is running rejects. That also rejects an unrelated
- * caller that happens to call during that window, because there is no async
- * context to tell the two apart; callers needing concurrent access must wait
- * for the transaction to settle.
+ * Calls on the outer `Db` made while a transaction is open queue behind it and
+ * run once it commits or rolls back. Unrelated tasks (persistence writes,
+ * outbox replay) can therefore call `db` freely, but they stall for as long as
+ * the transaction lasts, so keep transactions short and never await slow
+ * non-database work (network, timers, user input) inside one.
+ *
+ * Re-entry: a call made on the outer `Db` from inside the transaction callback
+ * queues behind the very transaction that is awaiting it. The webview has no
+ * async context to tell that apart from an unrelated caller, so the wait is
+ * bounded instead: after `deadlockTimeoutMs` the queued call is removed from
+ * the queue (it never runs) and rejects with an error pointing at the `tx`
+ * handle. Neither the connection nor the transaction is affected; the
+ * transaction proceeds as soon as its callback handles the error. The bound
+ * covers only the wait; a call that has started is never cut short.
  */
-export function createDb(connection: TransactionalConnection): Db {
+export function createDb(connection: TransactionalConnection, options: DbOptions = {}): Db {
   const queue = new SerialQueue();
   const topLevel = connection.statements(false);
   const inTransaction = connection.statements(true);
+  const deadlockTimeoutMs = options.deadlockTimeoutMs ?? DEFAULT_DEADLOCK_TIMEOUT_MS;
+  const timers = options.timers ?? globalTimers;
   let transactionRunning = false;
   let unusable: unknown = null;
 
-  const failFast = (): Promise<never> | null => {
-    if (unusable !== null) return Promise.reject(new Error(UNUSABLE_MESSAGE, { cause: unusable }));
-    if (transactionRunning) return Promise.reject(new Error(IN_TRANSACTION_MESSAGE));
-    return null;
-  };
+  const unusableError = () => new Error(UNUSABLE_MESSAGE, { cause: unusable });
 
-  const queued = <T>(task: () => Promise<T>): Promise<T> =>
-    failFast() ??
-    queue.run(() => {
-      if (unusable !== null) return Promise.reject(new Error(UNUSABLE_MESSAGE, { cause: unusable }));
-      return task();
+  const queued = <T>(task: () => Promise<T>): Promise<T> => {
+    if (unusable !== null) return Promise.reject(unusableError());
+    const guarded = () => (unusable !== null ? Promise.reject(unusableError()) : task());
+    if (!transactionRunning) return queue.run(guarded);
+    return new Promise<T>((resolve, reject) => {
+      let abandoned = false;
+      let started = false;
+      const timer = timers.setTimeout(() => {
+        if (started) return;
+        abandoned = true;
+        reject(
+          new Error(
+            `Db call waited more than ${String(deadlockTimeoutMs)} ms behind an open transaction; ` +
+              'it may have been issued from inside the transaction callback — use the tx handle',
+          ),
+        );
+      }, deadlockTimeoutMs);
+      queue
+        .run(() => {
+          timers.clearTimeout(timer);
+          if (abandoned) return Promise.resolve(undefined as T);
+          started = true;
+          return guarded();
+        })
+        .then(resolve, reject);
     });
+  };
 
   async function rollbackOrMarkUnusable(): Promise<void> {
     try {
