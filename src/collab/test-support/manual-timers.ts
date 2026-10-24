@@ -8,6 +8,8 @@ export interface ManualTimers extends TimerPort {
   delays(): number[];
   /** Fires the oldest pending timer. Throws when there is none, so a test cannot fire nothing by mistake. */
   fireNext(): void;
+  /** Fires the oldest pending timer that was set with exactly this delay. Throws when there is none. */
+  fireWithDelay(ms: number): void;
   /** Every delay ever requested, fired or not. */
   requested(): number[];
 }
@@ -29,6 +31,15 @@ export function createManualTimers(): ManualTimers {
     pending: () => timers.size,
     delays: () => [...timers.values()].map((t) => t.ms),
     requested: () => [...requested],
+    fireWithDelay: (ms) => {
+      for (const [id, timer] of timers) {
+        if (timer.ms !== ms) continue;
+        timers.delete(id);
+        timer.callback();
+        return;
+      }
+      throw new Error(`no pending timer with delay ${String(ms)}`);
+    },
     fireNext: () => {
       const first = timers.entries().next();
       if (first.done) throw new Error('no pending timer to fire');

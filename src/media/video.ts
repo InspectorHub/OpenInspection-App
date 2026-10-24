@@ -9,7 +9,7 @@ import {
   type MediaRow,
   type VideoSource,
 } from './store';
-import { clampRetryAfter, failure, isParseableUrlText, isRecord, resolveUploadUrl, type KindContext, type KindStrategy, type TransferTarget } from './upload-kinds';
+import { clampRetryAfter, failure, isParseableUrlText, isRecord, resolveRelocatableUploadUrl, type KindContext, type KindStrategy, type TransferTarget } from './upload-kinds';
 
 export { MAX_VIDEO_BYTES, VIDEO_MAX_SECONDS };
 
@@ -22,7 +22,8 @@ export const MIN_FREE_BYTES = 1024 * 1024 * 1024;
  * it through the Stream binding, which hands back whatever Cloudflare answered, so the app does not take the host
  * from the answer: it compares it to this constant, exactly, and also requires the path to be the uid of the same
  * answer's ref. A different Cloudflare host (for example a customer subdomain) is refused until it is added here on
- * purpose.
+ * purpose. The shape of the direct-upload url (host and single-segment path) is taken from the Cloudflare documentation
+ * only; it has not been observed against a live Stream account.
  */
 export const STREAM_UPLOAD_HOST = 'upload.videodelivery.net';
 
@@ -40,7 +41,7 @@ export type VideoDocRef = { provider: 'r2'; mediaId: string; r2Key: string } | {
 /**
  * Replaces the pending placement of a clip in the inspection's document once the server holds it. The editor package
  * (field-ui 0.2.1) has no pending-clip entry yet, so there is nothing for the app to swap by default: Task 9 supplies
- * this when the editor gains one. `missing` is not an error for a clip, see the reconciler.
+ * this when the editor gains one. `missing` is handled as for a photo: the reconciler keeps the clip and asks again.
  */
 export type ResolveVideo = (inspectionId: string, pendingId: string, ref: VideoDocRef) => Promise<ResolveResult>;
 
@@ -69,12 +70,13 @@ export function videoRefFromKey(key: string, inspectionId: string): VideoDocRef 
 
 /**
  * Where a clip may be sent.
- *  - r2: the engine's own token route, on the pinned origin, in the one shape it mints (the photo rules, for the video path).
+ *  - r2: the engine's own token route. Only its path and token are taken from the answer; the transfer url is rebuilt
+ *    on the pinned origin (see `resolveRelocatableUploadUrl`), because the engine names itself by its own public origin.
  *  - stream: https on `STREAM_UPLOAD_HOST`, default port, no userinfo, no query, no fragment, and the single path
  *    segment is the uid of the answer's own ref. Anything else is refused.
  */
 export function resolveVideoUploadUrl(origin: string, ref: { provider: 'r2' } | { provider: 'stream'; streamUid: string }, raw: unknown): string | null {
-  if (ref.provider === 'r2') return resolveUploadUrl(origin, raw, VIDEO_UPLOAD_PATH);
+  if (ref.provider === 'r2') return resolveRelocatableUploadUrl(origin, raw, VIDEO_UPLOAD_PATH);
   if (!isParseableUrlText(raw) || !STREAM_UID_PATTERN.test(ref.streamUid)) return null;
   let url: URL;
   try {
@@ -165,7 +167,13 @@ export function createVideoStrategy(): KindStrategy {
       const json = answer.res.json;
       // A 200 that is not the engine's success shape (a captive portal's page) is not a finalized clip.
       const poolId = isRecord(json) && json.success === true && isRecord(json.data) ? json.data.poolId : undefined;
-      return typeof poolId === 'string' && poolId.length > 0 ? { ok: true } : { ok: false, failure: failure('SERVER', { retryable: true }) };
+      if (typeof poolId !== 'string' || poolId.length === 0) return { ok: false, failure: failure('SERVER', { retryable: true }) };
+      // For R2 the engine answers `readyToStream: true` once the object is at the expected key. Anything else (for
+      // example a part content type that landed it under another key) is not a finalized clip yet: retry. Stream is
+      // legitimately not ready right after the upload, so the flag says nothing there.
+      const readyToStream = isRecord(json) && isRecord(json.data) ? json.data.readyToStream : undefined;
+      if (body.provider === 'r2' && readyToStream !== true) return { ok: false, failure: failure('SERVER', { retryable: true }) };
+      return { ok: true };
     },
   };
 }
@@ -187,6 +195,12 @@ export function blobVideoSource(blob: Blob): VideoSource {
 export interface DiskSpacePort {
   /** Bytes free, or null when the platform cannot say. May reject. */
   freeBytes(): Promise<number | null>;
+  /**
+   * True only for a port whose figure is the real free space of the storage the clips are written to (a native call).
+   * Only such a port may REFUSE a recording; any other port is advisory and a low reading is the warning
+   * `SPACE_UNKNOWN`.
+   */
+  readonly authoritative?: boolean;
 }
 
 export type SpaceCheck =
@@ -196,8 +210,9 @@ export type SpaceCheck =
   | { ok: false; code: 'LOW_SPACE'; freeBytes: number };
 
 /**
- * Asks the port before a recording starts. Below `minBytes` the answer is a refusal with the fixed code `LOW_SPACE`.
- * A port that fails or answers nothing usable is UNKNOWN, not "low": blocking every recording on a device that cannot
+ * Asks the port before a recording starts. Below `minBytes`, an AUTHORITATIVE port gets a refusal with the fixed code
+ * `LOW_SPACE`; a port that is not authoritative gets the fixed warning `SPACE_UNKNOWN` instead, because its figure can
+ * be wrong in the harmful direction (see `createStorageEstimateDiskSpace`). A port that fails or answers nothing usable is UNKNOWN, not "low": blocking every recording on a device that cannot
  * be measured would be worse than the failure it guards against, because the store removes a half-written clip and
  * reports DISK_FULL when the disk really is full. The caller shows the fixed warning.
  */
@@ -210,7 +225,8 @@ export async function checkFreeSpace(port: DiskSpacePort, minBytes: number = MIN
     free = null;
   }
   if (free === null || !Number.isFinite(free) || free < 0) return { ok: true, freeBytes: null, warning: 'SPACE_UNKNOWN' };
-  return free < threshold ? { ok: false, code: 'LOW_SPACE', freeBytes: free } : { ok: true, freeBytes: free };
+  if (free >= threshold) return { ok: true, freeBytes: free };
+  return port.authoritative === true ? { ok: false, code: 'LOW_SPACE', freeBytes: free } : { ok: true, freeBytes: null, warning: 'SPACE_UNKNOWN' };
 }
 
 export interface StorageEstimator {
@@ -218,14 +234,16 @@ export interface StorageEstimator {
 }
 
 /**
- * A disk-space port over the web view's storage estimate (`quota - usage`). UNVERIFIED on devices: no installed
- * Capacitor plugin reports free disk space (Filesystem has no such call), and the estimate is the browser's quota for
- * this origin, which is a share of the disk and not the disk itself. It can read lower than the real free space
- * (so it can refuse early), never meant as an exact figure. Replace it with a native free-space call (for example
- * the Device plugin's `realDiskFree`, a new dependency) once that is decided; the port keeps the rest unchanged.
+ * A disk-space port over the web view's storage estimate (`quota - usage`). It is NOT authoritative and must never
+ * gate a recording: `navigator.storage.estimate()` reports the quota of the web view's origin storage and does not
+ * count the files the Capacitor Filesystem plugin writes, so the figure says nothing reliable about the space those
+ * files need (it can read high or low). No installed Capacitor plugin reports free disk space (Filesystem has no such
+ * call). A future native port (for example the Device plugin's `realDiskFree`, a new dependency) can declare
+ * `authoritative: true` and then enables the `LOW_SPACE` refusal; this port yields only the advisory warning.
  */
 export function createStorageEstimateDiskSpace(storage: StorageEstimator | undefined): DiskSpacePort {
   return {
+    authoritative: false,
     freeBytes: async () => {
       if (storage === undefined) return null;
       const { quota, usage } = await storage.estimate();

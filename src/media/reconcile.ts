@@ -40,17 +40,20 @@ export const MISSING_RECHECK_CAP_MS = 3_600_000;
 
 export interface ReconcileDeps {
   store: MediaStore;
-  uploader: Pick<NativeUploader, 'uploadDetailed' | 'attach' | 'isActive' | 'retryAt' | 'forgetExcept'>;
+  uploader: Pick<NativeUploader, 'uploadDetailed' | 'attach' | 'isActive' | 'retryAt' | 'forgetExcept' | 'handlesVideo'>;
   resolvePending: ResolvePending;
   /**
-   * The document step of a clip. Without it a clip is released right after the server holds it. A throw keeps the
-   * file and the row and is retried with a growing wait. `missing` does not keep a clip: the pool row that
-   * `finalize` created is the server's reference to it, which a photo does not have until its entry is resolved.
+   * The document step of a clip. Required whenever clips are handled: without a placement step a finalized clip would
+   * be deleted from the device with nothing resolving its placeholder, so construction throws. A throw keeps the
+   * file and the row and is retried with a growing wait. `missing` is treated exactly as for a photo: the file and the
+   * row stay and the entry is asked for again with the same growing wait, because a fast upload can finish before the
+   * placeholder entry is written and deleting then would leave a placeholder nothing resolves.
    */
   resolveVideo?: ResolveVideo;
   /**
-   * The kinds of rows this reconciler works on, default photos only. A kind the uploader was not given a strategy for
-   * must not be listed: it would be left untouched every run.
+   * The kinds of rows this reconciler works on. The default follows the uploader: photos, plus clips when the uploader
+   * was given the clip strategy. An explicit list must agree with the uploader (a clip kind it cannot send would be
+   * left untouched every run; a clip kind it sends but this list omits would never be picked up), or construction throws.
    */
   kinds?: readonly MediaKind[];
   /** True when the offline lock holds or the device is revoked. A check that throws counts as locked. */
@@ -132,7 +135,12 @@ interface RunReport {
 
 export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
   const timers = deps.timers ?? realTimers;
-  const kinds: readonly MediaKind[] = deps.kinds !== undefined && deps.kinds.length > 0 ? deps.kinds : ['photo'];
+  const uploaderHasVideo = deps.uploader.handlesVideo();
+  const kinds: readonly MediaKind[] = deps.kinds !== undefined && deps.kinds.length > 0 ? deps.kinds : uploaderHasVideo ? ['photo', 'video'] : ['photo'];
+  const handlesVideo = kinds.includes('video');
+  if (handlesVideo && !uploaderHasVideo) throw new Error('createMediaReconciler: kinds names video but the uploader has no video strategy');
+  if (!handlesVideo && uploaderHasVideo) throw new Error('createMediaReconciler: the uploader has a video strategy but kinds omits video');
+  if (handlesVideo && deps.resolveVideo === undefined) throw new Error('createMediaReconciler: video is enabled but resolveVideo is missing');
   const concurrency = Math.max(1, Math.min(Math.floor(deps.concurrency ?? DEFAULT_CONCURRENCY), MAX_CONCURRENCY));
   const maxRows = Math.max(1, Math.floor(deps.maxRowsPerPass ?? DEFAULT_MAX_ROWS_PER_PASS));
   /** Uploaded photos whose pending entry was not in the document: when to look again, and how often it was not. */
@@ -189,7 +197,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     if (row.kind !== 'video') return deps.resolvePending(row.inspectionId, row.pendingId, key);
     const ref = videoRefFromKey(key, row.inspectionId);
     if (ref === null) return Promise.reject(new MediaError('INVALID_RECORD'));
-    return deps.resolveVideo ? deps.resolveVideo(row.inspectionId, row.pendingId, ref) : Promise.resolve('resolved');
+    return deps.resolveVideo ? deps.resolveVideo(row.inspectionId, row.pendingId, ref) : Promise.reject(new MediaError('INVALID_RECORD'));
   }
 
   /**
@@ -205,8 +213,9 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
       noteDocFailure(row, run, error);
       return false;
     }
-    if (resolved === 'missing' && row.kind !== 'video') {
-      // Nothing is deleted: the entry may not have been written yet, or the photo was removed in the editor.
+    if (resolved === 'missing') {
+      // Nothing is deleted, for a photo or a clip: the entry may not have been written yet (a fast upload can finish before
+      // the placeholder is), or the media was removed in the editor.
       docFailures.delete(row.pendingId);
       const misses = (missing.get(row.pendingId)?.misses ?? 0) + 1;
       const wait = Math.min(MISSING_RECHECK_BASE_MS * 2 ** (misses - 1), MISSING_RECHECK_CAP_MS);

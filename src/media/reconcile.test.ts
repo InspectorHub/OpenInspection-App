@@ -928,6 +928,7 @@ async function scripted(options: {
       isActive: () => false,
       retryAt: (id) => options.retryAt?.(id, clock.now()) ?? null,
       forgetExcept: () => undefined,
+      handlesVideo: () => false,
     },
     resolvePending: () => Promise.resolve('resolved'),
     isLocked: () => false,
@@ -1003,7 +1004,7 @@ describe('reconcile: a scan that failed or did not finish still arms the fallbac
     const timers = createManualTimers();
     const rec = createMediaReconciler({
       store: world.store,
-      uploader: { uploadDetailed: () => Promise.resolve(SOFT), attach: () => Promise.resolve(), isActive: () => false, retryAt: () => null, forgetExcept: () => undefined },
+      uploader: { uploadDetailed: () => Promise.resolve(SOFT), attach: () => Promise.resolve(), isActive: () => false, retryAt: () => null, forgetExcept: () => undefined, handlesVideo: () => false },
       resolvePending: () => Promise.resolve('resolved'),
       isLocked: () => false,
       network: fakeNetwork(),

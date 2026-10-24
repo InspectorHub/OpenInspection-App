@@ -91,7 +91,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     onError: (e) => errors.push(e),
     ...(options.wired === false ? {} : { video: createVideoStrategy() }),
   });
-  const kinds = options.kinds === 'default' ? undefined : (options.kinds ?? ['photo', 'video']);
+  const kinds = options.kinds === 'default' ? undefined : (options.kinds ?? (options.wired === false ? ['photo'] : ['photo', 'video']));
   const rec = createMediaReconciler({
     store: world.store,
     uploader,
@@ -204,8 +204,6 @@ describe('video upload: where the clip may be sent', () => {
     { name: 'stream: another host entirely', backend: 'stream', prepare: (v) => { v.uploadUrlOverride = () => 'https://collector.evil.test/streamuid00000001'; } },
     { name: 'stream: plain http', backend: 'stream', prepare: (v) => { v.uploadUrlOverride = (m) => m.replace('https:', 'http:'); } },
     { name: 'stream: the url names another uid than the ref', backend: 'stream', prepare: (v) => { v.refOverride = (r) => ({ ...r, streamUid: 'otheruid000000009' }); } },
-    { name: 'r2: another origin', backend: 'r2', prepare: (v) => { v.uploadUrlOverride = (m) => m.replace(ORIGIN, 'https://evil.test'); } },
-    { name: 'r2: the pinned host on another scheme', backend: 'r2', prepare: (v) => { v.uploadUrlOverride = (m) => m.replace('https:', 'http:'); } },
     { name: 'r2: the photo path', backend: 'r2', prepare: (v) => { v.uploadUrlOverride = (m) => m.replace('uploads/video', 'uploads/photo'); } },
     { name: 'r2: a stream-host url under an r2 ref', backend: 'r2', prepare: (v) => { v.uploadUrlOverride = () => `https://${STREAM_HOST}/streamuid00000001`; } },
     { name: 'r2: a key of another inspection', backend: 'r2', prepare: (v) => { v.refOverride = (r) => ({ ...r, r2Key: 'tenant-1/inspections/other-insp/videos/media-1.mp4' }); } },
@@ -230,6 +228,30 @@ describe('video upload: where the clip may be sent', () => {
     expect((await s.uploader.uploadDetailed(ref('good'))).ok).toBe(true);
     expect(s.plugin.starts).toHaveLength(1);
     expect(s.video.finalizes).toHaveLength(1);
+  });
+
+  it.each([
+    ['a foreign host', (m: string) => m.replace(ORIGIN, 'https://evil.test')],
+    ['a dev tunnel host and port', (m: string) => m.replace(ORIGIN, 'https://dev-tunnel.example.net:8443')],
+    ['http instead of https', (m: string) => m.replace('https:', 'http:')],
+    ['a relative path', (m: string) => m.replace(ORIGIN, '')],
+  ])('r2: the engine names itself by %s: the transfer still goes to the pinned origin, rebuilt from path and token only', async (_name, rewrite) => {
+    const s = await setup();
+    s.video.uploadUrlOverride = rewrite;
+    await s.world.store.putVideo(videoRecord('rel'));
+    expect((await s.uploader.uploadDetailed(ref('rel'))).ok).toBe(true);
+    expect(s.plugin.starts).toHaveLength(1);
+    const sent = s.plugin.starts[0]?.serverUrl ?? '';
+    expect(sent).toBe(`${ORIGIN}/api/public/uploads/video?token=vtoken0001.vsignature0001`);
+    expect(sent).not.toMatch(/evil|dev-tunnel|8443|http:/);
+    expect(s.video.finalizes).toHaveLength(1);
+  });
+
+  it('r2: the real engine absolute url on the pinned host is the positive control and is sent unchanged', async () => {
+    const s = await setup();
+    await s.world.store.putVideo(videoRecord('abs'));
+    expect((await s.uploader.uploadDetailed(ref('abs'))).ok).toBe(true);
+    expect(s.plugin.starts[0]?.serverUrl).toBe(`${ORIGIN}/api/public/uploads/video?token=vtoken0001.vsignature0001`);
   });
 
   it('a well-formed answer whose provider is not the provider of its ref is refused too', async () => {
@@ -436,25 +458,55 @@ describe('video reconcile: resolve, then delete', () => {
     expect(s.world.files.paths()).toEqual(['media/v1.mp4']);
   });
 
-  it('a clip the document does not mention is still released once the server holds it (the pool row is the reference); the photo rule keeps the file instead', async () => {
+  it('a clip the document does not mention yet is kept like a photo: file and row stay, nothing is deleted, the count shows it', async () => {
+    const s = await setup();
+    await s.world.store.putVideo(videoRecord('v1'));
+    s.resolveVideo.mockResolvedValue('missing');
+    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 0 });
+    expect(await s.world.store.getRow('v1')).toMatchObject({ state: 'uploaded' });
+    expect(s.world.files.paths()).toEqual(['media/v1.mp4']);
+    expect(s.log.filter((entry) => entry.startsWith('delete:'))).toEqual([]);
+    expect(s.rec.countUnreferenced()).toBe(1);
+    expect(s.timers.delays()).toEqual([60_000]);
+  });
+
+  it('missing, then the entry appears, then resolved: the clip is re-checked after the backoff and released only then (no second transfer or finalize)', async () => {
     const s = await setup();
     await s.world.store.putVideo(videoRecord('v1'));
     s.resolveVideo.mockResolvedValueOnce('missing');
-    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
-    expect(await s.world.store.getRow('v1')).toBeNull();
-    await s.world.store.put(photoRecord('p1'));
-    s.resolvePhoto.mockResolvedValueOnce('missing');
     await s.rec.reconcileUploads();
-    expect(await s.world.store.getRow('p1')).not.toBeNull();
-    expect(s.world.files.paths()).toEqual(['media/p1.jpg']);
+    expect(s.resolveVideo).toHaveBeenCalledTimes(1);
+    // Inside the wait nothing is asked again.
+    s.clock.advance(59_999);
+    await s.rec.reconcileUploads();
+    expect(s.resolveVideo).toHaveBeenCalledTimes(1);
+    // The placeholder entry has been written meanwhile.
+    s.resolveVideo.mockResolvedValue('resolved');
+    s.clock.advance(1);
+    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
+    expect(s.resolveVideo).toHaveBeenCalledTimes(2);
+    expect(await s.world.store.getRow('v1')).toBeNull();
+    expect(s.rec.countUnreferenced()).toBe(0);
+    expect(s.plugin.starts).toHaveLength(1);
+    expect(s.video.finalizes).toHaveLength(1);
   });
 
-  it('with no document port wired the file is released right after finalize', async () => {
-    const s = await setup({ withResolveVideo: false });
+  it('a clip that stays missing backs off like a photo (1 min doubling to an hour) and is never deleted', async () => {
+    const s = await setup();
     await s.world.store.putVideo(videoRecord('v1'));
-    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
-    expect(s.video.finalizes).toHaveLength(1);
-    expect(await s.world.store.getRow('v1')).toBeNull();
+    s.resolveVideo.mockResolvedValue('missing');
+    await s.rec.reconcileUploads();
+    let calls = 1;
+    for (let miss = 1; miss <= 8; miss += 1) {
+      const wait = Math.min(60_000 * 2 ** (miss - 1), 3_600_000);
+      s.clock.advance(wait);
+      await s.rec.reconcileUploads();
+      calls += 1;
+      expect(s.resolveVideo).toHaveBeenCalledTimes(calls);
+    }
+    expect(await s.world.store.getRow('v1')).toMatchObject({ state: 'uploaded' });
+    expect(s.world.files.paths()).toEqual(['media/v1.mp4']);
+    s.rec.stop();
   });
 });
 
@@ -567,6 +619,27 @@ describe('video upload: weak networks never give up, refusals do', () => {
     expect((await s.world.store.getRow('v1'))?.attempts).toBe(1);
   });
 
+  it.each([false, 'omit'] as const)('r2: a finalize 2xx whose readyToStream is %s means the object is not at the expected key: transient, kept, no document step; true finalizes (control)', async (ready) => {
+    const s = await setup();
+    await s.world.store.putVideo(videoRecord('v1'));
+    s.video.finalizeReady = ready;
+    expect(await s.uploader.uploadDetailed(ref('v1'))).toMatchObject({ ok: false, code: 'SERVER', retryable: true });
+    expect(await s.world.store.getRow('v1')).toMatchObject({ state: 'failed', uploadedKey: KEY1 });
+    expect((await s.world.store.getRow('v1'))?.attempts).toBeLessThan(MAX_UPLOAD_ATTEMPTS);
+    expect(s.resolveVideo).not.toHaveBeenCalled();
+    s.video.finalizeReady = true;
+    s.clock.advance(TRANSIENT_BACKOFF_CAP_MS);
+    expect((await s.uploader.uploadDetailed(ref('v1'))).ok).toBe(true);
+    expect(s.plugin.starts).toHaveLength(1);
+  });
+
+  it('stream: readyToStream false is legitimate right after the upload and finalizes', async () => {
+    const s = await setup({ backend: 'stream' });
+    await s.world.store.putVideo(videoRecord('v1'));
+    s.video.finalizeReady = false;
+    expect((await s.uploader.uploadDetailed(ref('v1'))).ok).toBe(true);
+  });
+
   it('a 404 from finalize is permanent after the transfer; the clip stays on the device and the row is visible', async () => {
     const s = await setup();
     await s.world.store.putVideo(videoRecord('v1'));
@@ -650,6 +723,91 @@ describe('video upload: nothing from outside is kept or repeated', () => {
   });
 });
 
+describe('video upload: the timeout is a silence timeout with an absolute ceiling', () => {
+  const SILENCE = 10 * 60_000;
+  const CEILING = 6 * 3_600_000;
+
+  async function startHeld(s: Setup, pendingId: string) {
+    s.plugin.defaultBehavior = { kind: 'hang' };
+    await s.world.store.putVideo(videoRecord(pendingId));
+    const done = s.uploader.uploadDetailed(ref(pendingId));
+    await s.plugin.whenStarted(1);
+    await vi.waitFor(() => expect(s.timers.pending()).toBe(2));
+    return { done, id: s.plugin.heldIds()[0] ?? '' };
+  }
+
+  it('arms one silence timer of 10 minutes and one ceiling timer of 6 hours', async () => {
+    const s = await setup();
+    const { done, id } = await startHeld(s, 'v1');
+    expect([...s.timers.delays()].sort((a, b) => a - b)).toEqual([SILENCE, CEILING]);
+    s.plugin.finish(id);
+    expect((await done).ok).toBe(true);
+    expect(s.timers.pending()).toBe(0);
+  });
+
+  it('every progress event restarts the silence timer, so a slow transfer is never aborted while it moves', async () => {
+    const s = await setup();
+    const { done, id } = await startHeld(s, 'v1');
+    const before = s.timers.requested().length;
+    for (let i = 1; i <= 5; i += 1) {
+      s.plugin.emit({ name: 'uploading', id, payload: { percent: i } });
+      // The silence timer set before this event is gone and a fresh one stands in its place.
+      expect(s.timers.delays().filter((ms) => ms === SILENCE)).toHaveLength(1);
+      expect(s.timers.requested().length).toBe(before + i);
+    }
+    expect(s.plugin.removed).toEqual([]);
+    s.plugin.finish(id);
+    expect((await done).ok).toBe(true);
+  });
+
+  it('ten minutes of silence aborts: removed from the plugin, TIMEOUT, retryable (control: with progress it was kept, above)', async () => {
+    const s = await setup();
+    const { done, id } = await startHeld(s, 'v1');
+    s.plugin.emit({ name: 'uploading', id, payload: { percent: 10 } });
+    s.timers.fireWithDelay(SILENCE);
+    await expect(done).resolves.toMatchObject({ ok: false, code: 'TIMEOUT', retryable: true });
+    expect(s.plugin.removed).toEqual([id]);
+    expect(s.timers.pending()).toBe(0);
+  });
+
+  it('the ceiling aborts a transfer that keeps reporting progress', async () => {
+    const s = await setup();
+    const { done, id } = await startHeld(s, 'v1');
+    for (let i = 1; i <= 3; i += 1) s.plugin.emit({ name: 'uploading', id, payload: { percent: i } });
+    s.timers.fireWithDelay(CEILING);
+    await expect(done).resolves.toMatchObject({ ok: false, code: 'TIMEOUT', retryable: true });
+    expect(s.plugin.removed).toEqual([id]);
+    expect(s.timers.pending()).toBe(0);
+  });
+
+  it('progress of another transfer, and progress after the end, do not restart anything', async () => {
+    const s = await setup();
+    const { done, id } = await startHeld(s, 'v1');
+    const before = s.timers.requested().length;
+    s.plugin.emit({ name: 'uploading', id: 'someone-else', payload: { percent: 50 } });
+    expect(s.timers.requested().length).toBe(before);
+    s.plugin.finish(id);
+    await done;
+    s.plugin.emit({ name: 'uploading', id, payload: { percent: 99 } });
+    expect(s.timers.pending()).toBe(0);
+  });
+
+  it('a photo keeps the fixed timeout: progress does not restart it and there is no second timer', async () => {
+    const s = await setup();
+    s.plugin.defaultBehavior = { kind: 'hang' };
+    await s.world.store.put(photoRecord('p1'));
+    const done = s.uploader.uploadDetailed(ref('p1'));
+    await s.plugin.whenStarted(1);
+    await vi.waitFor(() => expect(s.timers.pending()).toBe(1));
+    const id = s.plugin.heldIds()[0] ?? '';
+    s.plugin.emit({ name: 'uploading', id, payload: { percent: 10 } });
+    expect(s.timers.requested()).toHaveLength(1);
+    expect(s.timers.delays()).toEqual([SILENCE]);
+    s.timers.fireNext();
+    await expect(done).resolves.toMatchObject({ ok: false, code: 'TIMEOUT' });
+  });
+});
+
 describe('video reconcile: one table, two kinds', () => {
   it('photos and clips share the concurrency limit and each kind reaches its own document step', async () => {
     const s = await setup({ concurrency: 2 });
@@ -672,16 +830,56 @@ describe('video reconcile: one table, two kinds', () => {
     expect(await s.world.db.query('SELECT * FROM media')).toEqual([]);
   });
 
-  it('a reconciler not told about clips leaves them alone (they are not failed, not tried); told, it uploads them', async () => {
+  it('the kinds default follows the uploader: with the clip strategy wired, clips are uploaded without naming them', async () => {
     const s = await setup({ kinds: 'default' });
+    await s.world.store.put(photoRecord('p1', { createdAt: 1 }));
+    await s.world.store.putVideo(videoRecord('v1', { createdAt: 2 }));
+    await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 2 });
+    expect(s.video.creates).toHaveLength(1);
+    expect(await s.world.store.getRow('v1')).toBeNull();
+  });
+
+  it('an uploader without the clip strategy and the default kinds work on photos only; a clip row is left alone (control for the constructor errors below)', async () => {
+    const s = await setup({ kinds: 'default', wired: false });
     await s.world.store.put(photoRecord('p1', { createdAt: 1 }));
     await s.world.store.putVideo(videoRecord('v1', { createdAt: 2 }));
     await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
     expect(s.video.creates).toEqual([]);
     expect(await s.world.store.getRow('v1')).toMatchObject({ state: 'pending', attempts: 0 });
-    const t = await setup({ world: s.world, video: s.video });
-    await expect(t.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
-    expect(s.video.creates).toHaveLength(1);
+  });
+
+  describe('construction refuses a wiring that would silently lose clips', () => {
+    const build = (s: Setup, extra: Partial<Parameters<typeof createMediaReconciler>[0]>) =>
+      createMediaReconciler({
+        store: s.world.store,
+        uploader: s.uploader,
+        resolvePending: s.resolvePhoto,
+        isLocked: () => false,
+        network: s.network,
+        clock: s.clock,
+        timers: s.timers,
+        ...extra,
+      });
+
+    it('video enabled and no resolveVideo: throws (clips would finalize and then be deleted with no placement); with it, it builds', async () => {
+      const s = await setup();
+      expect(() => build(s, { resolveVideo: s.resolveVideo })).not.toThrow();
+      expect(() => build(s, {})).toThrow(/resolveVideo/);
+      expect(() => build(s, { kinds: ['photo', 'video'] })).toThrow(/resolveVideo/);
+    });
+
+    it('explicit kinds that omit video while the uploader has the strategy: throws; including it builds', async () => {
+      const s = await setup();
+      expect(() => build(s, { kinds: ['photo'], resolveVideo: s.resolveVideo })).toThrow(/video/);
+      expect(() => build(s, { kinds: ['photo', 'video'], resolveVideo: s.resolveVideo })).not.toThrow();
+    });
+
+    it('explicit kinds that name video while the uploader has no strategy: throws; photos only builds', async () => {
+      const s = await setup({ wired: false });
+      expect(() => build(s, { kinds: ['photo', 'video'], resolveVideo: s.resolveVideo })).toThrow(/video/);
+      expect(() => build(s, { kinds: ['photo'] })).not.toThrow();
+      expect(() => build(s, {})).not.toThrow();
+    });
   });
 
   it('a corrupt row, a given-up row and a row of a kind nobody handles cannot wedge the loop: the good clips behind them finish (paging by the raw rows)', async () => {

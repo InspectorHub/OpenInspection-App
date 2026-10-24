@@ -36,8 +36,19 @@ export const MAX_UPLOAD_ATTEMPTS = 1_000_000;
 export const TRANSIENT_BACKOFF_BASE_MS = 15_000;
 /** The longest wait between two automatic tries of a photo that keeps failing for transient reasons. */
 export const TRANSIENT_BACKOFF_CAP_MS = 3_600_000;
-/** The longest one upload may stay silent before it is abandoned and counted as failed. */
+/**
+ * The longest a photo upload may take before it is abandoned and counted as failed. Progress does not extend it: a
+ * photo is small, so a transfer that long is stuck.
+ */
 export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+/**
+ * The longest a clip transfer may stay SILENT (no progress event from the plugin) before it is abandoned. Every
+ * `uploading` event restarts it, so a 100 MB clip on a slow uplink that keeps moving is never aborted and restarted
+ * from the beginning.
+ */
+export const VIDEO_INACTIVITY_TIMEOUT_MS = 10 * 60_000;
+/** The absolute ceiling of one clip transfer, whatever progress it reports (a photo has its fixed timeout instead). */
+export const MAX_TRANSFER_MS = 6 * 3_600_000;
 const MAX_EARLY_EVENTS = 64;
 const MAX_EVENT_ID_LENGTH = 128;
 const UPLOAD_PATH = '/api/public/uploads/photo';
@@ -86,7 +97,12 @@ export interface NativeUploaderDeps {
   /** Time source of the backoff. Share it with the reconciler, which schedules from the same instants. */
   clock?: Clock;
   random?: () => number;
+  /** Photo timeout (total) and, when `videoInactivityTimeoutMs` is not given, the clip silence timeout. */
   uploadTimeoutMs?: number;
+  /** The silence timeout of a clip transfer. */
+  videoInactivityTimeoutMs?: number;
+  /** The absolute ceiling of one clip transfer. */
+  maxTransferMs?: number;
   /**
    * Called after `retry()` moved a row back to `pending`, so the reconciler can run now (wire it to `reconciler.trigger()`;
    * the reconciler is created after the uploader, so pass a closure). A throw is ignored.
@@ -105,6 +121,8 @@ export interface NativeUploader extends MediaUploader {
   attach(): Promise<void>;
   /** True while an upload of this photo is in flight in this process. */
   isActive(pendingId: string): boolean;
+  /** True when this uploader was given the clip strategy, so it can send and finalize clips. */
+  handlesVideo(): boolean;
   /**
    * The earliest time (clock ms) this process will start this photo again after a failure, or null when it
    * remembers none. Memory only: after a restart the stored attempt count alone decides.
@@ -232,8 +250,10 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   const clientHeaders = safeClientHeaders(deps.clientHeaders);
   const retries = new Map<string, RetryState>();
   const timeoutMs = deps.uploadTimeoutMs ?? UPLOAD_TIMEOUT_MS;
+  const silenceMs = deps.videoInactivityTimeoutMs ?? (deps.uploadTimeoutMs === undefined ? VIDEO_INACTIVITY_TIMEOUT_MS : timeoutMs);
+  const ceilingMs = deps.maxTransferMs ?? MAX_TRANSFER_MS;
   const active = new Map<string, Promise<UploadOutcome>>();
-  const waiters = new Map<string, { settle(terminal: Terminal): void; pendingId: string; onProgress: ((pendingId: string, percent: number) => void) | undefined }>();
+  const waiters = new Map<string, { settle(terminal: Terminal): void; pendingId: string; onProgress: ((pendingId: string, percent: number) => void) | undefined; touch(): void }>();
   const early = new Map<string, ParsedEvent>();
   let starting = 0;
   let listener: Promise<{ remove(): Promise<void> }> | null = null;
@@ -263,6 +283,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     if (event === null) return;
     const waiter = waiters.get(event.id);
     if (event.name === 'uploading') {
+      waiter?.touch();
       if (waiter?.onProgress && event.percent !== null) waiter.onProgress(waiter.pendingId, event.percent);
       return;
     }
@@ -360,7 +381,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   }
 
   /** Hands the file to the plugin and waits for the one terminal event that names it. */
-  async function runUpload(row: MediaRow, target: { url: string; sendClientHeaders: boolean; title: string }, options: UploadOptions): Promise<Terminal | 'start-failed'> {
+  async function runUpload(row: MediaRow, target: { url: string; sendClientHeaders: boolean; title: string; silenceTimeout: boolean }, options: UploadOptions): Promise<Terminal | 'start-failed'> {
     let filePath: string;
     try {
       filePath = await deps.store.fileUri(row);
@@ -392,7 +413,15 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     const done = new Promise<Terminal>((resolve) => {
       settle = resolve;
     });
-    waiters.set(id, { settle, pendingId: row.pendingId, onProgress: options.onProgress });
+    let timer: unknown = null;
+    const arm = (ms: number): unknown => timers.setTimeout(() => settle({ kind: 'timeout' }), ms);
+    // A clip's timer restarts on every progress event; a photo's runs once. The ceiling bounds both.
+    const touch = (): void => {
+      if (!target.silenceTimeout) return;
+      timers.clearTimeout(timer);
+      timer = arm(silenceMs);
+    };
+    waiters.set(id, { settle, pendingId: row.pendingId, onProgress: options.onProgress, touch });
     const queued = early.get(id);
     if (queued !== undefined && queued.name !== 'uploading') {
       early.delete(id);
@@ -402,11 +431,11 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     }
     starting -= 1;
     dropUnclaimed();
-    const timer = timers.setTimeout(() => {
-      settle({ kind: 'timeout' });
-    }, timeoutMs);
+    timer = arm(target.silenceTimeout ? silenceMs : timeoutMs);
+    const ceiling = target.silenceTimeout ? arm(ceilingMs) : null;
     const terminal = await done;
     timers.clearTimeout(timer);
+    if (ceiling !== null) timers.clearTimeout(ceiling);
     waiters.delete(id);
     if (terminal.kind === 'timeout') await deps.plugin.removeUpload({ id }).catch(() => undefined);
     return terminal;
@@ -557,7 +586,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
         }
         marked = true;
       }
-      const terminal = await runUpload(row, { url: minted.url, sendClientHeaders: minted.sendClientHeaders, title: strategy?.notificationTitle ?? NOTIFICATION_TITLE }, options);
+      const terminal = await runUpload(row, { url: minted.url, sendClientHeaders: minted.sendClientHeaders, title: strategy?.notificationTitle ?? NOTIFICATION_TITLE, silenceTimeout: strategy !== undefined }, options);
       if (terminal === 'start-failed') return settleFailure(row, failure('FILE', { retryable: true }), marked);
       if (terminal.kind === 'timeout') return settleFailure(row, failure('TIMEOUT', { retryable: true }), marked);
       if (terminal.statusCode === null) {
@@ -615,6 +644,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   return {
     uploadDetailed,
     attach,
+    handlesVideo: () => deps.video !== undefined,
     isActive: (pendingId) => active.has(pendingId),
     retryAt: (pendingId) => retries.get(pendingId)?.nextAt ?? null,
     retry: async (pendingId) => {

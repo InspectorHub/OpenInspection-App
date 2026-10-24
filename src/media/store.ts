@@ -35,9 +35,20 @@ export type VideoContentType = keyof typeof VIDEO_CONTENT_TYPES;
 
 /** The engine's photo ceiling (10 MiB), checked here so an oversized photo is refused before it is written. */
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
-/** The engine's clip ceiling (`MAX_VIDEO_BYTES` of its video upload route, 200 MiB). A constant: nothing the user or a server sends changes it. */
+/**
+ * The engine's clip ceiling (`MAX_VIDEO_BYTES` of its video upload route, 200 MiB). A constant: nothing the user or a
+ * server sends changes it, and it is the only REAL bound on a clip (the duration below is a claim by the caller).
+ * It must stay aligned with the deployed engine plan: the engine buffers the whole file in memory (its video upload
+ * parses the body and reads it into an array buffer), so the figure has to fit the Worker memory limit (128 MB) and
+ * the request body limit of the plan the engine runs on (100 MB on the Free and Pro plans). If the deployed plan
+ * cannot take this size, lower the value here together with the engine's own.
+ */
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
-/** The longest single clip, the same 30 seconds the engine asks Stream to enforce and the web capture sheet shows. */
+/**
+ * The longest single clip, the same 30 seconds the engine asks Stream to enforce and the web capture sheet shows. It is
+ * checked only against the duration the caller declares in `meta.durationSec`, which is a claim and not a measurement:
+ * the size cap is the only bound that holds for whatever the file really contains.
+ */
 export const VIDEO_MAX_SECONDS = 30;
 /** Bytes per piece when a Blob is streamed to disk. */
 export const VIDEO_CHUNK_BYTES = 1024 * 1024;

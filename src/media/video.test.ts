@@ -3,6 +3,7 @@ import { createMemoryFiles } from '../app/test-support/memory-files';
 import { createManualClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { sweepOrphanFiles, ORPHAN_MIN_AGE_MS } from './sweep';
+import { resolveUploadUrl } from './native-uploader';
 import { createMediaStore, MAX_VIDEO_BYTES } from './store';
 import { createMediaWorld, INSPECTION, jpegBlob, photoRecord } from './test-support/fakes';
 import { STREAM_HOST, videoBytes, videoRecord } from './test-support/video-fakes';
@@ -235,31 +236,51 @@ describe('video store: putVideo', () => {
 });
 
 describe('checkFreeSpace', () => {
-  it('refuses below the threshold, allows at and above it (the boundary), and the default threshold is 1 GiB', async () => {
+  const authoritative = (free: number | null) => ({ authoritative: true as const, freeBytes: () => Promise.resolve(free) });
+  const advisory = (free: number | null) => ({ freeBytes: () => Promise.resolve(free) });
+
+  it('an authoritative port refuses below the threshold, allows at and above it (the boundary), and the default threshold is 1 GiB', async () => {
     expect(MIN_FREE_BYTES).toBe(1024 * 1024 * 1024);
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(MIN_FREE_BYTES - 1) })).toEqual({ ok: false, code: 'LOW_SPACE', freeBytes: MIN_FREE_BYTES - 1 });
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(MIN_FREE_BYTES) })).toEqual({ ok: true, freeBytes: MIN_FREE_BYTES });
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(5 * MIN_FREE_BYTES) })).toEqual({ ok: true, freeBytes: 5 * MIN_FREE_BYTES });
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(99) }, 100)).toMatchObject({ ok: false, code: 'LOW_SPACE' });
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(100) }, 100)).toMatchObject({ ok: true });
+    expect(await checkFreeSpace(authoritative(MIN_FREE_BYTES - 1))).toEqual({ ok: false, code: 'LOW_SPACE', freeBytes: MIN_FREE_BYTES - 1 });
+    expect(await checkFreeSpace(authoritative(MIN_FREE_BYTES))).toEqual({ ok: true, freeBytes: MIN_FREE_BYTES });
+    expect(await checkFreeSpace(authoritative(5 * MIN_FREE_BYTES))).toEqual({ ok: true, freeBytes: 5 * MIN_FREE_BYTES });
+    expect(await checkFreeSpace(authoritative(99), 100)).toMatchObject({ ok: false, code: 'LOW_SPACE' });
+    expect(await checkFreeSpace(authoritative(100), 100)).toMatchObject({ ok: true });
+  });
+
+  it('a port that is not authoritative never refuses: a low reading is only the fixed warning SPACE_UNKNOWN (control: the same reading refuses when authoritative)', async () => {
+    const unknown = { ok: true, freeBytes: null, warning: 'SPACE_UNKNOWN' };
+    expect(await checkFreeSpace(authoritative(0))).toMatchObject({ ok: false, code: 'LOW_SPACE' });
+    expect(await checkFreeSpace(advisory(0))).toEqual(unknown);
+    expect(await checkFreeSpace(advisory(MIN_FREE_BYTES - 1))).toEqual(unknown);
+    expect(await checkFreeSpace({ authoritative: false, freeBytes: () => Promise.resolve(1) })).toEqual(unknown);
+    expect(await checkFreeSpace(advisory(MIN_FREE_BYTES))).toEqual({ ok: true, freeBytes: MIN_FREE_BYTES });
   });
 
   it('an unanswered, failing or nonsense measurement is unknown: recording is allowed with the fixed warning SPACE_UNKNOWN', async () => {
     const unknown = { ok: true, freeBytes: null, warning: 'SPACE_UNKNOWN' };
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(null) })).toEqual(unknown);
-    expect(await checkFreeSpace({ freeBytes: () => Promise.reject(new Error('/private/path denied')) })).toEqual(unknown);
+    expect(await checkFreeSpace(authoritative(null))).toEqual(unknown);
+    expect(await checkFreeSpace({ authoritative: true, freeBytes: () => Promise.reject(new Error('/private/path denied')) })).toEqual(unknown);
     for (const odd of [Number.NaN, -5, Number.POSITIVE_INFINITY]) {
-      expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(odd) })).toEqual(unknown);
+      expect(await checkFreeSpace(authoritative(odd))).toEqual(unknown);
     }
-    expect(await checkFreeSpace({ freeBytes: () => Promise.resolve(2 * MIN_FREE_BYTES) })).not.toHaveProperty('warning');
+    expect(await checkFreeSpace(authoritative(2 * MIN_FREE_BYTES))).not.toHaveProperty('warning');
   });
 
-  it('the storage-estimate port answers quota minus usage, and null when the platform gives no usable numbers', async () => {
-    expect(await createStorageEstimateDiskSpace({ estimate: () => Promise.resolve({ quota: 5000, usage: 1200 }) }).freeBytes()).toBe(3800);
+  it('the storage-estimate port answers quota minus usage, is not authoritative (it measures the web view quota, not the files), and null when the platform gives no usable numbers', async () => {
+    const port = createStorageEstimateDiskSpace({ estimate: () => Promise.resolve({ quota: 5000, usage: 1200 }) });
+    expect(await port.freeBytes()).toBe(3800);
+    expect(port.authoritative).not.toBe(true);
     expect(await createStorageEstimateDiskSpace({ estimate: () => Promise.resolve({ quota: 100, usage: 900 }) }).freeBytes()).toBe(0);
     expect(await createStorageEstimateDiskSpace({ estimate: () => Promise.resolve({}) }).freeBytes()).toBeNull();
     expect(await createStorageEstimateDiskSpace(undefined).freeBytes()).toBeNull();
     await expect(createStorageEstimateDiskSpace({ estimate: () => Promise.reject(new Error('no')) }).freeBytes()).rejects.toThrow();
+  });
+
+  it('through the estimate port a nearly full quota is advisory only, never LOW_SPACE', async () => {
+    const full = createStorageEstimateDiskSpace({ estimate: () => Promise.resolve({ quota: 1000, usage: 999 }) });
+    expect(await checkFreeSpace(full)).toEqual({ ok: true, freeBytes: null, warning: 'SPACE_UNKNOWN' });
+    expect(createRealDiskSpace().authoritative).not.toBe(true);
   });
 });
 
@@ -279,21 +300,62 @@ describe('resolveVideoUploadUrl: where a clip may be sent', () => {
     expect(resolveVideoUploadUrl(ORIGIN, { provider: 'r2' }, '/api/public/uploads/video?token=vtoken0001.vsignature0001')).toBe(R2_URL);
   });
 
+  const TOKEN = 'vtoken0001.vsignature0001';
+  const REBUILT = `${ORIGIN}/api/public/uploads/video?token=${TOKEN}`;
+
   it.each([
-    ['another host', 'https://evil.test/api/public/uploads/video?token=vtoken0001.vsignature0001'],
-    ['another scheme', 'http://oi.example.test/api/public/uploads/video?token=vtoken0001.vsignature0001'],
-    ['another port', 'https://oi.example.test:8443/api/public/uploads/video?token=vtoken0001.vsignature0001'],
-    ['userinfo', 'https://user:pw@oi.example.test/api/public/uploads/video?token=vtoken0001.vsignature0001'],
-    ['the photo path', `${ORIGIN}/api/public/uploads/photo?token=vtoken0001.vsignature0001`],
-    ['a longer path', `${ORIGIN}/api/public/uploads/video/x?token=vtoken0001.vsignature0001`],
+    ['another host', `https://evil.test/api/public/uploads/video?token=${TOKEN}`],
+    ['another scheme', `http://oi.example.test/api/public/uploads/video?token=${TOKEN}`],
+    ['another port', `https://oi.example.test:8443/api/public/uploads/video?token=${TOKEN}`],
+    ['a protocol-relative url', `//evil.test/api/public/uploads/video?token=${TOKEN}`],
+    ['a relative path', `/api/public/uploads/video?token=${TOKEN}`],
+    ['the engine host of a dev tunnel', `https://dev-tunnel.example.net/api/public/uploads/video?token=${TOKEN}`],
+  ])('r2: %s is ignored: the transfer url is rebuilt on the pinned origin and never names the supplied host', (_name, url) => {
+    const built = resolveVideoUploadUrl(ORIGIN, { provider: 'r2' }, url);
+    expect(built).toBe(REBUILT);
+    expect(built).not.toContain('evil.test');
+    expect(built).not.toContain('dev-tunnel');
+    expect(built).not.toContain('8443');
+  });
+
+  it.each([
+    ['userinfo', `https://user:pw@oi.example.test/api/public/uploads/video?token=${TOKEN}`],
+    ['userinfo naming another host', `https://oi.example.test@evil.test/api/public/uploads/video?token=${TOKEN}`],
+    ['the photo path', `${ORIGIN}/api/public/uploads/photo?token=${TOKEN}`],
+    ['a longer path', `${ORIGIN}/api/public/uploads/video/x?token=${TOKEN}`],
+    ['a trailing slash', `${ORIGIN}/api/public/uploads/video/?token=${TOKEN}`],
+    ['a dot segment', `${ORIGIN}/api/public/uploads/video/%2e?token=${TOKEN}`],
+    ['a plain dot segment', `${ORIGIN}/api/public/uploads/video/.?token=${TOKEN}`],
+    ['a parent segment that normalises back', `${ORIGIN}/api/public/uploads/x/../video?token=${TOKEN}`],
+    ['a doubled slash', `${ORIGIN}//api/public/uploads/video?token=${TOKEN}`],
+    ['a doubled slash inside', `${ORIGIN}/api//public/uploads/video?token=${TOKEN}`],
+    ['an encoded slash', `${ORIGIN}/api%2fpublic/uploads/video?token=${TOKEN}`],
+    ['an encoded slash in the last segment', `${ORIGIN}/api/public/uploads%2fvideo?token=${TOKEN}`],
+    ['an encoded letter of the path', `${ORIGIN}/api/public/uploads/%76ideo?token=${TOKEN}`],
     ['no token', `${ORIGIN}/api/public/uploads/video`],
-    ['an extra parameter', `${ORIGIN}/api/public/uploads/video?token=vtoken0001.vsignature0001&x=1`],
+    ['an empty token', `${ORIGIN}/api/public/uploads/video?token=`],
+    ['a short token', `${ORIGIN}/api/public/uploads/video?token=a.b`],
+    ['a duplicate token', `${ORIGIN}/api/public/uploads/video?token=${TOKEN}&token=${TOKEN}`],
+    ['an extra parameter', `${ORIGIN}/api/public/uploads/video?token=${TOKEN}&x=1`],
+    ['a parameter that is not token', `${ORIGIN}/api/public/uploads/video?tok=${TOKEN}`],
+    ['a token with a disallowed character', `${ORIGIN}/api/public/uploads/video?token=vtoken0001.vsig$nature01`],
+    ['a token with an encoded space', `${ORIGIN}/api/public/uploads/video?token=vtoken0001.vsig%20nature01`],
     ['a malformed token', `${ORIGIN}/api/public/uploads/video?token=nodot`],
-    ['a fragment', `${R2_URL}#x`],
-    ['a backslash', `${ORIGIN}\\@evil.test/api/public/uploads/video?token=vtoken0001.vsignature0001`],
-  ])('r2: refuses %s (and the control above is accepted)', (_name, url) => {
+    ['a fragment', `${ORIGIN}/api/public/uploads/video?token=${TOKEN}#x`],
+    ['whitespace', `${ORIGIN}/api/public/uploads/video?token=${TOKEN} `],
+    ['a backslash', `${ORIGIN}\@evil.test/api/public/uploads/video?token=${TOKEN}`],
+    ['a scheme that is not http', `ftp://oi.example.test/api/public/uploads/video?token=${TOKEN}`],
+  ])('r2: refuses %s (the control above is accepted)', (_name, url) => {
     expect(resolveVideoUploadUrl(ORIGIN, { provider: 'r2' }, R2_URL)).toBe(R2_URL);
     expect(resolveVideoUploadUrl(ORIGIN, { provider: 'r2' }, url)).toBeNull();
+  });
+
+  it('r2: the photo upload url resolver still refuses a foreign host (the relaxation is for clips only)', () => {
+    const photo = `/api/public/uploads/photo?token=${TOKEN}`;
+    expect(resolveUploadUrl(ORIGIN, `${ORIGIN}${photo}`)).toBe(`${ORIGIN}${photo}`);
+    expect(resolveUploadUrl(ORIGIN, `https://evil.test${photo}`)).toBeNull();
+    expect(resolveUploadUrl(ORIGIN, `http://oi.example.test${photo}`)).toBeNull();
+    expect(resolveUploadUrl(ORIGIN, `https://oi.example.test:8443${photo}`)).toBeNull();
   });
 
   it('stream: accepts exactly https on the documented upload host with the ref uid as the only path segment', () => {

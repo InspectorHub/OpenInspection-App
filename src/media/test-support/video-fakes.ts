@@ -50,6 +50,8 @@ export interface FakeVideoEngine {
   creates: { inspectionId: string; body: unknown }[];
   /** Requests the finalize route saw, with the JSON body parsed. */
   finalizes: { inspectionId: string; body: unknown }[];
+  /** The `readyToStream` of finalize answers: true by default, false, or 'omit' to leave the key out. */
+  finalizeReady: boolean | 'omit';
   /** Replaces the status of the next create-upload answers, consumed in order. */
   createStatuses: number[];
   /** Replaces the status of the next finalize answers (the server still applies a 200 only), consumed in order. */
@@ -83,6 +85,7 @@ export function createFakeVideoEngine(initial: Backend = 'r2'): FakeVideoEngine 
     creates: [],
     finalizes: [],
     createStatuses: [],
+    finalizeReady: true,
     finalizeStatuses: [],
     uploadStatuses: [],
     uploadUrlOverride: null,
@@ -165,7 +168,7 @@ export function createFakeVideoEngine(initial: Backend = 'r2'): FakeVideoEngine 
       losing = false;
       return Promise.reject(new Error('connection lost'));
     }
-    return response(200, { success: true, data: { poolId, streamUid: body.provider === 'stream' ? id : null, durationSec: null, readyToStream: true } });
+    return response(200, { success: true, data: { poolId, streamUid: body.provider === 'stream' ? id : null, durationSec: null, ...(engine.finalizeReady === 'omit' ? {} : { readyToStream: engine.finalizeReady }) } });
   }
 
   return engine;

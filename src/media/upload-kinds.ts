@@ -76,6 +76,37 @@ export function resolveUploadUrl(origin: string, raw: unknown, path: string): st
   return url.href;
 }
 
+/**
+ * The signed upload url of a route whose url the engine builds from its OWN public origin, which may differ from the
+ * server address the user typed (a development tunnel, an alias). Only two things in the answer matter: the path and
+ * the single `token` parameter. The supplied scheme, host and port are ignored entirely, and the url that is returned
+ * is built here as `<pinned origin><path>?token=<token>`, so the file never goes anywhere but the pinned origin and
+ * nothing of the server's string (not `href`, not the search part) is reused. The token is an HMAC over the
+ * tenant, inspection, media, user, kind and expiry with no host bound into it, so presenting it to the pinned origin
+ * is correct. Refused: userinfo, a fragment, a scheme other than http(s), a percent escape or a dot segment in the
+ * path, a path that is not exactly `path`, and any query other than one well-formed `token`.
+ */
+export function resolveRelocatableUploadUrl(origin: string, raw: unknown, path: string): string | null {
+  if (!isParseableUrlText(raw)) return null;
+  let url: URL;
+  try {
+    url = new URL(raw, origin);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (url.username !== '' || url.password !== '' || url.hash !== '') return null;
+  if (url.pathname !== path) return null;
+  // The parser normalises escapes and dot segments; the text must already have been the plain path.
+  const rawPath = raw.split(/[?#]/, 1)[0] ?? '';
+  if (!rawPath.endsWith(path) || rawPath.includes('%') || /\/\.\.?(\/|$)/.test(rawPath)) return null;
+  const keys = [...url.searchParams.keys()];
+  if (keys.length !== 1 || keys[0] !== 'token') return null;
+  const token = url.searchParams.get('token') ?? '';
+  if (!UPLOAD_TOKEN_PATTERN.test(token)) return null;
+  return `${origin}${path}?token=${token}`;
+}
+
 export type AuthedResult = { ok: true; res: HttpResponse } | { ok: false; failure: Failure };
 
 /** What a kind's strategy may do on the network: authenticated JSON posts to the pinned origin, and nothing else. */
