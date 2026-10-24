@@ -1,0 +1,64 @@
+import initSqlJs, { type Database, type SqlValue } from 'sql.js';
+import { type Db, joinedTransactionHandle, SerialQueue } from './db';
+
+/**
+ * In-memory SQLite (sql.js) implementing `Db`. Used by unit tests so storage
+ * logic runs without a device. BLOBs come back as `Uint8Array`.
+ */
+export async function createSqlJsDb(): Promise<Db> {
+  const SQL = await initSqlJs();
+  const raw = new SQL.Database();
+  const queue = new SerialQueue();
+
+  const ops: Pick<Db, 'execute' | 'query' | 'run'> = {
+    execute: (sql) => {
+      raw.exec(sql);
+      return Promise.resolve();
+    },
+    query: <T>(sql: string, params?: unknown[]) => Promise.resolve(selectRows(raw, sql, params) as T[]),
+    run: (sql, params) => {
+      raw.run(sql, toSqlValues(params));
+      const changes = raw.getRowsModified();
+      const lastId = Number(selectRows(raw, 'SELECT last_insert_rowid() AS id')[0]?.id ?? 0);
+      return Promise.resolve(lastId > 0 ? { changes, lastId } : { changes });
+    },
+  };
+
+  return {
+    execute: (sql) => queue.run(() => ops.execute(sql)),
+    query: <T>(sql: string, params?: unknown[]) => queue.run(() => ops.query<T>(sql, params)),
+    run: (sql, params) => queue.run(() => ops.run(sql, params)),
+    transaction: <T>(fn: (tx: Db) => Promise<T>) =>
+      queue.run(async () => {
+        raw.run('BEGIN');
+        try {
+          const out = await fn(joinedTransactionHandle(ops));
+          raw.run('COMMIT');
+          return out;
+        } catch (err) {
+          raw.run('ROLLBACK');
+          throw err;
+        }
+      }),
+  };
+}
+
+function toSqlValues(params: unknown[] | undefined): SqlValue[] {
+  return (params ?? []).map((p) => {
+    if (p === undefined || p === null) return null;
+    if (typeof p === 'boolean') return p ? 1 : 0;
+    if (typeof p === 'number' || typeof p === 'string' || p instanceof Uint8Array) return p;
+    throw new Error(`Unsupported SQL parameter type: ${typeof p}`);
+  });
+}
+
+function selectRows(raw: Database, sql: string, params?: unknown[]): Record<string, unknown>[] {
+  const stmt = raw.prepare(sql, toSqlValues(params));
+  try {
+    const rows: Record<string, unknown>[] = [];
+    while (stmt.step()) rows.push(stmt.getAsObject());
+    return rows;
+  } finally {
+    stmt.free();
+  }
+}
