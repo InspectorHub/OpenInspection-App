@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page background of the dark theme (field-ui --ih-bg-app); src/android-theme.test.ts keeps it equal. -->
+    <color name="app_background">#0f172a</color>
+</resources>

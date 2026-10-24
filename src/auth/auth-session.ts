@@ -172,6 +172,10 @@ export function createAndroidAuthSession(deps: AndroidAuthSessionDeps): AuthSess
           .then(async () => {
             // A cancel or the time limit may have ended this login while the listeners were registering.
             if (pending !== p) return;
+            // A tab left over from an earlier login (cancelled, or from a previous run of the app) must not
+            // stay on the stack under the new one. Best effort: there may be nothing to close.
+            await deps.browser.close().catch(() => undefined);
+            if (pending !== p) return;
             await deps.browser.open({ url });
             // ...or while the tab was opening, when the close that ended it ran before the tab existed.
             if (pending !== p) deps.browser.close().catch(() => undefined);

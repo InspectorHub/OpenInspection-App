@@ -120,7 +120,7 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
   return (
     <Screen>
       <Heading>Work list coming in a later task</Heading>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-base">
+      <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>
         <dd data-testid="identity-role" className="text-ih-fg-1">
           {roleLabel(identity.role)}

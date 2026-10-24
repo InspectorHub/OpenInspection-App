@@ -3,7 +3,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import { createHttp, type FetchLike } from './http';
-import { createRegistrar, REGISTRATION_CLIENT_NAME } from './registration';
+import { createRegistrar } from './registration';
 import { loadClientId } from './server-config';
 import { createFakeServer } from './test-support/fake-server';
 
@@ -29,7 +29,7 @@ describe('client registration (RFC 7591)', () => {
     expect(server.count('/oauth/register')).toBe(1);
     expect(await loadClientId(db, server.origin)).toBe(first);
     expect(server.requests[0]?.json).toEqual({
-      client_name: REGISTRATION_CLIENT_NAME,
+      client_name: 'InspectorHub',
       redirect_uris: ['io.inspectorhub.app:/oauth/callback'],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],

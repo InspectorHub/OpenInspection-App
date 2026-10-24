@@ -369,14 +369,18 @@ describe('one login at a time, cancel and expiry (review wave)', () => {
     it('a login whose callback never arrives expires, clears both pending records, and a later sign-in works', async () => {
       const opened: string[] = [];
       let closed = 0;
+      let tab = false;
       const never = createAndroidAuthSession({
         browser: {
           open: ({ url }) => {
             opened.push(url);
+            tab = true;
             return Promise.resolve();
           },
           close: () => {
-            closed += 1;
+            // Only a close that ends an open tab counts; the best-effort close before an open has none to end.
+            if (tab) closed += 1;
+            tab = false;
             return Promise.resolve();
           },
           addListener: () => Promise.resolve({ remove: () => Promise.resolve() }),
@@ -437,14 +441,18 @@ describe('callbacks with an unusable state on the real Android session', () => {
     const urlListeners: ((e: { url: string }) => void)[] = [];
     const opened: string[] = [];
     let closed = 0;
+    let tab = false;
     const session = createAndroidAuthSession({
       browser: {
         open: ({ url }) => {
           opened.push(url);
+          tab = true;
           return Promise.resolve();
         },
         close: () => {
-          closed += 1;
+          // Only a close that ends an open tab counts; the best-effort close before an open has none to end.
+          if (tab) closed += 1;
+          tab = false;
           return Promise.resolve();
         },
         addListener: () => Promise.resolve({ remove: () => Promise.resolve() }),

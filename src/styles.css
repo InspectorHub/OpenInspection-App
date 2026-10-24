@@ -8,6 +8,10 @@
   #root {
     min-height: 100%;
   }
+  /* On the root element as well as the body: edge to edge, the root's colour is what shows behind the system bars. */
+  html {
+    background-color: var(--ih-bg-app);
+  }
   body {
     @apply bg-ih-bg-app font-ih-body text-ih-fg-1;
     -webkit-text-size-adjust: 100%;

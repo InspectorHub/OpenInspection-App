@@ -64,6 +64,9 @@ export interface RealAdapters {
   openStore(): Promise<SecureStore>;
 }
 
+/** The page's `fetch`, called bare: a WebView throws `Illegal invocation` if it is called as a method of another object. */
+export const realFetch: FetchLike = (input, init) => fetch(input, init);
+
 const realAdapters: RealAdapters = {
   openDb: () => openRealCapacitorDb({ name: DATABASE_NAME }),
   closeDb: () => closeRealCapacitorDb(DATABASE_NAME),
@@ -88,7 +91,7 @@ export async function composeReal(adapters: RealAdapters = realAdapters): Promis
   return composeWith({
     db,
     store,
-    fetch: (input, init) => fetch(input, init),
+    fetch: realFetch,
     authSession: createCapacitorAuthSession(),
     clock: systemClock,
     platform: toClientPlatform(Capacitor.getPlatform()),

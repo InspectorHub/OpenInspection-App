@@ -63,7 +63,7 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
       <div className="flex flex-col gap-3">
         {busy ? (
           <>
-            <Button disabled aria-busy="true">
+            <Button busy>
               Waiting for sign-in
             </Button>
             <Button variant="secondary" onClick={() => flow.cancel()}>

@@ -113,6 +113,11 @@ export function parseTokenResponse(json: unknown, requireScope: boolean): TokenR
   return { ok: true, tokens: { accessToken, refreshToken, expiresInSec: expires } };
 }
 
+const globalTimers: NonNullable<TokenDeps['timers']> = {
+  setTimeout: ((...args: Parameters<typeof setTimeout>) => setTimeout(...args)) as typeof setTimeout,
+  clearTimeout: ((...args: Parameters<typeof clearTimeout>) => clearTimeout(...args)) as typeof clearTimeout,
+};
+
 export interface TokenDeps {
   http: Http;
   store: SecureStore;
@@ -170,7 +175,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   const storeTimeoutMs = deps.storeTimeoutMs ?? STORE_TIMEOUT_MS;
   /** Rejects when `call` has not settled in time; the timer never outlives the call. */
   function bounded<T>(call: () => Promise<T>): Promise<T> {
-    const timers = deps.timers ?? { setTimeout, clearTimeout };
+    // Arrow wrappers, not the bare builtins: a WebView throws `Illegal invocation` when they run with another `this`.
+    const timers = deps.timers ?? globalTimers;
     return new Promise<T>((resolve, reject) => {
       const timer = timers.setTimeout(() => {
         reject(new Error('secure store timed out'));

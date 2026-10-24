@@ -10,4 +10,9 @@ describe('capacitor.config.ts', () => {
     expect(config.webDir).toBe('dist');
     expect(config.server?.url).toBeUndefined();
   });
+
+  it('never logs: debug builds print plugin call data (secure-store keys, callback URLs) into logcat otherwise', () => {
+    expect(config.loggingBehavior).toBe('none');
+    expect(config.android?.loggingBehavior).toBeUndefined();
+  });
 });

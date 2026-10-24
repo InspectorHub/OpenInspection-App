@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { boot, type BootResult, type Screen } from './app/boot';
+import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
 import { Booting, OpenFailed, SchemaTooNew } from './ui/Blocking';
 import { ServerSetup } from './ui/ServerSetup';
@@ -11,9 +12,11 @@ export interface AppProps {
   open(): Promise<AppServices>;
   /** Accept plain http to a non-loopback host. Honoured in development builds only; a release build ignores it. */
   allowInsecureHttp?: boolean;
+  /** Routes sign-in callbacks to the login flow once the app has opened. The listener behind it is registered at start. */
+  callbacks?: CallbackRouter;
 }
 
-export function App({ open, allowInsecureHttp = true }: AppProps) {
+export function App({ open, allowInsecureHttp = true, callbacks }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const started = useRef<Promise<BootResult> | null>(null);
@@ -31,6 +34,12 @@ export function App({ open, allowInsecureHttp = true }: AppProps) {
       current = false;
     };
   }, [open, allowInsecureHttp]);
+
+  const flow = services?.flow;
+  useEffect(() => {
+    if (!callbacks || !flow) return undefined;
+    return callbacks.bind(flow);
+  }, [callbacks, flow]);
 
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;

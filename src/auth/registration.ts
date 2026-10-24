@@ -4,7 +4,8 @@ import { AuthError } from './errors';
 import type { Http } from './http';
 import { clearClientId, loadClientId, saveClientId, serverEndpoints } from './server-config';
 
-export const REGISTRATION_CLIENT_NAME = 'InspectorHub App';
+/** Shown on the consent page, where the engine appends the word "app" itself; keep it short and fixed. */
+export const REGISTRATION_CLIENT_NAME = 'InspectorHub';
 const MAX_CLIENT_ID_LENGTH = 256;
 
 export interface RegistrationDeps {

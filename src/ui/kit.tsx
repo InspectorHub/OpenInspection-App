@@ -42,8 +42,12 @@ export function Notice({ tone, children }: { tone: Tone; children: ReactNode }) 
 
 type Variant = 'primary' | 'secondary' | 'quiet';
 
-const BUTTON_BASE =
-  'min-h-11 w-full rounded-ih-button px-4 text-base font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus disabled:cursor-not-allowed disabled:opacity-60';
+const BUTTON_BASE = 'min-h-11 w-full rounded-ih-button px-4 text-base font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus';
+
+/** A disabled control is dimmed; that drops the primary button's text to about 3:1 in the dark scheme. */
+const DISABLED = 'disabled:cursor-not-allowed disabled:opacity-60';
+/** A busy control is working, not unavailable: it keeps full contrast and shows the progress cursor. */
+const BUSY = 'cursor-progress';
 
 const VARIANT_CLASSES: Record<Variant, string> = {
   primary: 'bg-ih-primary text-ih-primary-fg',
@@ -51,8 +55,22 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   quiet: 'text-ih-primary-text hover:bg-ih-bg-muted',
 };
 
-export function Button({ variant = 'primary', className = '', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; ref?: Ref<HTMLButtonElement> }) {
-  return <button type="button" className={`${BUTTON_BASE} ${VARIANT_CLASSES[variant]} ${className}`} {...rest} />;
+export function Button({
+  variant = 'primary',
+  busy = false,
+  disabled,
+  className = '',
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; busy?: boolean; ref?: Ref<HTMLButtonElement> }) {
+  return (
+    <button
+      type="button"
+      className={`${BUTTON_BASE} ${VARIANT_CLASSES[variant]} ${busy ? BUSY : DISABLED} ${className}`}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      {...rest}
+    />
+  );
 }
 
 export const INPUT_CLASSES =

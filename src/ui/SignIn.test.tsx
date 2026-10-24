@@ -57,7 +57,11 @@ describe('SignIn button', () => {
     const { held } = await renderSignIn();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Sign in' }));
     await vi.waitFor(() => expect(held?.opened).toBe(1));
-    expect(screen.getByRole('button', { name: 'Waiting for sign-in' })).toBeDisabled();
+    const waiting = screen.getByRole('button', { name: 'Waiting for sign-in' });
+    expect(waiting).toBeDisabled();
+    expect(waiting).toHaveAttribute('aria-busy', 'true');
+    // A busy control is not dimmed: dimming a primary button drops its text below 4.5:1 in the dark scheme.
+    expect(waiting.className).not.toMatch(/opacity/);
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
   });

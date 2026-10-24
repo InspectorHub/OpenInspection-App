@@ -15,6 +15,7 @@ function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolea
   let browserListenerFailures = options.browserListenerFailsOnce ? 1 : 0;
   const finishedListeners = new Set<() => void>();
   const urlListeners = new Set<(e: { url: string }) => void>();
+  let tabExists = false;
   const browser = {
     opened: [] as string[],
     closed: 0,
@@ -24,9 +25,12 @@ function fakes(options: { openFails?: boolean; browserListenerFailsOnce?: boolea
       await options.openGate;
       browser.opened.push(o.url);
       browser.log.push('tab-exists');
+      tabExists = true;
     },
     close: () => {
-      browser.closed += 1;
+      // `closed` counts the closes that ended a tab; the best-effort close before an open has no tab to end.
+      if (tabExists) browser.closed += 1;
+      tabExists = false;
       browser.log.push('close');
       return Promise.resolve();
     },
@@ -96,6 +100,23 @@ describe('Android auth session (Custom Tab)', () => {
     f.app.open(CALLBACK);
     expect(await pending).toBe(CALLBACK);
     expect(f.browser.closed).toBe(1);
+  });
+
+  it('closes a leftover tab before it opens a new one', async () => {
+    const f = fakes();
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    void session.start(AUTH_URL, SCHEME).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.browser.log.slice(0, 2)).toEqual(['close', 'tab-exists']);
+  });
+
+  it('still opens the tab when the pre-open close fails', async () => {
+    const f = fakes();
+    f.browser.close = () => Promise.reject(new Error('nothing to close'));
+    const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
+    void session.start(AUTH_URL, SCHEME).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.browser.opened).toEqual([AUTH_URL]);
   });
 
   it('ignores any other URL and keeps waiting', async () => {
@@ -361,11 +382,11 @@ describe('Android auth session (Custom Tab)', () => {
     await vi.advanceTimersByTimeAsync(0);
     session.cancel();
     expect(await outcome).toBe('sign_in_cancelled');
-    expect(f.browser.log).toEqual(['close']);
+    expect(f.browser.log).toEqual(['close', 'close']);
 
     openTab();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.browser.log).toEqual(['close', 'tab-exists', 'close']);
+    expect(f.browser.log).toEqual(['close', 'close', 'tab-exists', 'close']);
   });
 
   it('control: a login that is still waiting when the tab opens does not close it', async () => {
@@ -373,7 +394,7 @@ describe('Android auth session (Custom Tab)', () => {
     const session = createAndroidAuthSession({ browser: f.browser, app: f.app });
     const pending = session.start(AUTH_URL, SCHEME);
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.browser.log).toEqual(['tab-exists']);
+    expect(f.browser.log).toEqual(['close', 'tab-exists']);
     f.app.open(CALLBACK);
     await pending;
   });

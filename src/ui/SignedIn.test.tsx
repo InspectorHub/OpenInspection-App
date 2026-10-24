@@ -20,6 +20,21 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>): Promise<HTM
   return screen.getByRole('alertdialog');
 }
 
+describe('SignedIn layout', () => {
+  it('aligns the Role and Server rows on their text baselines', async () => {
+    const world = await createSignedInWorld();
+    const { container } = render(<SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} />);
+    expect(container.querySelector('dl')?.className).toContain('items-baseline');
+  });
+
+  it('keeps the content in one centred, width-limited column', async () => {
+    const world = await createSignedInWorld();
+    const { container } = render(<SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} />);
+    expect(container.querySelector('main')?.className).toContain('max-w-md');
+    expect(container.firstElementChild?.className).toContain('items-center');
+  });
+});
+
 describe('SignedIn sign out', () => {
   it('asks first: tapping Sign out opens the dialog and signs nobody out', async () => {
     const world = await createSignedInWorld();

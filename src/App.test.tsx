@@ -56,6 +56,19 @@ describe('App first screen', () => {
   });
 });
 
+describe('App callback routing', () => {
+  it('binds the login flow to the callback router once opened and unbinds on unmount', async () => {
+    const world = await createWorld();
+    const unbind = vi.fn();
+    const bind = vi.fn(() => unbind);
+    const view = render(<App open={() => Promise.resolve(world.services)} allowInsecureHttp={false} callbacks={{ bind }} />);
+    await screen.findByRole('heading', { name: 'Choose your server' });
+    expect(bind).toHaveBeenCalledWith(world.services.flow);
+    view.unmount();
+    expect(unbind).toHaveBeenCalled();
+  });
+});
+
 describe('App whole journey', () => {
   it('server setup, then sign in, then signed in, then signed out with local data kept', async () => {
     let held: HeldAuthSession | null = null;

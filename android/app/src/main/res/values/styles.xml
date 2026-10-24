@@ -13,6 +13,8 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Painted behind the system bars; the SystemBars plugin copies this onto the decor view on every style change. -->
+        <item name="android:windowBackground">@color/app_background</item>
     </style>
 
 
