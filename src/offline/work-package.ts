@@ -175,6 +175,8 @@ export interface RefresherDeps {
   limits?: Partial<RefreshLimits>;
   /** A run stopped for a reason the person may need to act on (sign in again, update the app). */
   onHalt?: (reason: RefreshHalt) => void;
+  /** Every finished flight's last summary, whatever its outcome (the caller decides what counts as a success). A throw is ignored. */
+  onSummary?: (summary: RefreshSummary) => void;
   /** Receives storage failures. Never receives a token, a url, a body or any server text. */
   onError?: (error: unknown) => void;
 }
@@ -771,6 +773,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
         const why = last.halted;
         notify(() => deps.onHalt?.(why));
       }
+      const finished = last;
+      notify(() => deps.onSummary?.(finished));
       scheduleNext(last);
       return last;
     })().finally(() => {

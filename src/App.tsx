@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { boot, screenForSignedIn, type BootResult, type Screen } from './app/boot';
 import { loadIdentity, type StoredIdentity } from './auth/server-config';
 import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
+import { createUnlockEmitter } from './app/lock-events';
+import { OfflineStackContext } from './app/stack-context';
+import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
 import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
@@ -22,6 +25,11 @@ export interface AppProps {
   appState?: AppStatePort;
   /** The timer behind the 60 second lock check; defaults to the page's own. */
   scheduler?: Scheduler;
+  /**
+   * Builds the offline stack (sync, reconcile, media, collaboration) of a signed-in session. Called once per session when the
+   * work screen appears and stopped when it goes away (sign-out, lock, another account or server). Omitted: no stack is built.
+   */
+  offline?: StackFactory;
 }
 
 /** Consecutive failed mid-session evaluations after which the work screen is locked. */
@@ -56,10 +64,13 @@ async function backToLock(services: AppServices, origin: string, held: StoredIde
   setScreen(await screenForSignedIn(services, origin, identity).catch((): Screen => ({ kind: 'locked', origin, identity, reason: 'expired' })));
 }
 
-export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler }: AppProps) {
+export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const started = useRef<Promise<BootResult> | null>(null);
+  const unlocks = useMemo(() => createUnlockEmitter(), []);
+  const insecure = import.meta.env.DEV && allowInsecureHttp;
+  const stack = useOfflineStackLifecycle(services, offline, screen.kind === 'signed_in' ? { origin: screen.origin, identity: screen.identity } : null, insecure, unlocks.onUnlocked);
 
   useEffect(() => {
     // One open per launch, even where React runs the effect twice.
@@ -92,6 +103,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       appState,
       onOutcome: (outcome) => {
         failures = 0;
+        unlocks.note(outcome);
         setScreen((current) => applyOutcome(current, outcome));
       },
       onError: () => {
@@ -102,7 +114,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       },
     });
     return () => monitor.stop();
-  }, [services, lockWatched, scheduler, appState]);
+  }, [services, lockWatched, scheduler, appState, unlocks]);
 
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
@@ -139,12 +151,14 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       );
     case 'signed_in':
       return (
-        <SignedIn
-          services={services}
-          origin={screen.origin}
-          identity={screen.identity}
-          onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
-        />
+        <OfflineStackContext.Provider value={stack}>
+          <SignedIn
+            services={services}
+            origin={screen.origin}
+            identity={screen.identity}
+            onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
+          />
+        </OfflineStackContext.Provider>
       );
     case 'locked':
       return (
@@ -152,7 +166,10 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
           services={services}
           origin={screen.origin}
           reason={screen.reason}
-          onOutcome={(outcome) => setScreen((current) => applyOutcome(current, outcome))}
+          onOutcome={(outcome) => {
+            unlocks.note(outcome);
+            setScreen((current) => applyOutcome(current, outcome));
+          }}
           onSignInRequired={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: screen.identity })}
           onCleared={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
         />

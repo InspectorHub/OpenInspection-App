@@ -230,6 +230,8 @@ export const DEVICE_STATE_KEYS = [
   'locked_reason',
   'install_marker',
   'outbox_seq',
+  /** Epoch ms of the last completed cold-start media sweep (orphan files and uploader temp copies). */
+  'media_sweep_at',
 ] as const;
 
 /** Families of per-server keys: the key is the prefix followed by a non-empty suffix. */

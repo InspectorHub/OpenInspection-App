@@ -27,6 +27,11 @@ export interface AppServices {
   clock: Clock;
   platform: ClientPlatform;
   appVersion: string;
+  /**
+   * Calls the listener after the server accepted this device (a token refresh or a session check) and the verification was
+   * recorded. For flows that should look again once the grant is known to be good. Returns the unsubscribe function.
+   */
+  onTokenVerified(listener: () => void): () => void;
   /** Releases the database connection. Safe to call when it is already closed. */
   close(): Promise<void>;
 }
@@ -51,16 +56,32 @@ export function composeWith(parts: ComposeParts): AppServices {
     defaultHeaders: { 'X-Client-Platform': platform, 'X-Client-Version': appVersion },
   });
   const registrar = createRegistrar({ http, db });
+  const verifiedListeners = new Set<() => void>();
   const tokens = createTokenManager({
     http,
     store,
     clock,
     getClientId: (origin) => loadClientId(db, origin),
-    onVerified: (event) => (event.sessionConfirmed ? recordVerified(db, event.at, event.offlineMaxDays, event.serverDateMs, event.serverNowMs) : recordRefreshed(db, event.at)),
+    onVerified: async (event) => {
+      await (event.sessionConfirmed ? recordVerified(db, event.at, event.offlineMaxDays, event.serverDateMs, event.serverNowMs) : recordRefreshed(db, event.at));
+      for (const listener of [...verifiedListeners]) {
+        try {
+          listener();
+        } catch {
+          // A failing listener must not change what the auth layer does.
+        }
+      }
+    },
     onRevoked: () => setRevoked(db),
   });
   const flow = createLoginFlow({ http, db, registrar, tokens, authSession: parts.authSession, clock });
-  return { db, files, http, registrar, tokens, flow, clock, platform, appVersion, close: parts.closeDb ?? (() => Promise.resolve()) };
+  const onTokenVerified = (listener: () => void): (() => void) => {
+    verifiedListeners.add(listener);
+    return () => {
+      verifiedListeners.delete(listener);
+    };
+  };
+  return { db, files, http, registrar, tokens, flow, clock, platform, appVersion, onTokenVerified, close: parts.closeDb ?? (() => Promise.resolve()) };
 }
 
 /** Anything that is not iOS reports as Android, which includes the browser used for development. */
