@@ -7,6 +7,7 @@ import { registerCallbackRouter } from './app/callbacks';
 import { composeReal } from './app/compose';
 import { createRealStackFactory } from './app/real-stack';
 import { createCapacitorAppState } from './offline/lock-monitor';
+import { createRealNetwork } from './platform/network';
 import './styles.css';
 import { followSystemColorScheme } from './ui/color-scheme';
 import { createSystemBarsSync } from './ui/system-bars';
@@ -20,9 +21,10 @@ followSystemColorScheme(document.documentElement, window.matchMedia('(prefers-co
 const callbacks = registerCallbackRouter(CapacitorApp);
 const appState = createCapacitorAppState(CapacitorApp);
 const offlineStack = createRealStackFactory({ appState });
+const network = createRealNetwork();
 
 createRoot(root).render(
   <StrictMode>
-    <App open={composeReal} callbacks={callbacks} appState={appState} offline={offlineStack} />
+    <App open={composeReal} callbacks={callbacks} appState={appState} offline={offlineStack} network={network} />
   </StrictMode>,
 );

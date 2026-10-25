@@ -61,7 +61,7 @@ export function PanelHeading({ id, children }: { id: string; children: ReactNode
   );
 }
 
-type Variant ='primary' | 'secondary' | 'quiet' | 'danger';
+type Variant = 'primary' | 'secondary' | 'quiet' | 'danger';
 
 const BUTTON_BASE = 'min-h-11 w-full rounded-ih-button px-4 text-base font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus';
 

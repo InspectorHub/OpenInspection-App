@@ -3,7 +3,7 @@ import { realTimers } from '../collab/timers';
 import type { AppStatePort } from '../offline/lock-monitor';
 import { createRealNetwork } from '../platform/network';
 import { createRealUploaderPlugin } from '../platform/uploader';
-import { serverTooOldFor } from './client-state';
+import { factsFor, serverTooOldFor } from './client-state';
 import type { AppServices } from './compose';
 import { appDiagnostics } from './diagnostics';
 import { createOfflineStack, type OfflineStackDeps } from './offline-stack';
@@ -14,10 +14,17 @@ import type { StackFactory } from './use-offline-stack';
 export const LAUNCH_COMPAT_TIMEOUT_MS = 5_000;
 
 /** How the stack learns whether the server is too old: the state of this server, and one look at it before the first flow. */
-export function contractPorts(services: Pick<AppServices, 'clientState' | 'refreshCompat'>, origin: string): Pick<OfflineStackDeps, 'serverTooOld' | 'beforeLaunch'> {
+export function contractPorts(
+  services: Pick<AppServices, 'clientState' | 'refreshCompat'>,
+  origin: string,
+): Pick<OfflineStackDeps, 'serverTooOld' | 'beforeLaunch' | 'compatKnown' | 'reconcileSupported' | 'onReconcileUnsupported'> {
+  const facts = () => factsFor(services.clientState.store.get(), origin);
   return {
     serverTooOld: serverTooOldFor(services.clientState, origin),
     beforeLaunch: () => services.refreshCompat(origin, { timeoutMs: LAUNCH_COMPAT_TIMEOUT_MS }),
+    compatKnown: () => facts().compatKnown,
+    reconcileSupported: () => facts().reconcileSupported,
+    onReconcileUnsupported: () => services.clientState.noteReconcileUnsupported(origin),
   };
 }
 

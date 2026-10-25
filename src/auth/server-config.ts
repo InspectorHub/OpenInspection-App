@@ -1,4 +1,5 @@
 import type { Db } from '../platform/db';
+import { httpsHref } from '../platform/https-href';
 import { assertDeviceStateKey } from '../platform/schema';
 import { AuthError } from './errors';
 import type { Http } from './http';
@@ -7,11 +8,20 @@ import type { Http } from './http';
  * The lowest `serverContractVersion` (from `GET /api/client/compat`) this app can sync with, and the one place it is written.
  * A server below it is "too old": the app keeps local reads, edits and capture working and starts no sync flow
  * (see `serverTooOld` in `ClientState`). Raise it, in the same change, when the app starts to depend on a server route or
- * field that an earlier contract version does not have; never raise it for a feature that can degrade by itself
- * (the engine's version history is in its native client guide). A server that does not answer is not "too old":
+ * field that every earlier contract version lacks; never raise it for a feature that can degrade by itself. Such a feature gets
+ * its own constant and is switched off alone (see `MIN_CONTRACT_FOR_RECONCILE`), so an older server is still synced with.
+ * (The engine's version history is in its native client guide.) A server that does not answer is not "too old":
  * the answer is unknown and nothing is blocked.
  */
 export const MIN_SERVER_CONTRACT_VERSION = 1;
+
+/**
+ * The lowest `serverContractVersion` that has the route behind the check for removed inspections (`POST /api/client/inspections/visible`).
+ * This is a FEATURE gate, not a sync gate: a server below it is still synced with, and only that one check is skipped
+ * (nothing is purged or quarantined, no request is sent), with a notice. Raise it only when that route's contract changes;
+ * add another constant like it for the next feature that a plain older server can live without.
+ */
+export const MIN_CONTRACT_FOR_RECONCILE = 2;
 const COMPAT_TIMEOUT_MS = 10_000;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -100,14 +110,6 @@ export interface CompatInfo {
   nativeLoginVerified: false;
 }
 
-function httpsOnly(value: string | null): string | null {
-  if (value === null) return null;
-  try {
-    return new URL(value).protocol === 'https:' ? value : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function fetchCompat(
   http: Http,
@@ -140,7 +142,7 @@ export async function fetchCompat(
   return {
     minSupported,
     recommended,
-    downloadUrl: httpsOnly(downloadUrl),
+    downloadUrl: httpsHref(downloadUrl),
     serverContractVersion: version,
     serverTooOld: version < MIN_SERVER_CONTRACT_VERSION,
     nativeLoginVerified: false,

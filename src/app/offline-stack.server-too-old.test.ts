@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CompatInfo } from '../auth/server-config';
 import type { SocketFactory } from '../collab/connector';
 import { photoRecord } from '../media/test-support/fakes';
+import { videoRecord } from '../media/test-support/video-fakes';
 import { enqueue } from '../offline/outbox';
 import { ALICE, ORIGIN } from '../offline/test-support/replay-world';
 import { jsonReply } from '../offline/test-support/package-world';
@@ -48,8 +49,10 @@ const paths = (w: StackWorld): string[] => w.pkg.requests.map((r) => `${r.method
 /** Everything that talks to the server, poked once each: the replayer, the refresher, the reconciler, the uploader, the connector. */
 async function pokeEverySyncFlow(stack: OfflineStack): Promise<void> {
   await stack.store.put(photoRecord('p1', { inspectionId: 'insp-1' }));
+  await stack.store.putVideo(videoRecord('v1', { inspectionId: 'insp-1' }));
   await stack.mediaReconciler.idle();
   await stack.uploader.uploadDetailed({ pendingId: 'p1', inspectionId: 'insp-1' });
+  await stack.uploader.uploadDetailed({ pendingId: 'v1', inspectionId: 'insp-1' });
   await stack.replayer.replay();
   await stack.refresher.refresh({ reason: 'manual' });
   stack.reconciler.trigger('manual');
@@ -87,6 +90,28 @@ describe('a server on an older contract: no sync, local work goes on (Review Foc
     expect(w.sockets.opened).toEqual([]);
     expect(w.plugin.starts).toEqual([]);
     await stack.stop();
+  });
+
+  it('too old: no media row changes state or attempts, photo or clip (control: with a sufficient server the same rows move)', async () => {
+    const rowsOf = async (w: StackWorld): Promise<string> => JSON.stringify(await w.replay.db.query('SELECT pending_id, state, attempts FROM media ORDER BY pending_id'));
+    const old = await createStackWorld();
+    await loaded(old);
+    const stuck = old.make({ serverTooOld: serverTooOldFor(clientState(true), ORIGIN) });
+    await run(stuck);
+    await pokeEverySyncFlow(stuck);
+    const states = JSON.parse(await rowsOf(old)) as { pending_id: string; state: string; attempts: number }[];
+    expect(states.map((r) => r.pending_id)).toEqual(['p1', 'v1']);
+    expect(states.every((r) => r.state === 'pending' && r.attempts === 0)).toBe(true);
+    await stuck.stop();
+
+    const fine = await createStackWorld();
+    await loaded(fine);
+    const moving = fine.make({ serverTooOld: serverTooOldFor(clientState(false), ORIGIN) });
+    await run(moving);
+    await pokeEverySyncFlow(moving);
+    const after = JSON.parse(await rowsOf(fine)) as { state: string; attempts: number }[];
+    expect(after.some((r) => r.state !== 'pending' || r.attempts !== 0)).toBe(true);
+    await moving.stop();
   });
 
   it('too old: local reads and writes still work, and nothing is reported as a failure', async () => {

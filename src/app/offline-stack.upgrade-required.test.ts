@@ -5,7 +5,7 @@ import { enqueue } from '../offline/outbox';
 import { ALICE, ORIGIN } from '../offline/test-support/replay-world';
 import { jsonReply } from '../offline/test-support/package-world';
 import { createMemoryKeyValue } from '../platform/kv';
-import { clientPolicy, createClientState, type ClientStateController } from './client-state';
+import { clientPolicy, createClientState, factsFor, type ClientStateController } from './client-state';
 import type { OfflineStack } from './offline-stack';
 import { createStackWorld, type StackWorld } from './test-support/stack-world';
 
@@ -64,7 +64,7 @@ describe('upgrade required: editing stops, the hand-over of captured work does n
     const attempted: string[] = [];
     const stack = w.make({ http: engineAboveThisApp(w, state, attempted) });
     await run(stack);
-    expect(state.store.get().upgrade).toBe('required');
+    expect(factsFor(state.store.get(), ORIGIN).upgrade).toBe('required');
     expect(sent(w).filter((p) => p === 'POST /api/inspections')).toHaveLength(1);
     // The refresher's read was refused with 426 (it never reached the fake engine), so the refusal really happened on this run.
     expect(attempted).toContain('GET /api/inspections');
@@ -106,7 +106,7 @@ describe('upgrade required: editing stops, the hand-over of captured work does n
     await flush();
     expect(sent(w).some((p) => p.includes('/collab/ticket'))).toBe(true);
     expect(w.sockets.opened.length).toBeGreaterThan(0);
-    expect(state.store.get().upgrade).toBe('required');
+    expect(factsFor(state.store.get(), ORIGIN).upgrade).toBe('required');
     handle.destroy();
     await stack.stop();
   });

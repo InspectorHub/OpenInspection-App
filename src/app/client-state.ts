@@ -1,41 +1,71 @@
-import type { CompatInfo } from '../auth/server-config';
+import { MIN_CONTRACT_FOR_RECONCILE, type CompatInfo } from '../auth/server-config';
 import type { KeyValue } from '../platform/kv';
-import { compatNotices } from './compat-notice';
+import { compareVersions, compatNotices } from './compat-notice';
 import { createStore, type ReadableStore } from './stack-store';
 
 /** What the server asks of this app version: nothing, an update when convenient, or an update before more editing. */
 export type UpgradeLevel = 'none' | 'recommended' | 'required';
 
 /**
- * What the app has learned about the server it is signed in to, for the interface and the editor gate. Every fact belongs to
- * `origin`: a reader for another server must ignore it (`clientPolicy` does). Nothing here is persisted except the dismissal
- * of the recommended banner, and nothing here is read by a sync flow except `serverTooOld`.
+ * What the app has learned about ONE server, for the interface, the editor gate and the sync flows. Unknown is allowed by design:
+ * until a compat answer arrives (offline, a timeout, a page that is not the server's) the server counts as current, never as too
+ * old, and nothing is blocked on a guess. A later answer, or the next foreground return, replaces the guess.
  */
-export interface ClientState {
-  origin: string | null;
+export interface OriginFacts {
   upgrade: UpgradeLevel;
-  /** The server speaks an older contract than this app needs. False when it is not known: an unanswered request proves nothing. */
+  /** The server speaks an older contract than this app needs. False when it is not known. */
   serverTooOld: boolean;
   /** Where to get the update, as the compat answer gave it (already https-only; still re-checked when it is opened). */
   downloadUrl: string | null;
   /** The newest version the server recommends, when the compat answer said. */
   recommendedVersion: string | null;
-  /** True while the "update available" banner should show: recommended, and not dismissed for this app version and recommendation. */
+  /** Whether the server can answer the check for removed inspections: true or false once the contract is known, null before. */
+  reconcileSupported: boolean | null;
+  /** A compat answer was received in this run. */
+  compatKnown: boolean;
+  /** True while the "update available" banner should show. */
   bannerVisible: boolean;
+  /** True while the "this server does not support removing deleted inspections" notice should show. */
+  reconcileNoticeVisible: boolean;
+}
+
+/** Facts per server: a response only ever touches the facts of the server it came from. */
+export interface ClientState {
+  origins: ReadonlyMap<string, OriginFacts>;
   /** Counts compat attempts, answered or not; what the interface re-reads its time-based notices on. */
   refreshes: number;
+}
+
+const UNKNOWN: OriginFacts = {
+  upgrade: 'none',
+  serverTooOld: false,
+  downloadUrl: null,
+  recommendedVersion: null,
+  reconcileSupported: null,
+  compatKnown: false,
+  bannerVisible: false,
+  reconcileNoticeVisible: false,
+};
+
+/** The facts of one server; the "nothing known" facts when none arrived. */
+export function factsFor(state: ClientState, origin: string): OriginFacts {
+  return state.origins.get(origin) ?? UNKNOWN;
 }
 
 export interface ClientStateController {
   readonly store: ReadableStore<ClientState>;
   /** An `X-Client-Upgrade` value, or a 426, seen on a response from `origin`. Values other than `required` and `recommended` are ignored. */
   noteUpgrade(origin: string, value: string): void;
-  /** A compat answer from `origin`. Authoritative: it replaces every earlier signal from that server. */
+  /** A compat answer from `origin`. Authoritative for that server: it replaces every earlier signal from it, and touches no other server. */
   applyCompat(origin: string, compat: CompatInfo): void;
   /** A compat request that got no usable answer. Changes no fact. */
   noteCompatAttempt(origin: string): void;
+  /** The check for removed inspections was refused as unsupported by `origin` (the server has no such route). */
+  noteReconcileUnsupported(origin: string): void;
   /** The person closed the banner: not shown again for this app version and recommendation on this server. */
-  dismissBanner(): void;
+  dismissBanner(origin: string): void;
+  /** The person closed the notice about the unsupported check on this server. */
+  dismissReconcileNotice(origin: string): void;
   /** Settles when every banner decision started so far has finished. Never rejects. */
   settled(): Promise<void>;
 }
@@ -55,23 +85,20 @@ export interface ClientPolicy {
 
 /** The policy for the server at `origin`. Facts about another server restrict nothing. */
 export function clientPolicy(state: ClientState, origin: string): ClientPolicy {
-  const mine = state.origin === origin;
-  return { canEdit: !(mine && state.upgrade === 'required'), canSync: !(mine && state.serverTooOld), canExport: true };
+  const facts = factsFor(state, origin);
+  return { canEdit: facts.upgrade !== 'required', canSync: !facts.serverTooOld, canExport: true };
 }
 
-/** `serverTooOld` of one server as a store of its own, for the offline stack. */
-export function serverTooOldFor(controller: ClientStateController, origin: string): ReadableStore<boolean> {
-  const read = (): boolean => {
-    const state = controller.store.get();
-    return state.origin === origin && state.serverTooOld;
-  };
+/** One fact of one server as a store of its own (for the offline stack). */
+function factStore<T>(controller: ClientStateController, origin: string, read: (facts: OriginFacts) => T): ReadableStore<T> {
+  const get = (): T => read(factsFor(controller.store.get(), origin));
   return {
-    get: read,
+    get,
     subscribe: (listener) => {
-      let last = read();
+      let last = get();
       return controller.store.subscribe(() => {
-        const next = read();
-        if (next === last) return;
+        const next = get();
+        if (Object.is(next, last)) return;
         last = next;
         listener();
       });
@@ -79,90 +106,151 @@ export function serverTooOldFor(controller: ClientStateController, origin: strin
   };
 }
 
-const dismissedKey = (origin: string): string => `oi.update-dismissed:${origin}`;
+/** `serverTooOld` of one server as a store of its own. */
+export function serverTooOldFor(controller: ClientStateController, origin: string): ReadableStore<boolean> {
+  return factStore(controller, origin, (facts) => facts.serverTooOld);
+}
+
+const bannerKey = (origin: string): string => `oi.update-dismissed:${origin}`;
+const reconcileNoticeKey = (origin: string): string => `oi.reconcile-unsupported-dismissed:${origin}`;
+
+/**
+ * Whether a stored dismissal (`<app version>|<recommended version or empty>`) still covers the current recommendation.
+ * A dismissal made while only the header was known (no version) covers the same app version whatever compat later says, and a
+ * dismissal against a version covers the same or an older recommendation; only a newer one, or a new app version, asks again.
+ */
+function covers(stored: string | null, appVersion: string, recommended: string | null): boolean {
+  if (stored === null) return false;
+  const cut = stored.lastIndexOf('|');
+  if (cut < 0 || stored.slice(0, cut) !== appVersion) return false;
+  const was = stored.slice(cut + 1);
+  if (was === '' || recommended === null) return true;
+  const order = compareVersions(recommended, was);
+  return order === null ? recommended === was : order <= 0;
+}
 
 export function createClientState(deps: ClientStateDeps): ClientStateController {
-  const store = createStore<ClientState>({ origin: null, upgrade: 'none', serverTooOld: false, downloadUrl: null, recommendedVersion: null, bannerVisible: false, refreshes: 0 });
-  /** Bumped by everything that changes what the banner depends on, so a slow read never overwrites a newer decision. */
-  let generation = 0;
+  const store = createStore<ClientState>({ origins: new Map(), refreshes: 0 });
+  /** Per decision and server: bumped by everything that changes what it depends on, so a slow read never overwrites a newer one. */
+  const generations = new Map<string, number>();
   const pending = new Set<Promise<void>>();
+
+  function bump(kind: 'banner' | 'notice', origin: string): number {
+    const key = `${kind}|${origin}`;
+    const next = (generations.get(key) ?? 0) + 1;
+    generations.set(key, next);
+    return next;
+  }
 
   function track(work: Promise<void>): void {
     const done = work.catch(() => undefined).finally(() => pending.delete(done));
     pending.add(done);
   }
 
-  /** What was dismissed: the app version and the recommendation it was dismissed against. */
-  function dismissalId(state: ClientState): string {
-    return `${deps.appVersion}|${state.recommendedVersion ?? ''}`;
+  function set(origin: string, patch: Partial<OriginFacts>, extra: Partial<ClientState> = {}): void {
+    const origins = new Map(store.get().origins);
+    origins.set(origin, { ...factsFor(store.get(), origin), ...patch });
+    store.patch({ origins, ...extra });
   }
 
-  /** Moves to `origin`. A server other than the one the facts are about starts from nothing. */
-  function enter(origin: string): void {
-    if (store.get().origin === origin) return;
-    generation += 1;
-    store.patch({ origin, upgrade: 'none', serverTooOld: false, downloadUrl: null, recommendedVersion: null, bannerVisible: false });
-  }
-
-  function decideBanner(): void {
-    generation += 1;
-    const mine = generation;
-    const state = store.get();
-    if (state.upgrade !== 'recommended' || state.origin === null) {
-      store.patch({ bannerVisible: false });
+  function decideBanner(origin: string): void {
+    const mine = bump('banner', origin);
+    const facts = factsFor(store.get(), origin);
+    if (facts.upgrade !== 'recommended') {
+      set(origin, { bannerVisible: false });
       return;
     }
-    const origin = state.origin;
-    const id = dismissalId(state);
+    const recommended = facts.recommendedVersion;
     track(
       (async () => {
         let stored: string | null = null;
         try {
-          stored = await deps.kv.get(dismissedKey(origin));
+          stored = await deps.kv.get(bannerKey(origin));
         } catch {
           // Storage that cannot be read: show a banner that can be closed, rather than hide the news.
           stored = null;
         }
-        if (mine === generation) store.patch({ bannerVisible: stored !== id });
+        if (mine === generations.get(`banner|${origin}`)) set(origin, { bannerVisible: !covers(stored, deps.appVersion, recommended) });
       })(),
     );
+  }
+
+  function decideReconcileNotice(origin: string): void {
+    const mine = bump('notice', origin);
+    if (factsFor(store.get(), origin).reconcileSupported !== false) {
+      set(origin, { reconcileNoticeVisible: false });
+      return;
+    }
+    track(
+      (async () => {
+        let stored: string | null = null;
+        try {
+          stored = await deps.kv.get(reconcileNoticeKey(origin));
+        } catch {
+          stored = null;
+        }
+        if (mine === generations.get(`notice|${origin}`)) set(origin, { reconcileNoticeVisible: stored === null });
+      })(),
+    );
+  }
+
+  function decideAll(origin: string): void {
+    decideBanner(origin);
+    decideReconcileNotice(origin);
   }
 
   return {
     store,
     noteUpgrade: (origin, value) => {
       if (value !== 'required' && value !== 'recommended') return;
-      enter(origin);
-      const before = store.get().upgrade;
+      const before = factsFor(store.get(), origin).upgrade;
       if (value === 'required') {
         if (before === 'required') return;
-        generation += 1;
-        store.patch({ upgrade: 'required', bannerVisible: false });
+        bump('banner', origin);
+        set(origin, { upgrade: 'required', bannerVisible: false });
         return;
       }
       if (before !== 'none') return;
-      store.patch({ upgrade: 'recommended' });
-      decideBanner();
+      set(origin, { upgrade: 'recommended' });
+      decideAll(origin);
     },
     applyCompat: (origin, compat) => {
-      enter(origin);
       const notices = compatNotices(compat, deps.appVersion);
       const upgrade: UpgradeLevel = notices.includes('update_required') ? 'required' : notices.includes('update_available') ? 'recommended' : 'none';
-      store.patch({ upgrade, serverTooOld: compat.serverTooOld, downloadUrl: compat.downloadUrl, recommendedVersion: compat.recommended, refreshes: store.get().refreshes + 1 });
-      decideBanner();
+      set(
+        origin,
+        {
+          upgrade,
+          serverTooOld: compat.serverTooOld,
+          downloadUrl: compat.downloadUrl,
+          recommendedVersion: compat.recommended,
+          reconcileSupported: compat.serverContractVersion >= MIN_CONTRACT_FOR_RECONCILE,
+          compatKnown: true,
+        },
+        { refreshes: store.get().refreshes + 1 },
+      );
+      decideAll(origin);
     },
     noteCompatAttempt: () => {
       store.patch({ refreshes: store.get().refreshes + 1 });
     },
-    dismissBanner: () => {
-      generation += 1;
-      const state = store.get();
-      store.patch({ bannerVisible: false });
-      if (state.origin === null) return;
-      const origin = state.origin;
-      const id = dismissalId(state);
+    noteReconcileUnsupported: (origin) => {
+      if (factsFor(store.get(), origin).reconcileSupported === false) return;
+      set(origin, { reconcileSupported: false });
+      decideAll(origin);
+    },
+    dismissBanner: (origin) => {
+      bump('banner', origin);
+      const facts = factsFor(store.get(), origin);
+      set(origin, { bannerVisible: false });
+      const id = `${deps.appVersion}|${facts.recommendedVersion ?? ''}`;
       // A dismissal that cannot be stored is shown again next time; the banner is closed for now either way.
-      track(Promise.resolve().then(() => deps.kv.set(dismissedKey(origin), id)));
+      track(Promise.resolve().then(() => deps.kv.set(bannerKey(origin), id)));
+    },
+    dismissReconcileNotice: (origin) => {
+      bump('notice', origin);
+      set(origin, { reconcileNoticeVisible: false });
+      track(Promise.resolve().then(() => deps.kv.set(reconcileNoticeKey(origin), '1')));
     },
     settled: async () => {
       while (pending.size > 0) await Promise.all([...pending]);

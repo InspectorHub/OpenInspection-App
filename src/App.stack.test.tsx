@@ -64,6 +64,18 @@ function rig(world: World) {
   return { factory, stacks, network, timers };
 }
 
+/**
+ * Waits for the signal that a stack was built (the screen shows its account, not the `none` the stub shows before), then for its start
+ * sequence. The optional chain this replaces resolved at once while no stack existed, so the assertions after it ran too early.
+ */
+async function settledStack(stacks: OfflineStack[]): Promise<OfflineStack> {
+  await waitFor(() => expect(screen.getByTestId('stack-account')).toHaveTextContent(/^tenant-[^/]+\/user-[^/]+$/));
+  const stack = stacks[0];
+  if (!stack) throw new Error('the factory did not build a stack');
+  await stack.settled();
+  return stack;
+}
+
 describe('the offline stack follows the signed-in screen', () => {
   it('builds one stack for a signed-in launch, starts it, and hands it to the work screen through context', async () => {
     const world = await createSignedInWorld();
@@ -73,7 +85,7 @@ describe('the offline stack follows the signed-in screen', () => {
     expect(factory).toHaveBeenCalledTimes(1);
     const input = factory.mock.calls[0]?.[0];
     expect(input?.origin).toBe(world.server.origin);
-    await stacks[0]?.settled();
+    await settledStack(stacks);
     expect(network.listeners()).toBeGreaterThan(0);
     expect(stacks[0]?.isStopped()).toBe(false);
   });
@@ -92,8 +104,7 @@ describe('the offline stack follows the signed-in screen', () => {
         <App open={() => Promise.resolve(restartOffline(world).services)} allowInsecureHttp={false} scheduler={fakeScheduler()} offline={factory} />
       </StrictMode>,
     );
-    await waitFor(() => expect(screen.getByTestId('stack-account')).not.toHaveTextContent('none'));
-    await stacks[0]?.settled();
+    await settledStack(stacks);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(stacks[0]?.isStopped()).toBe(false);
   });
@@ -102,8 +113,7 @@ describe('the offline stack follows the signed-in screen', () => {
     const world = await createSignedInWorld();
     const { factory, stacks, network, timers } = rig(world);
     render(<App open={() => Promise.resolve(restartOffline(world).services)} allowInsecureHttp={false} scheduler={fakeScheduler()} offline={factory} />);
-    await screen.findByTestId('stack-account');
-    await stacks[0]?.settled();
+    await settledStack(stacks);
     expect(network.listeners()).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole('button', { name: 'leave' }));
     await screen.findByRole('heading', { name: /^Sign in/ });
@@ -136,8 +146,7 @@ describe('the offline stack follows the signed-in screen', () => {
     const scheduler = fakeScheduler();
     const { factory, stacks, network, timers } = rig(world);
     render(<App open={() => Promise.resolve(restartOffline(world).services)} allowInsecureHttp={false} scheduler={scheduler} appState={fakeAppState()} offline={factory} />);
-    await screen.findByTestId('stack-account');
-    await stacks[0]?.settled();
+    await settledStack(stacks);
     await waitFor(() => expect(scheduler.active()).toBe(1));
 
     const start = world.clock.now();
@@ -163,8 +172,7 @@ describe('the offline stack follows the signed-in screen', () => {
     const world = await createSignedInWorld();
     const { factory, stacks, network } = rig(world);
     const view = render(<App open={() => Promise.resolve(restartOffline(world).services)} allowInsecureHttp={false} scheduler={fakeScheduler()} offline={factory} />);
-    await screen.findByTestId('stack-account');
-    await stacks[0]?.settled();
+    await settledStack(stacks);
     view.unmount();
     await waitFor(() => expect(stacks[0]?.isStopped()).toBe(true));
     expect(network.listeners()).toBe(0);

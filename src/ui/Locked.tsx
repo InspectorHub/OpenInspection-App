@@ -6,6 +6,7 @@ import { loadTenantName, type LockOutcome } from '../offline/lock-state';
 import { verifyOnline } from '../offline/verify-online';
 import { countWaitingUploads } from '../offline/waiting';
 import { ConfirmDialog } from './ConfirmDialog';
+import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 
@@ -153,6 +154,7 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
   return (
     <Screen>
       <Heading>{HEADINGS[reason]}</Heading>
+      <BuildExpiry services={services} />
       <Body>{reasonText(reason, company ?? FALLBACK_COMPANY)}</Body>
       {waiting !== null && (
         <p data-testid="waiting-count" className="text-base font-semibold text-ih-fg-1">

@@ -33,8 +33,9 @@ export interface ApiCall {
  *  - `unknown`: a WRITE that went out and then lost its answer (timeout, unreachable, redirect, unreadable or oversize
  *    body). The server may have applied it.
  *  - `auth`: the session is over. `locked`: the offline lock holds. `upgrade`: the server refuses this app version.
+ *  - `server_too_old`: the server speaks an older contract than this app needs. Nothing was sent.
  */
-export type ApiProblem = 'offline' | 'unknown' | 'auth' | 'locked' | 'upgrade';
+export type ApiProblem = 'offline' | 'unknown' | 'auth' | 'locked' | 'upgrade' | 'server_too_old';
 
 export type ApiOutcome = { kind: 'response'; status: number; json: unknown } | { kind: 'problem'; problem: ApiProblem };
 
@@ -51,6 +52,11 @@ export interface ApiClientDeps {
   clientHeaders?: Record<string, string>;
   /** Asked right before every request; false (or a throw) means nothing is sent (the device is locked). */
   gate?: () => boolean | Promise<boolean>;
+  /**
+   * Asked before every request: true means the server is too old for this app and nothing is sent (`server_too_old`; `locked` wins
+   * when the lock holds too). A check that throws counts as "not known", which is not too old: unknown is allowed.
+   */
+  serverTooOld?: () => boolean | Promise<boolean>;
 }
 
 /** The longest an answer may be. The editor's writes answer a few lines; this only bounds a hostile one. */
@@ -108,6 +114,15 @@ function assertSendable(path: string): void {
   }
 }
 
+async function isTooOld(check: ApiClientDeps['serverTooOld']): Promise<boolean> {
+  if (check === undefined) return false;
+  try {
+    return (await check()) === true;
+  } catch {
+    return false;
+  }
+}
+
 async function open(gate: ApiClientDeps['gate']): Promise<boolean> {
   if (gate === undefined) return true;
   try {
@@ -129,6 +144,7 @@ export function createApiClient(deps: ApiClientDeps): Api {
     assertSendable(call.path);
     let refreshed = false;
     for (;;) {
+      if (await isTooOld(deps.serverTooOld)) return { kind: 'problem', problem: (await open(deps.gate)) ? 'server_too_old' : 'locked' };
       let token: string | null;
       try {
         token = await deps.tokens.getAccessToken(deps.origin);

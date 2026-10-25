@@ -20,7 +20,7 @@ import { enqueue, OutboxError, type Account, type OutboxRow } from '../offline/o
 import { resumePurges } from '../offline/purge';
 import { decideReconcile, type ReconcilePlan } from '../offline/reconcile-decision';
 import { executeReconcilePlan } from '../offline/reconcile-execute';
-import { createReconciler, type ReconcileOutcome, type ReconcileReason, type Reconciler } from '../offline/reconciler';
+import { createReconciler, isReconcileUnsupported, type ReconcileOutcome, type ReconcileReason, type Reconciler } from '../offline/reconciler';
 import { createReplayer, type Replayer } from '../offline/replay';
 import type { CommandRegistry } from '../offline/registry';
 import { discardMedia, discardOutboxRow, listUnattributableOutbox, removeFromDevice, type UserActionDeps } from '../offline/user-actions';
@@ -133,10 +133,21 @@ export interface OfflineStackDeps {
    */
   serverTooOld?: ReadableStore<boolean>;
   /**
-   * Asked once, before the first flow starts, and only while the device is online (a request to find out is never made offline).
-   * It is how the contract state is learned before the first replay. Anything it throws or rejects is ignored.
+   * Looks at the server's contract: asked when the start sequence begins, and only while the device is online (a request to find
+   * out is never made offline), and again on the offline-to-online edge while `compatKnown()` says no answer has arrived yet
+   * (one look at a time, no polling). The replay, reconcile and refresh wait for the first look (a bounded time); the sweeps
+   * do not, and the media uploader starts when both are done. Anything it throws or rejects is ignored.
    */
   beforeLaunch?: () => Promise<void>;
+  /** True once a compat answer for this server has been received. Without it the online edge asks for nothing. */
+  compatKnown?: () => boolean;
+  /**
+   * Whether the server is known to have the check for removed inspections: false skips that check before any request (see
+   * `ReconcileDeps.reconcileSupported`). True or null runs it.
+   */
+  reconcileSupported?: () => boolean | null;
+  /** The check for removed inspections was refused as unsupported by the server itself (it has no such route). */
+  onReconcileUnsupported?: () => void;
   /** Test knobs for the shared lease and the jitter. */
   tuning?: { random?: () => number; leaseTtlMs?: number; newToken?: () => string };
 }
@@ -168,6 +179,12 @@ export interface OfflineStack {
   /** The collaboration connector. Connections opened through it are destroyed when the stack stops. */
   readonly connector: NativeCollabConnector;
   readonly userActions: BoundUserActions;
+  /** True while the server speaks an older contract than this app needs. For the data source and the api client of the editor. */
+  serverTooOld(): boolean;
+  /** The answer every flow that talks to the server is given: locked, stopped, or the server too old. */
+  syncBlocked(): Promise<boolean>;
+  /** True when the offline lock holds or the stack has stopped; the server being too old is NOT in it (`serverTooOld`). */
+  locked(): Promise<boolean>;
   /** Queues one write for this account and wakes the replayer. Rejects like `enqueue`, and after `stop()`. */
   enqueue(op: string, input: unknown): Promise<OutboxRow>;
   /**
@@ -297,6 +314,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   const stackLocked = async (): Promise<boolean> => stopped || (await isLocked()) !== false;
   // What the flows that talk to the server are handed: the same answer, and also "locked" while the server is too old.
   // Local work (the user actions, the purge, the documents) keeps `stackLocked`: it needs no server.
+  // A native upload that is already in flight when the server turns out to be too old is not cancelled: the platform owns it and
+  // it finishes or fails on its own; what stops is every request that would START after the answer.
   const syncBlocked = async (): Promise<boolean> => (await stackLocked()) || deps.serverTooOld?.get() === true;
 
   // The account: the stored identity, and only while it is the one this stack was built for.
@@ -506,7 +525,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
 
   const reconcile = createReconciler({
     decide: async () => {
-      const result = await decideReconcile({ db, clock, account, isLocked: syncBlocked, visible, session, ...registry, ...lease });
+      const result = await decideReconcile({ db, clock, account, isLocked: syncBlocked, visible, session, ...registry, ...lease, ...(deps.reconcileSupported === undefined ? {} : { reconcileSupported: deps.reconcileSupported }) });
       // Only the newest decision's plan is kept: an older plan must not outlive the answer that replaced it, nor the stack.
       latestPlan = result.kind === 'plan' && !stopped ? result : null;
       return result;
@@ -521,6 +540,13 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     ...timers,
     ...random,
     onOutcome: (outcome) => {
+      if (isReconcileUnsupported(outcome)) {
+        try {
+          deps.onReconcileUnsupported?.();
+        } catch {
+          // A failing reporter changes nothing about the outcome.
+        }
+      }
       status.patch({
         reconcile: outcome.status,
         ...(outcome.status === 'auth' ? { auth: true } : {}),
@@ -713,6 +739,24 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     });
   }
 
+  /** One look at the server's contract at a time; anything that asks while one is running shares it. Never rejects. */
+  let contractLook: Promise<void> | null = null;
+  function lookAtContract(): Promise<void> {
+    if (contractLook !== null) return contractLook;
+    const beforeLaunch = deps.beforeLaunch;
+    if (beforeLaunch === undefined) return Promise.resolve();
+    const look = (async (): Promise<void> => {
+      if (!(await network.online().catch(() => false))) return;
+      await Promise.resolve()
+        .then(beforeLaunch)
+        .catch(() => undefined);
+    })().finally(() => {
+      contractLook = null;
+    });
+    contractLook = look;
+    return look;
+  }
+
   async function launch(): Promise<void> {
     if (launched || stopped) return;
     launched = true;
@@ -726,18 +770,17 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
         // A failing reporter must not change what the stack does.
       }
     }
-    if (deps.beforeLaunch && (await network.online().catch(() => false))) {
-      await Promise.resolve()
-        .then(deps.beforeLaunch)
-        .catch(() => undefined);
-      if (stopped) return;
-    }
+    // The look at the server's contract and the sweeps run side by side: the sweeps are local and wait for nobody. Every flow that
+    // talks to the server waits for the look (at most its own timeout), and so does the uploader, which also waits for the sweeps.
+    const lookedAt = lookAtContract();
     // The sweeps hold nothing up but the uploader, which must not start while the temp sweep looks for copies of finished uploads.
-    const mediaUp = runSweeps().then(() => {
+    const mediaUp = Promise.all([runSweeps(), lookedAt]).then(() => {
       if (stopped) return;
       media.start();
       mediaStarted = true;
     });
+    await lookedAt;
+    if (stopped) return;
     await firstReplay();
     if (stopped) return;
     reconcile.start();
@@ -763,6 +806,15 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
         if (!launched) enqueueLaunch();
       }),
     );
+    if (deps.beforeLaunch !== undefined) {
+      // A cold start that was offline or timed out knows nothing about the server. Unknown means allowed, by design, so nothing is
+      // blocked meanwhile; the first time the link comes back, and again only while still unknown, the server is asked.
+      teardown.push(
+        network.onChange((online) => {
+          if (online && !stopped && deps.compatKnown?.() === false) void lookAtContract();
+        }),
+      );
+    }
     if (deps.serverTooOld) {
       const contract = deps.serverTooOld;
       teardown.push(
@@ -843,6 +895,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     connector: trackedConnector,
     userActions,
     enqueue: enqueueAndTrigger,
+    serverTooOld: () => deps.serverTooOld?.get() === true,
+    syncBlocked,
+    locked: stackLocked,
     lastPlan: () => (stopped ? null : latestPlan),
     recentDiagnostics: () => diagnosticRing.recent(),
     onEditorEvent: (listener) => {

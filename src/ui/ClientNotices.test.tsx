@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppServices } from '../app/compose';
@@ -12,6 +12,7 @@ import { ServerTooOld } from './ServerTooOld';
 import { TestflightExpiry } from './TestflightExpiry';
 import { UpdateRecommended } from './UpdateRecommended';
 import { UpgradeRequired } from './UpgradeRequired';
+import { useUpdateLink } from './update-link';
 
 afterEach(cleanup);
 
@@ -105,6 +106,35 @@ describe('UpgradeRequired', () => {
     render(<UpgradeRequired platform="android" downloadUrl={APK} openExternal={openExternal} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Download update' }));
     expect(await screen.findByText(/could not be opened/i)).toBeInTheDocument();
+  });
+});
+
+describe('useUpdateLink', () => {
+  it('open() with no usable address does nothing, whatever calls it', async () => {
+    const openExternal = vi.fn(() => Promise.resolve());
+    for (const url of [null, 'http://downloads.example.test/app.apk', 'javascript:alert(1)']) {
+      const { result } = renderHook(() => useUpdateLink(url, openExternal));
+      expect(result.current.href).toBeNull();
+      await act(async () => {
+        result.current.open();
+      });
+    }
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('a failure is cleared as soon as the next attempt starts, not only when it ends', async () => {
+    let attempt = 0;
+    const openExternal = vi.fn(() => {
+      attempt += 1;
+      return attempt === 1 ? Promise.reject(new Error('no browser')) : new Promise<void>(() => undefined);
+    });
+    render(<UpgradeRequired platform="android" downloadUrl={APK} openExternal={openExternal} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Download update' }));
+    expect(await screen.findByText(/could not be opened/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Download update' }));
+    await waitFor(() => expect(screen.queryByText(/could not be opened/i)).toBeNull());
+    expect(openExternal).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -233,6 +263,39 @@ describe('ClientNotices: the states reach the screen', () => {
       await services.clientState.settled();
     });
     expect(screen.queryByRole('button', { name: 'Dismiss update notice' })).toBeNull();
+  });
+});
+
+describe('ClientNotices: a server without the check for removed inspections', () => {
+  const SENTENCE = 'This server does not support removing deleted inspections.';
+
+  it('says so once, low-key, and Dismiss removes it for good (control: a server that has the check says nothing)', async () => {
+    const world = await createSignedInWorld();
+    const { services, container } = await view(world);
+    act(() => services.clientState.applyCompat(world.server.origin, compat({ serverContractVersion: 2 })));
+    await settle();
+    expect(container).toBeEmptyDOMElement();
+    act(() => services.clientState.applyCompat(world.server.origin, compat({ serverContractVersion: 1 })));
+    expect(await screen.findByText(SENTENCE)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+    const dismiss = screen.getByRole('button', { name: 'Dismiss server notice' });
+    expect(dismiss.className).toContain('min-h-11');
+    await userEvent.setup().click(dismiss);
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+    await act(async () => {
+      await services.clientState.settled();
+      services.clientState.applyCompat(world.server.origin, compat({ serverContractVersion: 1 }));
+      await services.clientState.settled();
+    });
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+
+  it('the notice of another server is not shown here', async () => {
+    const world = await createSignedInWorld();
+    const { services, container } = await view(world);
+    act(() => services.clientState.applyCompat('https://elsewhere.example.test', compat({ serverContractVersion: 1 })));
+    await settle();
+    expect(container).toBeEmptyDOMElement();
   });
 });
 

@@ -258,3 +258,42 @@ describe('api client', () => {
     expect(seen[0]?.init.body).toBe(form);
   });
 });
+
+describe('a server too old for this app (serverTooOld)', () => {
+  const tooOld = (value: boolean | Promise<boolean> | Error): ApiClientDeps['serverTooOld'] =>
+    value instanceof Error
+      ? () => {
+          throw value;
+        }
+      : () => value;
+
+  it('sends nothing and answers its own problem, not locked (control: not too old sends)', async () => {
+    const old = rig([response(200)]);
+    expect(await createApiClient({ ...old.deps, serverTooOld: tooOld(true) }).send({ method: 'POST', path: '/api/x', json: {} })).toEqual({ kind: 'problem', problem: 'server_too_old' });
+    expect(old.requests).toHaveLength(0);
+    expect(old.tokenReads()).toBe(0);
+    const fine = rig([response(200)]);
+    expect(await createApiClient({ ...fine.deps, serverTooOld: tooOld(false) }).send({ method: 'POST', path: '/api/x', json: {} })).toMatchObject({ kind: 'response' });
+    expect(fine.requests).toHaveLength(1);
+  });
+
+  it('may answer later (a promise), and the lock keeps its own problem when both hold', async () => {
+    const late = rig([response(200)]);
+    expect(await createApiClient({ ...late.deps, serverTooOld: tooOld(Promise.resolve(true)) }).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'server_too_old' });
+    const both = rig([response(200)], { gate: () => false });
+    expect(await createApiClient({ ...both.deps, serverTooOld: tooOld(true) }).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'locked' });
+  });
+
+  it('a check that throws counts as not known, so as not too old: the request goes ahead', async () => {
+    const r = rig([response(200)]);
+    expect(await createApiClient({ ...r.deps, serverTooOld: tooOld(new Error('state unreadable')) }).send({ method: 'GET', path: '/api/x' })).toMatchObject({ kind: 'response' });
+  });
+
+  it('is asked again before the retry after a 401', async () => {
+    let calls = 0;
+    const r = rig([response(401), response(200)]);
+    const answer = await createApiClient({ ...r.deps, serverTooOld: () => (calls += 1) >= 2 }).send({ method: 'GET', path: '/api/x' });
+    expect(answer).toEqual({ kind: 'problem', problem: 'server_too_old' });
+    expect(r.requests).toHaveLength(1);
+  });
+});

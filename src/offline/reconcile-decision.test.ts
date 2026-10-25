@@ -37,6 +37,33 @@ function watching(fragment: string, onRead: () => void) {
   return wrap(world.db);
 }
 
+describe('a server that has no check for removed inspections', () => {
+  it('known to lack it: unavailable as unsupported, no session probe, no visible request, and nothing removed', async () => {
+    const ids = await seedPackages(world, 5);
+    hide('p003');
+    const result = await world.decide({ reconcileSupported: () => false });
+    expect(result).toEqual({ kind: 'unavailable', reason: 'unsupported' });
+    expect(world.sessionRequests).toBe(0);
+    expect(world.visibleRequests).toEqual([]);
+    const rows = await world.db.query<{ inspection_id: string }>('SELECT inspection_id FROM work_package ORDER BY inspection_id');
+    expect(rows.map((r) => r.inspection_id)).toEqual(ids);
+  });
+
+  it('control: known to have it, or not known at all, the check runs and a missing inspection is found', async () => {
+    await seedPackages(world, 5);
+    hide('p003');
+    expect(plan(await world.decide({ reconcileSupported: () => true })).purge).toEqual(['p003']);
+    expect(plan(await world.decide({ reconcileSupported: () => null })).purge).toEqual(['p003']);
+    expect(plan(await world.decide()).purge).toEqual(['p003']);
+    expect(world.sessionRequests).toBe(3);
+  });
+
+  it('a locked device still answers locked, not unsupported', async () => {
+    await seedPackages(world, 2);
+    expect(await world.decide({ reconcileSupported: () => false, isLocked: () => true })).toEqual({ kind: 'locked' });
+  });
+});
+
 describe('the decision for a missing inspection', () => {
   it('purges nothing and keeps everything the server lists', async () => {
     const ids = await seedPackages(world, 3);

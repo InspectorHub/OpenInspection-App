@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { FieldCommand } from '@inspectorhub/field-ui';
-import type { ApiOutcome } from './api-client';
+import type { ApiOutcome, ApiProblem } from './api-client';
 import { executeOnline, type OnlineCommand } from './commands-online';
 import { MESSAGES } from './messages';
 import { COMMANDS_BY_TYPE } from './test-support/all-commands';
 import { formFields, reply, scriptedApi } from './test-support/scripted-api';
 
-const problem = (p: 'offline' | 'unknown' | 'auth' | 'upgrade' | 'locked'): ApiOutcome => ({ kind: 'problem', problem: p });
+const problem = (p: ApiProblem): ApiOutcome => ({ kind: 'problem', problem: p });
 
 async function send(cmd: FieldCommand, answers: ApiOutcome[] = [], key?: string) {
   const api = scriptedApi(...answers);
@@ -324,6 +324,7 @@ describe('online: problems are told in fixed sentences', () => {
     ['auth', MESSAGES.sessionExpired],
     ['upgrade', MESSAGES.upgradeRequired],
     ['locked', MESSAGES.deviceLocked],
+    ['server_too_old', MESSAGES.serverTooOld],
   ] as const)('%s', async (kind, sentence) => {
     const { result } = await send(only('set-cover'), [problem(kind)]);
     expect(result).toEqual({ ok: false, error: sentence });

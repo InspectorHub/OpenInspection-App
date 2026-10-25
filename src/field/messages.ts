@@ -13,6 +13,8 @@ export const MESSAGES = {
   notSaved: 'The change could not be stored on this device. Try again.',
   invalidValue: 'One of the values is not valid. Check it and try again.',
   upgradeRequired: 'This version of the app is too old to do that. Update the app and try again.',
+  editingOff: 'Editing is turned off until you update the app.',
+  serverTooOld: 'This server is too old for this app. Ask your administrator to update it.',
   sessionExpired: 'Your session has expired. Sign in again to continue.',
   forbidden: 'Your account is not allowed to do that.',
   requestFailed: 'The server could not complete that. Try again.',

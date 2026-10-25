@@ -7,6 +7,7 @@ import { appDiagnostics } from './app/diagnostics';
 import { createUnlockEmitter } from './app/lock-events';
 import { OfflineStackContext } from './app/stack-context';
 import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
+import type { Network } from './platform/network';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
 import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
@@ -31,6 +32,8 @@ export interface AppProps {
    * work screen appears and stopped when it goes away (sign-out, lock, another account or server). Omitted: no stack is built.
    */
   offline?: StackFactory;
+  /** Link state. When given, a return to the foreground while offline does not look at the server's version policy. */
+  network?: Pick<Network, 'online'>;
 }
 
 /** Consecutive failed mid-session evaluations after which the work screen is locked. */
@@ -65,7 +68,7 @@ async function backToLock(services: AppServices, origin: string, held: StoredIde
   setScreen(await screenForSignedIn(services, origin, identity).catch((): Screen => ({ kind: 'locked', origin, identity, reason: 'expired' })));
 }
 
-export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline }: AppProps) {
+export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline, network }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const started = useRef<Promise<BootResult> | null>(null);
@@ -123,9 +126,14 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   useEffect(() => {
     if (!services || !appState || sessionOrigin === null) return undefined;
     return appState.onChange((active) => {
-      if (active) void services.refreshCompat(sessionOrigin);
+      if (!active) return;
+      // Offline there is nothing to ask. A link state that cannot be read is not known, and unknown goes ahead.
+      void (async () => {
+        const online = network === undefined ? true : await network.online().catch(() => true);
+        if (online) await services.refreshCompat(sessionOrigin);
+      })();
     });
-  }, [services, appState, sessionOrigin]);
+  }, [services, appState, sessionOrigin, network]);
 
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;

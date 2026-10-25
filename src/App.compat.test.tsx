@@ -6,6 +6,7 @@ import { App } from './App';
 import { composeWith, type AppServices } from './app/compose';
 import { createSignedInWorld, type World } from './app/test-support/world';
 import { fakeAppState, fakeScheduler } from './offline/test-support/fakes';
+import { fakeNetwork } from './offline/test-support/replay-world';
 
 configure({ asyncUtilTimeout: 5000 });
 
@@ -92,5 +93,36 @@ describe('the app looks at the server again when it returns to the foreground', 
     await screen.findByRole('heading', { name: 'Work list' });
     view.unmount();
     expect(appState.listeners()).toBe(0);
+  });
+});
+
+describe('the foreground look is skipped while the device is offline', () => {
+  it('offline: a return to the foreground asks nothing (control: online it asks once)', async () => {
+    const world = await createSignedInWorld();
+    const { services, compatCalls } = restart(world, { current: () => COMPAT({}) });
+    const appState = fakeAppState();
+    const network = fakeNetwork(false);
+    render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} scheduler={fakeScheduler()} appState={appState} network={network} />);
+    await screen.findByRole('heading', { name: 'Work list' });
+    await waitFor(() => expect(appState.listeners()).toBeGreaterThan(0));
+    act(() => appState.emit(true));
+    await act(async () => {
+      for (let i = 0; i < 100; i += 1) await Promise.resolve();
+    });
+    expect(compatCalls()).toBe(0);
+    network.setQuietly(true);
+    act(() => appState.emit(true));
+    await waitFor(() => expect(compatCalls()).toBe(1));
+  });
+
+  it('a link state that cannot be read counts as not known, so the look goes ahead', async () => {
+    const world = await createSignedInWorld();
+    const { services, compatCalls } = restart(world, { current: () => COMPAT({}) });
+    const appState = fakeAppState();
+    render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} scheduler={fakeScheduler()} appState={appState} network={{ online: () => Promise.reject(new Error('plugin missing')) }} />);
+    await screen.findByRole('heading', { name: 'Work list' });
+    await waitFor(() => expect(appState.listeners()).toBeGreaterThan(0));
+    act(() => appState.emit(true));
+    await waitFor(() => expect(compatCalls()).toBe(1));
   });
 });

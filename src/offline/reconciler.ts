@@ -36,6 +36,11 @@ export type ReconcileReason = 'start' | 'online' | 'foreground' | 'unlock' | 'ma
 
 export type OutcomeStatus = 'never' | 'skipped' | 'done' | 'stopped' | 'unavailable' | 'refused' | 'failed' | 'auth' | 'halt' | 'busy' | 'error';
 
+/** The server has no check for removed inspections: whatever asks "is this still on the server?" (the export, Task 11) cannot confirm it. */
+export function isReconcileUnsupported(outcome: Pick<ReconcileOutcome, 'status' | 'reason'>): boolean {
+  return outcome.status === 'unavailable' && outcome.reason === 'unsupported';
+}
+
 export interface ReconcileCounts {
   purged: number;
   quarantined: number;
@@ -195,7 +200,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       case 'account_mismatch':
         return { outcome: { ...base, status: 'failed', reason: 'account_mismatch' }, failure: { kind: 'soft', retryAfterMs: null } };
       case 'unavailable':
-        return { outcome: { ...base, status: 'unavailable', reason: answer.reason, unavailableRole: true }, failure: { kind: 'permanent' } };
+        return { outcome: { ...base, status: 'unavailable', reason: answer.reason, unavailableRole: answer.reason === 'role' }, failure: { kind: 'permanent' } };
       case 'auth':
         return { outcome: { ...base, status: 'auth' }, failure: { kind: 'soft', retryAfterMs: null } };
       case 'halt':

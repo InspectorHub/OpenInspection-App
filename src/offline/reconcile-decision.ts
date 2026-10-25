@@ -81,6 +81,12 @@ export interface ReconcileDeps {
   /** A fresh lease token per acquisition. Tests only. */
   newToken?: () => string;
   registry?: CommandRegistry;
+  /**
+   * Whether the server is known to have the check: false answers `unavailable` (reason `unsupported`) before any request, the
+   * session probe included, so nothing can be purged or quarantined on a server that cannot say what it still lists.
+   * True or null (not known) lets the check run.
+   */
+  reconcileSupported?: () => boolean | null;
 }
 
 export interface ReconcileProof {
@@ -140,7 +146,7 @@ export type ReconcileResult =
   | { kind: 'lease_lost' }
   | { kind: 'no_account' }
   | { kind: 'account_mismatch' }
-  | { kind: 'unavailable'; reason: 'role' }
+  | { kind: 'unavailable'; reason: 'role' | 'unsupported' }
   | { kind: 'auth' }
   | { kind: 'halt'; reason: 'upgrade_required' }
   | { kind: 'failed'; reason: ReconcileFailure; retryAfterMs: number | null }
@@ -294,6 +300,7 @@ export async function decideReconcile(deps: ReconcileDeps): Promise<ReconcileRes
   if (await isLockedNow(deps)) return { kind: 'locked' };
   const account = await accountNow(deps);
   if (account === null) return { kind: 'no_account' };
+  if (deps.reconcileSupported?.() === false) return { kind: 'unavailable', reason: 'unsupported' };
   try {
     const leaseOptions = { clock: deps.clock, ...(deps.leaseTtlMs === undefined ? {} : { ttlMs: deps.leaseTtlMs }), ...(deps.newToken === undefined ? {} : { newToken: deps.newToken }) };
     const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, (lease) => run(deps, lease, account));
@@ -368,7 +375,7 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
     case 'blocked':
       return stopped();
     case 'unavailable':
-      return { kind: 'unavailable', reason: 'role' };
+      return { kind: 'unavailable', reason: answer.reason };
     case 'auth':
       return { kind: 'auth' };
     case 'halt':

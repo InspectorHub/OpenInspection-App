@@ -38,6 +38,8 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
   const trigger = useRef<HTMLButtonElement>(null);
   const latch = useActionLatch();
   const stack = useOfflineStack();
+  // After the first-level heading: the notices have second-level ones.
+  const notices = <ClientNotices services={services} origin={origin} />;
 
   async function signOut(): Promise<void> {
     setError(null);
@@ -59,8 +61,14 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
 
   return (
     <Screen wide={stack !== null}>
-      <ClientNotices services={services} origin={origin} />
-      {stack === null ? <Heading>Work list</Heading> : <WorkList stack={stack} />}
+      {stack === null ? (
+        <>
+          <Heading>Work list</Heading>
+          {notices}
+        </>
+      ) : (
+        <WorkList stack={stack} notices={notices} />
+      )}
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>
         <dd data-testid="identity-role" className="text-ih-fg-1">

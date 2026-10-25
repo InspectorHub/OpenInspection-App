@@ -111,10 +111,11 @@ describe('status strip', () => {
     expect(await screen.findByText('Sign in again to keep syncing')).toBeInTheDocument();
   });
 
-  it('upgrade: update the app, with no link and no server text', async () => {
-    open({ upgrade: true });
-    const note = await screen.findByText('Update the app to keep syncing');
-    expect(note.closest('[role="status"]')?.querySelector('a')).toBeNull();
+  it('upgrade: the strip says nothing, the update panel (ClientNotices) owns it; control: auth beside it still shows', async () => {
+    open({ upgrade: true, auth: true });
+    expect(await screen.findByText('Sign in again to keep syncing')).toBeInTheDocument();
+    expect(screen.queryByText('Update the app to keep syncing')).toBeNull();
+    expect(screen.queryByText(/update the app/i)).toBeNull();
   });
 
   it('editsNotSaved: a persistent red alert', async () => {

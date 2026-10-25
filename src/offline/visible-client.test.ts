@@ -215,6 +215,16 @@ describe('answers that are not data', () => {
     expect(await makeClient(r).client.check(['a'])).toEqual({ kind: 'unavailable', reason: 'role' });
   });
 
+  it.each([404, 405])('a %i means this server has no such check: unavailable as unsupported, with one request (control: a 400 is an ordinary failure)', async (status) => {
+    const r = rig();
+    r.script = [json(status, { success: false })];
+    expect(await makeClient(r).client.check(['a'])).toEqual({ kind: 'unavailable', reason: 'unsupported' });
+    expect(r.requests).toHaveLength(1);
+    const control = rig();
+    control.script = [json(400, { success: false })];
+    expect(await makeClient(control).client.check(['a'])).toMatchObject({ kind: 'failed', reason: 'rejected' });
+  });
+
   it('a 426 halts', async () => {
     const r = rig();
     r.script = [json(426, { success: false })];
@@ -228,7 +238,6 @@ describe('answers that are not data', () => {
     [503, 'server'],
     [408, 'server'],
     [400, 'rejected'],
-    [404, 'rejected'],
   ])('a %i is a failure of the whole run (%s)', async (status, reason) => {
     const r = rig();
     r.script = [json(status, { success: false })];

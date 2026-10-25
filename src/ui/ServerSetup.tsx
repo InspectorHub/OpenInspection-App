@@ -5,6 +5,7 @@ import { connectToServer } from '../app/connect';
 import { isAuthError } from '../auth/errors';
 import { parseServerUrl } from '../auth/server-config';
 import { DevDiagnostics } from './dev-diagnostics';
+import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, INPUT_CLASSES, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NATIVE_LOGIN_HELP } from './messages';
@@ -90,6 +91,7 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
   return (
     <Screen>
       <Heading>Choose your server</Heading>
+      <BuildExpiry services={services} />
       <form className="flex flex-col gap-4" onSubmit={review} noValidate>
         <div className="flex flex-col gap-2">
           <label htmlFor={inputId} className="text-base font-semibold text-ih-fg-1">

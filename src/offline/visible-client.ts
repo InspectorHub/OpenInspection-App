@@ -35,7 +35,7 @@ export type VisibleFailure = 'network' | 'timeout' | 'rate_limited' | 'server' |
 export type VisibleOutcome =
   | { kind: 'ok'; visible: ReadonlySet<string>; requested: number; requests: number }
   /** This member's role may not ask (office staff). Not an error, and never a reason to remove anything. */
-  | { kind: 'unavailable'; reason: 'role' }
+  | { kind: 'unavailable'; reason: 'role' | 'unsupported' }
   /** The session is over or needs a new sign-in. No data changes. */
   | { kind: 'auth' }
   /** The server needs a newer app. */
@@ -188,6 +188,8 @@ export function createVisibleClient(deps: VisibleClientDeps): VisibleClient {
       const { res } = sent;
       const status = res.status;
       if (status === 403) return { kind: 'unavailable', reason: 'role' };
+      // A server too old to have the route answers 404 (or 405): the check does not exist there. Never a reason to remove anything.
+      if (status === 404 || status === 405) return { kind: 'unavailable', reason: 'unsupported' };
       if (status === 426) return { kind: 'halt', reason: 'upgrade_required' };
       if (status === 422) {
         const limit = limitStated(res);

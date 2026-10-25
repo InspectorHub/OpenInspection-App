@@ -25,6 +25,8 @@ export function problemResult(problem: ApiProblem, unknownOutcome: string = MESS
       return failure(MESSAGES.deviceLocked);
     case 'upgrade':
       return failure(MESSAGES.upgradeRequired);
+    case 'server_too_old':
+      return failure(MESSAGES.serverTooOld);
     case 'auth':
       return failure(MESSAGES.sessionExpired);
   }

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '../auth/http';
 import { createMemoryKeyValue } from '../platform/kv';
 import { installStrictGlobals, restoreGlobals } from '../test-support/strict-globals';
-import { composeWith, realFetch } from './compose';
+import { factsFor } from './client-state';
+import { composeWith, realFetch, type AppServices } from './compose';
 import { createSignedInWorld, createWorld, rowCounts, seedLocalData } from './test-support/world';
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -11,18 +12,20 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 
 const COMPAT_OK = { success: true, data: { minSupported: null, recommended: '9.0.0', downloadUrl: 'https://downloads.example.test/app.apk', serverContractVersion: 0 } };
 
+const facts = (services: AppServices, origin: string) => factsFor(services.clientState.store.get(), origin);
+
 describe('services.clientState is fed by the http layer', () => {
   it('a 426 on any request marks that server as requiring an update, and the answer is still returned', async () => {
     const world = await createWorld({ fetch: () => Promise.resolve(json(426, { success: false })) });
     const res = await world.services.http.request({ url: `${world.server.origin}/api/inspections`, method: 'GET' });
     expect(res.status).toBe(426);
-    expect(world.services.clientState.store.get()).toMatchObject({ origin: world.server.origin, upgrade: 'required' });
+    expect(facts(world.services, world.server.origin)).toMatchObject({ upgrade: 'required' });
   });
 
   it('control: an ordinary answer leaves the state alone', async () => {
     const world = await createWorld({ fetch: () => Promise.resolve(json(200, {})) });
     await world.services.http.request({ url: `${world.server.origin}/api/inspections`, method: 'GET' });
-    expect(world.services.clientState.store.get()).toMatchObject({ origin: null, upgrade: 'none' });
+    expect(world.services.clientState.store.get().origins.size).toBe(0);
   });
 
   it('a 426 on the token endpoint is not a sign-out: tokens, identity and every local row stay as they were', async () => {
@@ -44,7 +47,7 @@ describe('services.clientState is fed by the http layer', () => {
     world.clock.advance(3_600_000);
     const check = await services.tokens.checkSession(world.server.origin);
     expect(check.kind).toBe('retry');
-    expect(services.clientState.store.get()).toMatchObject({ origin: world.server.origin, upgrade: 'required' });
+    expect(facts(services, world.server.origin)).toMatchObject({ upgrade: 'required' });
     expect(await rowCounts(world.db)).toEqual(before.rows);
     expect(world.store.entries()).toEqual(before.stored);
   });
@@ -54,8 +57,7 @@ describe('services.refreshCompat', () => {
   it('reads the compat answer into the state', async () => {
     const world = await createWorld({ fetch: () => Promise.resolve(json(200, COMPAT_OK)) });
     await world.services.refreshCompat(world.server.origin);
-    expect(world.services.clientState.store.get()).toMatchObject({
-      origin: world.server.origin,
+    expect(facts(world.services, world.server.origin)).toMatchObject({
       upgrade: 'recommended',
       serverTooOld: true,
       downloadUrl: 'https://downloads.example.test/app.apk',
@@ -65,20 +67,20 @@ describe('services.refreshCompat', () => {
   it('control: a sufficient server is not marked too old', async () => {
     const world = await createWorld({ fetch: () => Promise.resolve(json(200, { success: true, data: { ...COMPAT_OK.data, serverContractVersion: 2 } })) });
     await world.services.refreshCompat(world.server.origin);
-    expect(world.services.clientState.store.get().serverTooOld).toBe(false);
+    expect(facts(world.services, world.server.origin).serverTooOld).toBe(false);
   });
 
   it('an unreachable server never rejects and never invents "too old"', async () => {
     const world = await createWorld({ fetch: () => Promise.reject(new TypeError('network down')) });
     await expect(world.services.refreshCompat(world.server.origin)).resolves.toBeUndefined();
-    expect(world.services.clientState.store.get()).toMatchObject({ serverTooOld: false, upgrade: 'none' });
+    expect(facts(world.services, world.server.origin)).toMatchObject({ serverTooOld: false, upgrade: 'none' });
     expect(world.services.clientState.store.get().refreshes).toBe(1);
   });
 
   it('an answer that is not a compat answer is the same as no answer', async () => {
     const world = await createWorld({ fetch: () => Promise.resolve(new Response('<html>captive portal</html>', { status: 200 })) });
     await expect(world.services.refreshCompat(world.server.origin)).resolves.toBeUndefined();
-    expect(world.services.clientState.store.get()).toMatchObject({ serverTooOld: false, upgrade: 'none' });
+    expect(facts(world.services, world.server.origin)).toMatchObject({ serverTooOld: false, upgrade: 'none' });
   });
 
   it('a failed refresh keeps what an earlier one learned', async () => {
@@ -87,7 +89,7 @@ describe('services.refreshCompat', () => {
     await world.services.refreshCompat(world.server.origin);
     up = false;
     await world.services.refreshCompat(world.server.origin);
-    expect(world.services.clientState.store.get().serverTooOld).toBe(true);
+    expect(facts(world.services, world.server.origin).serverTooOld).toBe(true);
   });
 
   it('two asks while one is in flight make one request', async () => {
@@ -121,6 +123,6 @@ describe('refreshCompat on a WebView-strict page', () => {
     const services = composeWith({ db: world.db, files: world.files, store: world.store, fetch: realFetch, authSession: world.server.authSession, clock: world.clock, platform: 'android', appVersion: '1.0.0' });
     await services.refreshCompat(world.server.origin);
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(services.clientState.store.get()).toMatchObject({ origin: world.server.origin, serverTooOld: true });
+    expect(facts(services, world.server.origin)).toMatchObject({ serverTooOld: true });
   });
 });

@@ -3,7 +3,7 @@ import { createManualTimers } from '../collab/test-support/manual-timers';
 import { createManualClock } from '../platform/clock';
 import type { ReconcilePlan, ReconcileResult } from './reconcile-decision';
 import type { ExecuteResult, ExecuteSummary } from './reconcile-execute';
-import { createReconciler, type ReconcilerDeps, type ReconcileOutcome } from './reconciler';
+import { createReconciler, isReconcileUnsupported, type ReconcilerDeps, type ReconcileOutcome } from './reconciler';
 import type { ResumeSummary } from './purge';
 import { fakeAppState } from './test-support/fakes';
 import { ALICE } from './test-support/reconcile-world';
@@ -156,6 +156,7 @@ describe('one flow: resume, decide, execute', () => {
 
   it.each([
     [{ kind: 'unavailable', reason: 'role' } as ReconcileResult, { status: 'unavailable', reason: 'role', unavailableRole: true }],
+    [{ kind: 'unavailable', reason: 'unsupported' } as ReconcileResult, { status: 'unavailable', reason: 'unsupported', unavailableRole: false }],
     [{ kind: 'refused', reason: 'null_inspection_id' } as ReconcileResult, { status: 'refused', reason: 'null_inspection_id', refusedNullInspectionId: true }],
     [{ kind: 'auth' } as ReconcileResult, { status: 'auth', reason: null }],
     [{ kind: 'halt', reason: 'upgrade_required' } as ReconcileResult, { status: 'halt', reason: 'upgrade_required' }],
@@ -415,6 +416,16 @@ describe('the slow fallback timer', () => {
   });
 });
 
+describe('isReconcileUnsupported: the predicate the export (Task 11) reads as "cannot confirm"', () => {
+  const base = { status: 'unavailable', reason: 'unsupported' } as Pick<ReconcileOutcome, 'status' | 'reason'>;
+  it('is true only for an unavailable outcome whose reason is unsupported', () => {
+    expect(isReconcileUnsupported(base)).toBe(true);
+    expect(isReconcileUnsupported({ status: 'unavailable', reason: 'role' })).toBe(false);
+    expect(isReconcileUnsupported({ status: 'failed', reason: 'unsupported' })).toBe(false);
+    expect(isReconcileUnsupported({ status: 'never', reason: null })).toBe(false);
+  });
+});
+
 describe('a refused or unavailable outcome does not retrigger in a loop', () => {
   it('holds the automatic triggers for a growing time, lets a person and an unlock through, and resets after a good run', async () => {
     const w = createWorld({ fallbackIntervalMs: 600_000 });
@@ -459,6 +470,8 @@ describe('a refused or unavailable outcome does not retrigger in a loop', () => 
     expect(holds[0]).toBeGreaterThan(first);
     expect(holds[1]).toBeGreaterThan(holds[0] ?? 0);
     await measure({ kind: 'unavailable', reason: 'role' });
+    expect(holds.at(-1)).toBe(3_600_000);
+    await measure({ kind: 'unavailable', reason: 'unsupported' });
     expect(holds.at(-1)).toBe(3_600_000);
   });
 

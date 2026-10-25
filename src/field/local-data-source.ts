@@ -1,4 +1,4 @@
-import type { CollabConnector, FieldDataSource, NotifyOptions, NotifyVariant, SessionInfo } from '@inspectorhub/field-ui';
+import type { CollabConnector, CommandData, CommandResult, ExecuteOptions, FieldCommand, FieldDataSource, NotifyOptions, NotifyVariant, SessionInfo } from '@inspectorhub/field-ui';
 import type { NativeUploader } from '../media/native-uploader';
 import type { MediaStore } from '../media/store';
 import { createBlockedGuard, type IsBlocked } from '../offline/blocked';
@@ -16,7 +16,7 @@ import { wrapCollab } from './collab-wrapper';
 import { createExecutor } from './commands';
 import { createEditorLoader } from './editor-data';
 import type { EditorRegistry } from './editor-registry';
-import { MESSAGES } from './messages';
+import { failureOf, MESSAGES } from './messages';
 import { withMediaCleanup } from './media-cleanup';
 import type { NetworkFlag } from './network-flag';
 import { createMemoryPhotoIndex, createPhotoUrls, indexUploadedRows, type PhotoIndex } from './photo-urls';
@@ -57,6 +57,8 @@ export interface LocalStack {
   readonly reconciler: Pick<ReconcilerHandle, 'trigger'>;
   enqueue(op: string, input: unknown): Promise<unknown>;
   idle(): Promise<void>;
+  /** True while the server speaks an older contract than this app needs (`OfflineStack.serverTooOld`). Omitted: never. */
+  serverTooOld?(): boolean;
 }
 
 export interface LocalDataSourceDeps {
@@ -70,6 +72,13 @@ export interface LocalDataSourceDeps {
   session: SessionInfo;
   /** The stored, canonical server origin. */
   origin: string;
+  /**
+   * False while a required update turns editing off (`clientPolicy(...).canEdit`): `execute` of any command and every way into the
+   * media store or uploader answer one fixed sentence and do nothing. Reading (`load`, the resources, the stored photos) is
+   * unaffected, and so is everything the offline stack does with what is already on the device (the outbox, the uploader,
+   * the replayer): captured work is always delivered. Omitted: editing is allowed.
+   */
+  canEdit?(): boolean;
   platform: 'ios' | 'android';
   /** The time stamped on an inspector signature. It MUST be anchored to the server's clock: the device clock can be set to any time. */
   signedAtMs(): number;
@@ -125,7 +134,15 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
-  const execute = createExecutor({
+  const canEdit = (): boolean => {
+    try {
+      return deps.canEdit?.() !== false;
+    } catch {
+      // The state cannot be read: it is not known, and unknown is allowed.
+      return true;
+    }
+  };
+  const runCommand = createExecutor({
     isBlocked,
     isOnline: () => deps.network.isOnline(),
     enqueue: (op, input) => stack.enqueue(op, input),
@@ -137,7 +154,10 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     loadScope: async (inspectionId, scope) => (await load(inspectionId, scope)).results,
   });
 
-  const uploader = createUploaderFactory({
+  const execute = <C extends FieldCommand>(inspectionId: string, cmd: C, opts?: ExecuteOptions): Promise<CommandResult<CommandData<C>>> =>
+    canEdit() ? runCommand(inspectionId, cmd, opts) : Promise.resolve(failureOf<CommandData<C>>(MESSAGES.editingOff));
+
+  const sendPhoto = createUploaderFactory({
     isBlocked,
     store: stack.store,
     native: stack.uploader,
@@ -147,6 +167,21 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       isSynced: (inspectionId) => deps.registry.getHandle(inspectionId)?.synced() ?? false,
     }),
     onError: report,
+  });
+
+  const uploader: typeof sendPhoto = (inspectionId, doc) => {
+    const inner = sendPhoto(inspectionId, doc);
+    return {
+      // Refused before anything is stored or sent. A server too old gets its own sentence, not the lock's.
+      upload: async (rec) => {
+        if (!canEdit()) return { ok: false, error: MESSAGES.editingOff };
+        if (stack.serverTooOld?.() === true) return { ok: false, error: MESSAGES.serverTooOld };
+        return inner.upload(rec);
+      },
+    };
+  };
+  const mediaStore: typeof stack.store = Object.assign(Object.create(stack.store) as typeof stack.store, {
+    put: (rec: Parameters<typeof stack.store.put>[0]) => (canEdit() ? stack.store.put(rec) : Promise.reject(new Error(MESSAGES.editingOff))),
   });
 
   const videoAdapter = createVideoAdapter({
@@ -212,7 +247,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     isOnline: () => deps.network.isOnline(),
     onOnlineChange: (cb) => deps.network.onOnlineChange(cb),
     collab: withMediaCleanup(wrapCollab(stack.connector, deps.registry), { store: stack.store, onError: report }),
-    media: { store: stack.store, uploader },
+    media: { store: mediaStore, uploader },
     urls: {
       photo: photoUrl,
       // The report preview, the PDFs and the video objects are server pages that need the web session; the app has none.

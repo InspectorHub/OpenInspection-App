@@ -129,7 +129,7 @@ describe('fetchCompat (P1 compat hardening)', () => {
       Promise.resolve(new Response(JSON.stringify({ success: true, data: { minSupported: '1.0.0', recommended: null, downloadUrl, serverContractVersion: 1 } }), { status: 200 }));
     const https = await fetchCompat(createHttp({ fetch: respond('https://example.com/app.apk') }), 'https://oi.example.com', 'android');
     expect(https.downloadUrl).toBe('https://example.com/app.apk');
-    for (const bad of ['http://example.com/app.apk', 'javascript:alert(1)', 'intent://x#Intent;end']) {
+    for (const bad of ['http://example.com/app.apk', 'javascript:alert(1)', 'intent://x#Intent;end', 'https://user:pw@example.com/app.apk']) {
       const info = await fetchCompat(createHttp({ fetch: respond(bad) }), 'https://oi.example.com', 'android');
       expect(info.downloadUrl).toBeNull();
     }

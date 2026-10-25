@@ -39,6 +39,8 @@ export interface WorkListProps {
   pollMs?: number;
   /** The timers that end a short-lived note. Defaults to the real ones. */
   timers?: TimerPort;
+  /** Shown right under the page heading, so that notices with their own headings come after the first-level one. */
+  notices?: ReactNode;
 }
 
 function Skeleton() {
@@ -70,7 +72,7 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
  * The home of a signed-in device: today's work, what is on the device, and what has not reached the server. Everything
  * shown is read from the database through the stack; the screen remembers only what it is in the middle of doing.
  */
-export function WorkList({ stack, onOpenInspection, onExport, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers }: WorkListProps) {
+export function WorkList({ stack, onOpenInspection, onExport, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices }: WorkListProps) {
   const language = locale ?? (typeof navigator === 'undefined' ? undefined : navigator.language);
   const model = useWorkListModel(stack, { now, pollMs });
   const status = useSyncExternalStore(stack.status.subscribe, stack.status.get);
@@ -142,6 +144,7 @@ export function WorkList({ stack, onOpenInspection, onExport, network, now = Dat
           onDownload={() => void latch(download)}
           headingRef={headingRef}
         />
+        {notices}
         <StatusStrip status={status} />
         {snapshot !== null && (
           <ReconcileStatus

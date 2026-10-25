@@ -3,6 +3,7 @@ import type { CompatNotice } from '../app/compat-notice';
 import type { AppServices } from '../app/compose';
 import { isAuthError } from '../auth/errors';
 import type { SignInResult } from '../auth/pkce-login';
+import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NOTICE_MESSAGES } from './messages';
@@ -47,6 +48,7 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
   return (
     <Screen>
       <Heading>{relogin ? 'Sign in again' : 'Sign in'}</Heading>
+      <BuildExpiry services={services} />
       <Body>
         {relogin
           ? 'Your session on this server ended. The inspections and photos saved on this device are kept; signing in again picks up where you left off.'

@@ -101,6 +101,7 @@ describe('defect photo', () => {
       [{ kind: 'problem', problem: 'locked' }, MESSAGES.deviceLocked],
       [{ kind: 'problem', problem: 'auth' }, MESSAGES.sessionExpired],
       [{ kind: 'problem', problem: 'upgrade' }, MESSAGES.upgradeRequired],
+      [{ kind: 'problem', problem: 'server_too_old' }, MESSAGES.serverTooOld],
     ];
     for (const [answer, sentence] of cases) {
       const { fg } = setup([answer]);
