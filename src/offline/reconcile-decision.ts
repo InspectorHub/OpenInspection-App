@@ -2,6 +2,7 @@ import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { SYNC_LEASE, withLease, type LeaseHandle } from './lease';
 import { sameAccount, type Account } from './outbox';
+import { issuePlan } from './plan-brand';
 import { DEFAULT_REGISTRY, isLocalId, type CommandRegistry } from './registry';
 import { unattributableOutboxRows, unsentData, type UnsentReason } from './unsent';
 import type { SessionProbe, VisibleClient, VisibleFailure } from './visible-client';
@@ -330,7 +331,8 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
   type Decided = Omit<ReconcilePlan, 'kind' | 'proof' | 'unknownOwner' | 'deferred' | 'account' | 'decidedAt' | 'candidateCount'> & { deferred: string[] };
   const finish = async (plan: Decided): Promise<ReconcileResult> => {
     if (!(await gate())) return stopped();
-    return {
+    // Registered as issued (and frozen): the executor and the person-confirmed removal accept no other plan object.
+    return issuePlan<ReconcilePlan>({
       kind: 'plan',
       ...plan,
       deferred: [...plan.deferred, ...local.deferredBeyondBound],
@@ -339,7 +341,7 @@ async function run(deps: ReconcileDeps, lease: LeaseHandle, account: Account): P
       account: { tenantId: account.tenantId, userId: account.userId },
       decidedAt: deps.clock.now(),
       proof,
-    };
+    });
   };
 
   if (ids.length === 0) return finish({ purge: [], quarantine: [], unquarantine: [], keep: [], deferred: [], massSuspicious: false, allMissing: false, fingerprints: {}, reasons: {} });

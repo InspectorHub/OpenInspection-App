@@ -6,6 +6,7 @@ import { fakeAppState } from '../offline/test-support/fakes';
 import { createNativeUploader, MAX_UPLOAD_ATTEMPTS, transientBackoffMs, type NativeUploader } from './native-uploader';
 import { createMediaReconciler, MIN_RETRY_DELAY_MS, type MediaReconciler, type ResolvePending } from './reconcile';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, response, type FakePlugin, type MediaWorld } from './test-support/fakes';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const SESSION_OK = { kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } } as const;
 
@@ -65,6 +66,7 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; f
     return Promise.resolve('resolved');
   });
   const uploader = createNativeUploader({
+    isBlocked: neverBlocked,
     store: world.store,
     http: world.engine.http,
     tokens: { getAccessToken: () => Promise.resolve(state.token), checkSession: () => Promise.resolve(SESSION_OK) },
@@ -81,6 +83,7 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; f
   });
   let recRef: MediaReconciler | null = null;
   const rec = createMediaReconciler({
+    isBlocked: neverBlocked,
     store: world.store,
     uploader,
     resolvePending: resolve,
@@ -424,7 +427,9 @@ describe('reconcile: never while locked, revoked, signed out or offline', () => 
     const s = await setup({ world });
     await putPhotos(s, ['p1']);
     const throwing = createMediaReconciler({
+      isBlocked: neverBlocked,
       store: world.store, uploader: createNativeUploader({
+        isBlocked: neverBlocked,
         store: world.store, http: world.engine.http, tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },
         plugin: s.plugin, origin: ORIGIN, isLocked: () => { throw new Error('storage'); }, clientHeaders: {}, timers: s.timers,
       }),
@@ -920,6 +925,7 @@ async function scripted(options: {
   for (let i = 0; i < options.rows; i += 1) await world.store.put(photoRecord(`p${String(i + 1)}`, { createdAt: i + 1 }));
   const errors: unknown[] = [];
   const rec = createMediaReconciler({
+    isBlocked: neverBlocked,
     store: world.store,
     uploader: {
       uploadDetailed: (ref) =>
@@ -1003,6 +1009,7 @@ describe('reconcile: a scan that failed or did not finish still arms the fallbac
     world.store.listRowsPage = () => Promise.reject(new Error('database is locked'));
     const timers = createManualTimers();
     const rec = createMediaReconciler({
+      isBlocked: neverBlocked,
       store: world.store,
       uploader: { uploadDetailed: () => Promise.resolve(SOFT), attach: () => Promise.resolve(), isActive: () => false, retryAt: () => null, forgetExcept: () => undefined, handlesVideo: () => false },
       resolvePending: () => Promise.resolve('resolved'),

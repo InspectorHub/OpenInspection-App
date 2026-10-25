@@ -133,9 +133,9 @@ export interface CollabConnectorDeps {
   /**
    * The data-layer block (`createBlockedGuard`). When given, a connection is made only after it answered `false`; an
    * answer of `true`, or a rejection, refuses the connection (see `CollabBlockedError`) and is asked again before every
-   * ticket request. Without it nothing is checked: the composition root must pass the real guard.
+   * ticket request. REQUIRED, with no default: a composition root that forgets it does not compile.
    */
-  isBlocked?: (inspectionId: string) => Promise<boolean>;
+  isBlocked: (inspectionId: string) => Promise<boolean>;
 }
 
 export interface NativeCollabConnector extends FieldCollabConnector {
@@ -603,9 +603,8 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       }
     }
 
-    /** True when the guard says blocked, or cannot say. Without a guard nothing is blocked. */
+    /** True when the guard says blocked, or cannot say. */
     async function blockedNow(): Promise<boolean> {
-      if (deps.isBlocked === undefined) return false;
       try {
         return (await deps.isBlocked(inspectionId)) !== false;
       } catch {
@@ -717,17 +716,13 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       void close();
     }
 
-    if (deps.isBlocked === undefined) {
-      startPersistence();
-    } else {
-      void (async () => {
-        const blocked = await blockedNow();
-        // A purge or a destroy that came first already closed this connection; nothing is started for it.
-        if (destroyed) return;
-        if (blocked) refuseBlocked();
-        else startPersistence();
-      })();
-    }
+    void (async () => {
+      const blocked = await blockedNow();
+      // A purge or a destroy that came first already closed this connection; nothing is started for it.
+      if (destroyed) return;
+      if (blocked) refuseBlocked();
+      else startPersistence();
+    })();
 
     return {
       get doc() {

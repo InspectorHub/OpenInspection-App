@@ -11,6 +11,7 @@ import { enqueue, listOutbox, type Account, type OutboxRow } from '../outbox';
 import { createReplayer, type HaltReason, type ReplayDeps, type ReplayProgress, type Replayer } from '../replay';
 import type { CommandRegistry } from '../registry';
 import { fakeAppState, type FakeAppState } from './fakes';
+import { neverBlocked } from '../../test-support/never-blocked';
 
 export const ORIGIN = 'https://oi.example.test';
 export const ALICE: Account = { tenantId: 'tenant-1', userId: 'alice' };
@@ -204,6 +205,7 @@ export async function createReplayWorld(options: WorldOptions = {}): Promise<Rep
   let tokens = 0;
 
   const deps = (overrides: Partial<ReplayDeps> = {}): ReplayDeps => ({
+    isBlocked: neverBlocked,
     db,
     http: server.http,
     tokens: { getAccessToken: () => (state.tokenFn ? state.tokenFn() : Promise.resolve(state.token)), checkSession },

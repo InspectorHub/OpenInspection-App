@@ -7,6 +7,7 @@ import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
 import { createPendingResolver, createWithDoc, resolvePendingInDoc, type DocPorts } from './pending-doc';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const KEY = 'tenant-1/inspections/insp-1/photos/pend-1.jpg';
 
@@ -113,7 +114,7 @@ describe('withDoc: the live document and the short-lived one', () => {
     seed(live, 'k', [pendingEntry('pend-1')]);
     const opened: string[] = [];
     const docs: DocPorts = { isOpen: (id) => { opened.push(id); return true; }, liveDoc: () => live };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).resolves.toBe('resolved');
     expect(photosOf(live, 'k')[0]).toMatchObject({ key: KEY });
     expect(opened).toEqual(['insp-1']);
@@ -129,7 +130,7 @@ describe('withDoc: the live document and the short-lived one', () => {
     expect(rowsBefore).toBeGreaterThan(0);
 
     const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers() }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs, timers: createManualTimers() }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).resolves.toBe('resolved');
 
     const reopened = await reload(db, 'insp-1');
@@ -146,7 +147,7 @@ describe('withDoc: the live document and the short-lived one', () => {
     const db = await createSqlJsDb();
     await migrate(db, 0);
     const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).resolves.toBe('missing');
     expect(await rowCount(db)).toBe(0);
   });
@@ -157,7 +158,7 @@ describe('withDoc: the live document and the short-lived one', () => {
     await persistedDoc(db, 'insp-1', (doc) => seed(doc, 'k', [pendingEntry('pend-1')]));
     const before = await rowCount(db);
     const docs: DocPorts = { isOpen: () => true, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).rejects.toMatchObject({ code: 'DOC_BUSY' });
     expect(await rowCount(db)).toBe(before);
     expect(photosOf(await reload(db, 'insp-1'), 'k')[0]).toMatchObject({ pendingId: 'pend-1', pendingUpload: true });
@@ -167,7 +168,7 @@ describe('withDoc: the live document and the short-lived one', () => {
     const db = await createSqlJsDb();
     await migrate(db, 0);
     const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs }) });
     await expect(resolve('../x', 'pend-1', KEY)).rejects.toMatchObject({ code: 'INVALID_ID' });
     await expect(resolve('insp-1', 'a/b', KEY)).rejects.toMatchObject({ code: 'INVALID_ID' });
     await expect(resolve('insp-1', 'pend-1', 'not a key')).rejects.toMatchObject({ code: 'INVALID_RECORD' });
@@ -197,7 +198,7 @@ describe('withDoc: a change that did not reach the table is never reported as re
     db.arm();
     const errors: unknown[] = [];
     const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers(), onError: (e) => errors.push(e) }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs, timers: createManualTimers(), onError: (e) => errors.push(e) }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).rejects.toMatchObject({ code: 'DOC_FAILED' });
     expect(errors.length).toBeGreaterThan(0);
     expect(photosOf(await reload(inner, 'insp-1'), 'k')[0]).toMatchObject({ pendingId: 'pend-1', pendingUpload: true, key: '' });
@@ -210,7 +211,7 @@ describe('withDoc: a change that did not reach the table is never reported as re
     const db = failingInsertDb(inner);
     const errors: unknown[] = [];
     const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers(), onError: (e) => errors.push(e) }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs, timers: createManualTimers(), onError: (e) => errors.push(e) }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).resolves.toBe('resolved');
     expect(errors).toEqual([]);
     expect(photosOf(await reload(inner, 'insp-1'), 'k')[0]).toMatchObject({ key: KEY });
@@ -228,7 +229,7 @@ describe('withDoc: a change that did not reach the table is never reported as re
       transaction: (fn) => inner.transaction(fn),
     };
     const docs: DocPorts = { isOpen: () => false, liveDoc: () => null };
-    const resolve = createPendingResolver({ withDoc: createWithDoc({ db, docs, timers: createManualTimers() }) });
+    const resolve = createPendingResolver({ withDoc: createWithDoc({ isBlocked: neverBlocked, db, docs, timers: createManualTimers() }) });
     await expect(resolve('insp-1', 'pend-1', KEY)).rejects.toMatchObject({ code: 'DOC_FAILED' });
   });
 });

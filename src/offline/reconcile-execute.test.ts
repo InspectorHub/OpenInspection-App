@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { CollabBlockedError } from '../collab/connector';
 import { createManualClock } from '../platform/clock';
 import { DEFAULT_PLAN_MAX_AGE_MS, fingerprintOf, REASON_MASS_SUSPICIOUS, REASON_NOT_VISIBLE, type ReconcilePlan } from './reconcile-decision';
-import { executeReconcilePlan } from './reconcile-execute';
+import { executeReconcilePlan as executeIssued, type ExecuteDeps } from './reconcile-execute';
 import { accountKey, enqueue } from './outbox';
+import { issuePlanForTest, purgeAuthorityForTest } from './test-support/brands';
 import { purgeInspection, resumePurges } from './purge';
 import { countOrphanedOutbox } from './waiting';
 import { createPurgeWorld, type InspectionTable, type PurgeWorld } from './test-support/purge-world';
 import { ALICE, BOB, DATA_TABLES, seedEveryTable, seedPackages } from './test-support/reconcile-world';
 
 let world: PurgeWorld;
+
+/** Most tests here edit a plan by hand to reach one rule, so the plan is registered as issued first; the issuer check has its own tests. */
+const executeReconcilePlan = (deps: ExecuteDeps, plan: ReconcilePlan): ReturnType<typeof executeIssued> => executeIssued(deps, issuePlanForTest(plan));
 
 beforeEach(async () => {
   world = await createPurgeWorld();
@@ -543,7 +547,7 @@ describe('no inspection other than the target is touched (a hash of every table,
     await world.outbox('p003', 'pending');
     const mine = await world.mediaFile('p003', 'mine', 'pending');
     const before = await hashExcluding('p003', [mine]);
-    expect(await purgeInspection(world.purgeDeps(), 'p003', { mode: 'user_confirmed', account: ALICE })).toEqual({ kind: 'purged' });
+    expect(await purgeInspection(world.purgeDeps(), 'p003', { mode: 'user_confirmed', account: ALICE, authority: purgeAuthorityForTest() })).toEqual({ kind: 'purged' });
     expect(await hashExcluding('p003', [mine])).toBe(before);
     expect(world.files.paths()).not.toContain(mine);
     expect((await world.counts('p003')).files).toBe(0);

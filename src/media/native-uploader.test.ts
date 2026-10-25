@@ -5,6 +5,7 @@ import { createManualTimers } from '../collab/test-support/manual-timers';
 import { createManualClock } from '../platform/clock';
 import { createNativeUploader, MAX_UPLOAD_ATTEMPTS, transientBackoffMs, type NativeUploaderDeps } from './native-uploader';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, response, type FakePlugin, type MediaWorld } from './test-support/fakes';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const ID = 'photo-1';
 const CLIENT_HEADERS = { 'X-Client-Platform': 'android', 'X-Client-Version': '1.2.3' };
@@ -38,7 +39,7 @@ async function setup(options: { origin?: string; allowInsecureHttp?: boolean; se
       return Promise.resolve(options.session ?? SESSION_OK);
     },
   };
-  const uploader = createNativeUploader({
+  const uploader = createNativeUploader({ isBlocked: neverBlocked,
     store: world.store,
     http: world.engine.http,
     tokens,
@@ -277,7 +278,7 @@ describe('native uploader: a signed url that was refused (401/403) is minted aga
     let refused = false;
     s.world.engine.mintOverride = null;
     const engineHttp = s.world.engine.http;
-    const uploader = createNativeUploader({
+    const uploader = createNativeUploader({ isBlocked: neverBlocked,
       store: s.world.store,
       http: {
         request: (req) => {
@@ -342,7 +343,7 @@ describe('native uploader: mint failures', () => {
     const s = await setup();
     await s.world.store.put(photoRecord(ID));
     const wrapped = { request: () => Promise.reject(new AuthError('server_unreachable')) };
-    const uploader = createNativeUploader({ store: s.world.store, http: wrapped, tokens: s.tokens, plugin: s.plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: CLIENT_HEADERS, timers: s.timers, clock: s.clock, random: () => 1 });
+    const uploader = createNativeUploader({ isBlocked: neverBlocked, store: s.world.store, http: wrapped, tokens: s.tokens, plugin: s.plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: CLIENT_HEADERS, timers: s.timers, clock: s.clock, random: () => 1 });
     expect(await uploader.uploadDetailed(ref())).toMatchObject({ ok: false, code: 'NETWORK', retryable: true });
     expect(await s.world.store.getRow(ID)).toMatchObject({ state: 'failed', attempts: 1 });
   });
@@ -483,7 +484,7 @@ describe('native uploader: refusals before any network call', () => {
     await dev.world.store.put(photoRecord(ID));
     expect((await dev.uploader.uploadDetailed(ref())).ok).toBe(true);
     expect(dev.plugin.starts[0]?.serverUrl.startsWith('http://localhost:8787/api/public/uploads/photo?token=')).toBe(true);
-    expect(() => createNativeUploader({
+    expect(() => createNativeUploader({ isBlocked: neverBlocked,
       store: dev.world.store, http: dev.world.engine.http, tokens: dev.tokens, plugin: dev.plugin, origin: 'http://remote.example.test', isLocked: () => false, clientHeaders: {}, timers: dev.timers,
     })).toThrow();
   });
@@ -722,13 +723,13 @@ describe('native uploader: attempts count recorded failures only (c)', () => {
     for (let i = 0; i < 10; i += 1) {
       const plugin = createFakePlugin({ engine: world.engine, files: world.files, idPrefix: `dead${String(i)}` });
       plugin.defaultBehavior = { kind: 'hang' };
-      const uploader = createNativeUploader({ store: world.store, http: world.engine.http, tokens, plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: createManualTimers() });
+      const uploader = createNativeUploader({ isBlocked: neverBlocked, store: world.store, http: world.engine.http, tokens, plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: createManualTimers() });
       void uploader.uploadDetailed(ref());
       await plugin.whenStarted(1);
       expect(await world.store.getRow(ID)).toMatchObject({ state: 'uploading', attempts: 0 });
     }
     const plugin = createFakePlugin({ engine: world.engine, files: world.files });
-    const uploader = createNativeUploader({ store: world.store, http: world.engine.http, tokens, plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: createManualTimers() });
+    const uploader = createNativeUploader({ isBlocked: neverBlocked, store: world.store, http: world.engine.http, tokens, plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: createManualTimers() });
     await expect(uploader.uploadDetailed(ref())).resolves.toMatchObject({ ok: true });
   });
 });
@@ -739,7 +740,7 @@ describe('native uploader: the client headers cannot carry credentials (a)', () 
     await world.store.put(photoRecord(ID));
     const plugin = createFakePlugin({ engine: world.engine, files: world.files });
     const headers = { 'X-Client-Platform': 'android', authorization: 'Bearer leak', COOKIE: 'a=b', 'Proxy-Authorization': 'x', ' Authorization ': 'y', 'X-Client-Version': '1' };
-    const uploader = createNativeUploader({
+    const uploader = createNativeUploader({ isBlocked: neverBlocked,
       store: world.store, http: world.engine.http, tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },
       plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: headers, timers: createManualTimers(),
     });
@@ -755,7 +756,7 @@ describe('native uploader: client headers other than credentials are passed thro
     await world.store.put(photoRecord(ID));
     const plugin = createFakePlugin({ engine: world.engine, files: world.files });
     const headers = { 'X-Client-Platform': 'android', 'Content-Type': 'image/jpeg', 'Idempotency-Key': 'k-1' };
-    const uploader = createNativeUploader({
+    const uploader = createNativeUploader({ isBlocked: neverBlocked,
       store: world.store, http: world.engine.http, tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },
       plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: headers, timers: createManualTimers(),
     });
@@ -837,7 +838,7 @@ describe('native uploader: a halt after the row was marked uploading puts it bac
 
 describe('native uploader: retry() is one atomic transition (f)', () => {
   function retryUploader(world: MediaWorld, extra: Partial<NativeUploaderDeps>) {
-    return createNativeUploader({
+    return createNativeUploader({ isBlocked: neverBlocked,
       store: world.store,
       http: world.engine.http,
       tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },

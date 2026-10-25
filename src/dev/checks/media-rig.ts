@@ -1,3 +1,4 @@
+import { createBlockedGuard } from '../../offline/blocked';
 import { evaluateLock } from '../../offline/lock';
 import { loadLockState } from '../../offline/lock-state';
 import { createNativeUploader, type NativeUploader } from '../../media/native-uploader';
@@ -45,7 +46,7 @@ export function diagOnly(store: MediaStore): MediaStore {
 }
 
 export function createDiagStore(ctx: DiagContext): MediaStore {
-  return createMediaStore({ db: ctx.services.db, files: ctx.services.files });
+  return createMediaStore({ db: ctx.services.db, files: ctx.services.files, isBlocked: createBlockedGuard(ctx.services.db) });
 }
 
 export async function diagCounts(store: MediaStore): Promise<Record<MediaState, number> & { total: number }> {
@@ -99,6 +100,8 @@ export function buildRig(ctx: DiagContext, options: { concurrency: number }): Me
   const onError = (): void => {
     observed.errors += 1;
   };
+  // The real guard, as in the app: the diagnostics exercise the same code path a real photo takes.
+  const isBlocked = createBlockedGuard(services.db);
   const uploader = createNativeUploader({
     store,
     http: services.http,
@@ -110,6 +113,7 @@ export function buildRig(ctx: DiagContext, options: { concurrency: number }): Me
     clientHeaders: { 'X-Client-Platform': services.platform, 'X-Client-Version': services.appVersion },
     clock: services.clock,
     onError,
+    isBlocked,
   });
   const reconciler = createMediaReconciler({
     store,
@@ -120,6 +124,7 @@ export function buildRig(ctx: DiagContext, options: { concurrency: number }): Me
     clock: services.clock,
     concurrency: options.concurrency,
     onError,
+    isBlocked,
   });
   return {
     store,

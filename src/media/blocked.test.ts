@@ -29,7 +29,7 @@ interface Setup {
 }
 
 interface SetupOptions {
-  guard?: 'set' | 'db' | 'none' | 'throws';
+  guard?: 'set' | 'db' | 'throws';
 }
 
 async function setup(options: SetupOptions = {}): Promise<Setup> {
@@ -42,16 +42,14 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
   const guardCalls: string[] = [];
   const mode = options.guard ?? 'set';
   const isBlocked =
-    mode === 'none'
-      ? undefined
-      : mode === 'throws'
-        ? () => Promise.reject(new Error('unreadable'))
-        : mode === 'db'
-          ? createBlockedGuard(world.db)
-          : (id: string) => {
-              guardCalls.push(id);
-              return Promise.resolve(blocked.has(id));
-            };
+    mode === 'throws'
+      ? () => Promise.reject(new Error('unreadable'))
+      : mode === 'db'
+        ? createBlockedGuard(world.db)
+        : (id: string) => {
+            guardCalls.push(id);
+            return Promise.resolve(blocked.has(id));
+          };
   const resolve = vi.fn<ResolvePending>(() => Promise.resolve('resolved'));
   const uploader = createNativeUploader({
     store: world.store,
@@ -65,7 +63,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     clock,
     random: () => 1,
     onError: (e) => errors.push(e),
-    ...(isBlocked === undefined ? {} : { isBlocked }),
+    isBlocked,
   });
   const rec = createMediaReconciler({
     store: world.store,
@@ -77,7 +75,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     timers,
     random: () => 0.5,
     onError: (e) => errors.push(e),
-    ...(isBlocked === undefined ? {} : { isBlocked }),
+    isBlocked,
   });
   return { world, plugin, timers, uploader, rec, resolve, errors, blocked, guardCalls };
 }
@@ -141,11 +139,6 @@ describe('the uploader refuses a blocked inspection', () => {
     expect((await s.uploader.uploadDetailed({ pendingId: 'p1', inspectionId: INSPECTION })).ok).toBe(true);
   });
 
-  it('control: an uploader built without a guard behaves as before (the guard is optional for this module)', async () => {
-    const s = await setup({ guard: 'none' });
-    await s.world.store.put(photoRecord('p1'));
-    expect((await s.uploader.uploadDetailed({ pendingId: 'p1', inspectionId: INSPECTION })).ok).toBe(true);
-  });
 });
 
 describe('an upload in flight when the inspection is purged', () => {

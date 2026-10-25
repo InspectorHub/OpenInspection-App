@@ -7,6 +7,7 @@ import { MAX_VIDEO_BYTES } from './store';
 import { combinedEngine, createFakeVideoEngine, STREAM_HOST, videoBytes, videoRecord, type Backend, type FakeVideoEngine } from './test-support/video-fakes';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, type FakePlugin, type MediaWorld } from './test-support/fakes';
 import { createVideoStrategy, type ResolveVideo } from './video';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const CLIENT_HEADERS = { 'X-Client-Platform': 'android', 'X-Client-Version': '1.2.3' };
 const SESSION_OK = { kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } } as const;
@@ -78,6 +79,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     return Promise.resolve('resolved');
   });
   const uploader = createNativeUploader({
+    isBlocked: neverBlocked,
     store: world.store,
     http: combined.http,
     tokens: { getAccessToken: () => Promise.resolve(state.token), checkSession: () => Promise.resolve(SESSION_OK) },
@@ -93,6 +95,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
   });
   const kinds = options.kinds === 'default' ? undefined : (options.kinds ?? (options.wired === false ? ['photo'] : ['photo', 'video']));
   const rec = createMediaReconciler({
+    isBlocked: neverBlocked,
     store: world.store,
     uploader,
     resolvePending: resolvePhoto,
@@ -851,6 +854,7 @@ describe('video reconcile: one table, two kinds', () => {
   describe('construction refuses a wiring that would silently lose clips', () => {
     const build = (s: Setup, extra: Partial<Parameters<typeof createMediaReconciler>[0]>) =>
       createMediaReconciler({
+        isBlocked: neverBlocked,
         store: s.world.store,
         uploader: s.uploader,
         resolvePending: s.resolvePhoto,

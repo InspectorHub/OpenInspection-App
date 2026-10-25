@@ -19,6 +19,7 @@ import {
   type SocketHandlers,
 } from './connector';
 import { createManualTimers, type ManualTimers } from './test-support/manual-timers';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const ORIGIN = 'https://oi.example.test';
 const MSG_SYNC = 0;
@@ -164,6 +165,7 @@ async function createWorld(overrides: Partial<CollabConnectorDeps> = {}, dbWrap?
     },
   };
   world.connector = createCollabConnector({
+    isBlocked: neverBlocked,
     db,
     http,
     tokens: world.tokens as unknown as Pick<TokenManager, 'getAccessToken' | 'checkSession'>,

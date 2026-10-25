@@ -8,6 +8,7 @@ import type { Network } from '../platform/network';
 import { migrate } from '../platform/schema';
 import { CollabBlockedError, createCollabConnector, type CollabSocket, type CollabStatus, type SocketHandlers } from './connector';
 import { createManualTimers, type ManualTimers } from './test-support/manual-timers';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const ORIGIN = 'https://oi.example.test';
 
@@ -64,6 +65,7 @@ async function createWorld(isBlocked?: (id: string) => Promise<boolean>): Promis
     checkSession: vi.fn(() => Promise.resolve<SessionCheck>({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } })),
   } as unknown as Pick<TokenManager, 'getAccessToken' | 'checkSession'>;
   const connector = createCollabConnector({
+    isBlocked: neverBlocked,
     db,
     http,
     tokens,
@@ -126,7 +128,7 @@ describe('connect refuses a blocked inspection', () => {
     expect(await docRows(world.db, 'insp-1')).toBe(0);
   });
 
-  it('a control without a guard dependency still connects (the guard is optional for this module)', async () => {
+  it('control: a guard that says free connects', async () => {
     const world = await createWorld();
     const handle = world.connector.connect('insp-1', {});
     await handle.persistenceSynced;

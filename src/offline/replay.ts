@@ -110,9 +110,9 @@ export interface ReplayDeps {
    * The data-layer block (`createBlockedGuard`). A write of a blocked inspection (quarantined or being purged) is not
    * sent: it stays `pending` exactly as it was, is not failed, not waited and not a halt, and the lines of other
    * inspections go on. Asked right before the row is attempted and again right before its request; a guard that
-   * rejects counts as blocked. Without it nothing is checked, so the composition root must pass the real guard.
+   * rejects counts as blocked. REQUIRED, with no default: a composition root that forgets it does not compile.
    */
-  isBlocked?: (inspectionId: string) => Promise<boolean>;
+  isBlocked: (inspectionId: string) => Promise<boolean>;
   /** A run stopped early for a reason the person may need to act on (sign in again, update the app). */
   onHalt?: (reason: HaltReason) => void;
   onProgress?: (progress: ReplayProgress) => void;
@@ -224,9 +224,9 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     return stopped ? 'stopped' : null;
   }
 
-  /** True when the guard says the inspection is blocked, or cannot say. Without a guard nothing is blocked. */
+  /** True when the guard says the inspection is blocked, or cannot say. A write that names no inspection has nothing to block. */
   async function isBlocked(inspectionId: string | null): Promise<boolean> {
-    if (deps.isBlocked === undefined || inspectionId === null) return false;
+    if (inspectionId === null) return false;
     try {
       return (await deps.isBlocked(inspectionId)) !== false;
     } catch {

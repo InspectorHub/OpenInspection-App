@@ -116,9 +116,9 @@ export interface NativeUploaderDeps {
   /**
    * The data-layer block (`createBlockedGuard`). A row of a blocked inspection is neither minted, started, finished nor
    * recorded as failed: the upload answers `BLOCKED` and the row stays as it is. A guard that rejects counts as blocked.
-   * Without it nothing is checked, so the composition root must pass the real guard.
+   * REQUIRED, with no default: a composition root that forgets it does not compile.
    */
-  isBlocked?: (inspectionId: string) => Promise<boolean>;
+  isBlocked: (inspectionId: string) => Promise<boolean>;
 }
 
 export interface NativeUploader extends MediaUploader {
@@ -329,9 +329,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
     }
   }
 
-  /** True when the guard says blocked or cannot say. Without a guard nothing is blocked. */
+  /** True when the guard says blocked or cannot say. */
   async function blocked(inspectionId: string): Promise<boolean> {
-    if (deps.isBlocked === undefined) return false;
     try {
       return (await deps.isBlocked(inspectionId)) !== false;
     } catch {

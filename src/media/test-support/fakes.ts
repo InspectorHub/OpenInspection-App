@@ -5,6 +5,7 @@ import { createSqlJsDb } from '../../platform/db-sqljs';
 import { migrate } from '../../platform/schema';
 import type { UploaderPluginLike, UploaderStartOptions, UploaderEventLike } from '../../platform/uploader';
 import { createMediaStore, type MediaStore } from '../store';
+import { neverBlocked } from '../../test-support/never-blocked';
 
 export const ORIGIN = 'https://oi.example.test';
 export const INSPECTION = 'insp-1';
@@ -245,7 +246,7 @@ export async function createMediaWorld(): Promise<MediaWorld> {
   const db = await createSqlJsDb();
   await migrate(db, 0);
   const files = createMemoryFiles();
-  const store = createMediaStore({ db, files });
+  const store = createMediaStore({ isBlocked: neverBlocked, db, files });
   return { db, files, store, engine: createFakeEngine() };
 }
 

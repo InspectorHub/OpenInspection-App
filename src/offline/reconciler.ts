@@ -90,9 +90,12 @@ export interface ReconcilerDeps {
   random?: () => number;
   /** Receives every finished flow's outcome. A throw is ignored. */
   onOutcome?: (outcome: ReconcileOutcome) => void;
-  /** Receives unexpected failures. Never receives a plan, an id or a path. */
-  onError?: (error: unknown) => void;
+  /** Receives unexpected failures as FIXED CODES only: never an error object, a message, a plan, an id or a path. A throw is ignored. */
+  onError?: (code: ReconcilerErrorCode) => void;
 }
+
+/** What `onError` receives. The thrown value itself is dropped: its text could carry an id, a url or a payload. */
+export type ReconcilerErrorCode = 'resume_threw' | 'decide_threw' | 'execute_threw' | 'flow_threw' | 'timer_failed';
 
 export interface Reconciler {
   /** Asks for a flow. Coalesced; see the module comment. Ignored after `stop()`. */
@@ -145,9 +148,9 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
   let latest: ReconcileOutcome = { ...blank(), at: null };
   const unsubscribe: (() => void)[] = [];
 
-  function report(error: unknown): void {
+  function report(code: ReconcilerErrorCode): void {
     try {
-      deps.onError?.(error);
+      deps.onError?.(code);
     } catch {
       // A failing reporter must not change what the flow does.
     }
@@ -225,9 +228,9 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       const summary = await deps.resumePurges();
       resumed = summary.resumed;
       resumeFailed = summary.failed > 0;
-    } catch (error) {
+    } catch {
       resumeFailed = true;
-      report(error);
+      report('resume_threw');
     }
     const afterResume = await closed();
     if (afterResume !== null) return skipped(afterResume, resumed, resumeFailed);
@@ -235,8 +238,8 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     let answer: ReconcileResult;
     try {
       answer = await deps.decide();
-    } catch (error) {
-      report(error);
+    } catch {
+      report('decide_threw');
       return { outcome: { ...blank(), status: 'error', reason: 'decide_threw', resumed, resumeFailed }, failure: { kind: 'soft', retryAfterMs: null } };
     }
     if (answer.kind !== 'plan') return fromNonPlan(answer, resumed, resumeFailed);
@@ -249,8 +252,8 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     let result: ExecuteResult;
     try {
       result = await deps.execute(answer);
-    } catch (error) {
-      report(error);
+    } catch {
+      report('execute_threw');
       return { outcome: { ...fromPlan(answer, resumed, resumeFailed), status: 'error', reason: 'execute_threw' }, failure: { kind: 'soft', retryAfterMs: null } };
     }
     return fromExecution(answer, result, resumed, resumeFailed);
@@ -273,10 +276,17 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     if (failure.kind === 'permanent') hold = HOLD_MAX_MS;
     else {
       const base = failure.kind === 'busy' ? HOLD_BUSY_BASE_MS : HOLD_BASE_MS;
-      hold = Math.round(Math.min(base * 2 ** Math.min(failures - 1, 20), HOLD_MAX_MS) * jitter());
+      // The doubling is capped BEFORE the jitter and the result again after it: no hold is ever longer than an hour.
+      hold = Math.min(Math.round(Math.min(base * 2 ** Math.min(failures - 1, 20), HOLD_MAX_MS) * jitter()), HOLD_MAX_MS);
       if (failure.kind === 'soft' && failure.retryAfterMs !== null) hold = Math.max(hold, Math.min(failure.retryAfterMs, HOLD_MAX_MS));
     }
     holdUntil = now + hold;
+  }
+
+  /** How long the automatic triggers are still held back. A hold that claims to be longer than any this module sets is a clock that moved back: it is over. */
+  function heldFor(): number {
+    const left = holdUntil - deps.clock.now();
+    return left > 0 && left <= HOLD_MAX_MS ? left : 0;
   }
 
   /** The ONE timer: the slow fallback while started, never earlier than the end of a hold. */
@@ -286,14 +296,20 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       timer = null;
     }
     if (stopped) return;
-    const held = Math.max(0, holdUntil - deps.clock.now());
+    const held = heldFor();
     if (!started && held === 0) return;
     const slow = started ? Math.round(fallbackInterval * (0.75 + 0.5 * random())) : 0;
     const delay = Math.max(MIN_TIMER_MS, Math.min(Math.max(slow, held), MAX_TIMER_MS));
-    timer = timers.setTimeout(() => {
+    try {
+      timer = timers.setTimeout(() => {
+        timer = null;
+        trigger('fallback');
+      }, delay);
+    } catch {
+      // No timer could be set: the events (network, foreground, unlock, a manual request) still run the flow.
       timer = null;
-      trigger('fallback');
-    }, delay);
+      report('timer_failed');
+    }
   }
 
   function finish(result: Flow): void {
@@ -311,8 +327,8 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       let result: Flow;
       try {
         result = await flow();
-      } catch (error) {
-        report(error);
+      } catch {
+        report('flow_threw');
         result = { outcome: { ...blank(), status: 'error', reason: 'flow_threw' }, failure: { kind: 'soft', retryAfterMs: null } };
       }
       finish(result);
@@ -336,7 +352,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       if (THROUGH_THE_HOLD.has(reason)) againThroughHold = true;
       return;
     }
-    if (!THROUGH_THE_HOLD.has(reason) && deps.clock.now() < holdUntil) {
+    if (!THROUGH_THE_HOLD.has(reason) && heldFor() > 0) {
       if (timer === null) arm();
       return;
     }

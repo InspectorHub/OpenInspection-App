@@ -5,6 +5,7 @@ import { diagCounts } from './media-rig';
 import { KILL_PHOTOS, killClean, killResume, killStart } from './uploader-kill';
 import { stopKillSession } from './index';
 import { uploaderPhoto } from './uploader-photo';
+import { neverBlocked } from '../../test-support/never-blocked';
 
 afterEach(async () => {
   await stopKillSession();
@@ -19,7 +20,7 @@ describe('uploader-photo', () => {
     expect(rig.engine.minted).toHaveLength(1);
     expect(rig.engine.minted[0]?.pendingId).toMatch(/^diag-[0-9a-z]{8}$/);
     expect(rig.world.files.paths()).toEqual([]);
-    expect((await diagCounts(createMediaStore({ db: rig.services.db, files: rig.services.files }))).total).toBe(0);
+    expect((await diagCounts(createMediaStore({ isBlocked: neverBlocked, db: rig.services.db, files: rig.services.files }))).total).toBe(0);
   });
 
   it('control: a refused upload fails with a fixed code and still removes the row and the file', async () => {
@@ -51,7 +52,7 @@ describe('uploader-photo', () => {
 
   it('never uploads a photo that is not a diagnostic one', async () => {
     const rig = await createDiagRig();
-    const store = createMediaStore({ db: rig.services.db, files: rig.services.files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: rig.services.db, files: rig.services.files });
     await store.put({
       pendingId: 'real-photo-1',
       inspectionId: 'insp-1',
@@ -113,7 +114,7 @@ describe('kill test', () => {
     rig.plugin.defaultBehavior = { kind: 'hang' };
     await killStart.run(rig.ctx);
     await rig.plugin.whenStarted(1);
-    const store = createMediaStore({ db: rig.services.db, files: rig.services.files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: rig.services.db, files: rig.services.files });
     await store.put({
       pendingId: 'real-photo-2',
       inspectionId: 'insp-1',

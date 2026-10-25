@@ -8,7 +8,9 @@ import { isNotFoundError, type Files } from '../platform/files';
 import type { IsBlocked } from './blocked';
 import { SYNC_LEASE, withLease } from './lease';
 import { accountKey, assertAccount, sameAccount, type Account } from './outbox';
-import { fingerprintOf } from './reconcile-decision';
+import { isIssuedPlan } from './plan-brand';
+import { holdsPurgeAuthority, purgeAuthority, type PurgeAuthority } from './purge-authority';
+import { fingerprintOf, REASON_MASS_SUSPICIOUS, type ReconcilePlan } from './reconcile-decision';
 import { DEFAULT_REGISTRY, isLocalId, type CommandRegistry } from './registry';
 import { unsentData, type UnsentReason } from './unsent';
 
@@ -26,21 +28,38 @@ import { unsentData, type UnsentReason } from './unsent';
  * The order (each step is idempotent, each database step is one short transaction or one statement):
  *  1. tombstone (above); then the guard other modules use is asked once, and a guard that does not report the tombstone
  *     stops everything (the wiring would not protect the data);
- *  2. the editor is told (`onPurging`), so it unmounts;
- *  3. `connector.purge`: closes the socket, waits for the writes in flight, deletes the document rows and the sync proof
+ *  2. `connector.closeFor`: the live connection stops accepting writes and its socket closes, waiting for the writes in
+ *     flight, BEFORE the editor is told; an edit made while the editor unmounts is therefore not stored;
+ *  3. the editor is told (`onPurging`), so it unmounts;
+ *  4. `connector.purge`: waits for any connection still shutting down and deletes the document rows and the sync proof
  *     in one transaction;
- *  4. in-flight uploads are cancelled (`uploader.cancelFor`), then each media FILE is removed and only then its ROW. A
- *     file that is already gone counts as removed; any other failure stops the purge here, with the tombstone, and the
- *     next run continues. The file named by a row is touched only when it is exactly `media/<that row's id>.<ext>`;
- *  5. the cached resources of the package, by account and package id, the error marker included;
- *  6. the queued writes (user-confirmed only; an automatic purge asserts there are none);
- *  7. in one transaction: re-check no photo row and no queued write appeared, sweep any document row or proof a late
+ *  5. in-flight uploads are cancelled (`uploader.cancelFor`). Person-confirmed: each media FILE is removed and only then its
+ *     ROW; a file that is already gone counts as removed, any other failure stops the purge here, with the tombstone, and
+ *     the next run continues; the file named by a row is touched only when it is exactly `media/<that row's id>.<ext>`.
+ *     Automatic: the decision was "no photo is stored", so a media row that exists now is a surprise and the purge STOPS
+ *     (`unexpected_data`) without deleting that row or its file;
+ *  6. the cached resources of the package, by account and package id, the error marker included;
+ *  7. the queued writes (person-confirmed only; an automatic purge asserts there are none);
+ *  8. in one transaction: re-check no photo row and no queued write appeared, sweep any document row or proof a late
  *     writer left, and delete the package row LAST.
  *
  * A crash or failure after step N leaves the tombstone and the work of the first N steps done; `resumePurges` (or any
  * later call with `mode: 'resume'`) finishes it, without asking the unsent predicate again because the decision was
  * already taken. No step reads or writes anything of another inspection: every statement names this id (and this
  * account for the cache and the queue).
+ *
+ * `user_confirmed` and `resume` are reachable only with the purge authority (`purge-authority.ts`), and a person-confirmed
+ * purge of an inspection that is neither quarantined nor tombstoned needs an ISSUED suspicious plan that names it.
+ *
+ * What a purge does NOT reach (privacy residue, by design and not by oversight):
+ *  - The plugin's multipart upload copies live in the plugin's own temporary directory under names that carry no
+ *    inspection id, so they cannot be mapped to an inspection. They are removed by the age-based temp sweep
+ *    (`uploader-temp.ts`) once older than `MAX_TRANSFER_MS` plus one hour; until then a copy of a purged photo can exist.
+ *  - A media file whose row has a `path` that is not exactly `media/<row id>.<ext>` is never touched (the row alone is
+ *    deleted, so a poisoned path cannot make the purge delete another file). Its file stays until the orphan sweep
+ *    (`sweep.ts`) finds it unreferenced.
+ *  - `Reconciler.stop()` does not abort a purge that is already running. That is safe because the tombstone is resumable:
+ *    the purge ends at its next step, or the next `resumePurges` finishes it.
  */
 
 export const TOMBSTONE_AUTO = 1;
@@ -54,8 +73,13 @@ export type PurgeMode = 'auto' | 'user_confirmed' | 'resume';
 
 export type PurgeOptions =
   | { mode: 'auto'; account: Account; expectedFingerprint: string }
-  | { mode: 'user_confirmed'; account: Account }
-  | { mode: 'resume'; account: Account };
+  /**
+   * A person confirmed removing it. Needs the authority (only `user-actions.ts` holds it), and the inspection must be
+   * quarantined, already tombstoned, or named by `plan`: an ISSUED reconcile plan that called the answer suspicious.
+   */
+  | { mode: 'user_confirmed'; account: Account; authority: PurgeAuthority; plan?: ReconcilePlan }
+  /** Finishes a tombstone that already exists. Needs the authority (held by `user-actions.ts` and `resumePurges`). */
+  | { mode: 'resume'; account: Account; authority: PurgeAuthority };
 
 export type PurgeStep = 'tombstone' | 'editor' | 'connector' | 'files' | 'media_rows' | 'cache' | 'outbox' | 'package';
 
@@ -70,7 +94,21 @@ export type PurgeFailure =
   | 'media_churn'
   | 'interrupted';
 
-export type PurgeRefusal = 'invalid_id' | 'no_package' | 'not_owner' | 'unconfirmed' | 'create_pending' | 'quarantined' | 'tombstoned' | 'not_tombstoned' | 'unattributable' | 'changed';
+export type PurgeRefusal =
+  | 'invalid_id'
+  | 'no_package'
+  | 'not_owner'
+  | 'unconfirmed'
+  | 'create_pending'
+  | 'quarantined'
+  | 'tombstoned'
+  | 'not_tombstoned'
+  | 'unattributable'
+  | 'changed'
+  /** The call does not carry the authority a `user_confirmed` or `resume` purge needs. */
+  | 'not_authorized'
+  /** A person-confirmed purge of an inspection that is neither quarantined, tombstoned, nor named by a suspicious issued plan. */
+  | 'not_quarantined';
 
 export type PurgeOutcome =
   | { kind: 'purged' }
@@ -82,8 +120,8 @@ export type PurgeOutcome =
 export interface PurgeDeps {
   db: Db;
   files: Pick<Files, 'remove' | 'exists'>;
-  /** `purge` closes the connection and deletes the document rows and proof of one inspection. */
-  connector: Pick<NativeCollabConnector, 'purge'>;
+  /** `closeFor` stops the live connection (and its writes) at once; `purge` then deletes the document rows and proof of one inspection. */
+  connector: Pick<NativeCollabConnector, 'purge' | 'closeFor'>;
   /** Cancels the uploads of one inspection in flight. Absent or failing is tolerated: the block already refuses new work. */
   uploader?: Pick<NativeUploader, 'cancelFor'>;
   /** The guard every other module is given (`createBlockedGuard`). REQUIRED: the purge verifies it reports its own tombstone. */
@@ -113,6 +151,21 @@ const failed = (step: PurgeStep, code: PurgeFailure): PurgeOutcome => ({ kind: '
 async function count(db: Db, sql: string, params: unknown[]): Promise<number> {
   const rows = await db.query<{ n: number }>(sql, params);
   return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Whether `plan` is an ISSUED plan (see `plan-brand.ts`) for this account that called the answer suspicious and names
+ * this inspection as quarantined for that reason. Staleness is the caller's to check (it has the clock).
+ */
+export function namesMassSuspicious(plan: ReconcilePlan | undefined, id: string, account: Account): boolean {
+  return (
+    plan !== undefined &&
+    isIssuedPlan(plan) &&
+    plan.massSuspicious &&
+    sameAccount(plan.account, account.tenantId, account.userId) &&
+    plan.quarantine.includes(id) &&
+    (plan.reasons[id] ?? []).includes(REASON_MASS_SUSPICIOUS)
+  );
 }
 
 /** One media file: true when it is gone afterwards. A missing file is gone; a failure with the file still there (or unknowable) is not. */
@@ -155,6 +208,8 @@ async function tombstone(deps: PurgeDeps, id: string, options: PurgeOptions): Pr
     if (Number(row.server_confirmed) !== 1) return refused('unconfirmed');
     // A person may take over an automatic tombstone that got stuck; nothing else may touch a row that is being purged.
     if (flag !== 0 && !(options.mode === 'user_confirmed' && flag === TOMBSTONE_AUTO)) return refused('tombstoned');
+    // A person's word removes a quarantined inspection, or one a suspicious answer named; never a healthy one.
+    if (options.mode === 'user_confirmed' && flag === 0 && row.quarantine_source === null && !namesMassSuspicious(options.plan, id, account)) return refused('not_quarantined');
     if (options.mode === 'auto' && row.quarantine_source !== null) return refused('quarantined');
     if (createOps.length > 0 && (await count(tx, `SELECT COUNT(*) AS n FROM outbox WHERE inspection_id = ? AND op IN (${createOps.map(() => '?').join(', ')})`, [id, ...createOps])) > 0) {
       return refused('create_pending');
@@ -201,6 +256,7 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
   } catch {
     return refused('not_owner');
   }
+  if (options.mode !== 'auto' && !holdsPurgeAuthority((options as { authority?: unknown }).authority)) return refused('not_authorized');
   const { account } = options;
   const go = async (): Promise<boolean> => {
     if (deps.checkpoint === undefined) return true;
@@ -235,6 +291,10 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
     }
     if (!effective) return failed('tombstone', 'guard_not_effective');
 
+    // The live connection stops accepting writes BEFORE the editor is told: an edit made while it unmounts must not be stored.
+    step = 'connector';
+    await deps.connector.closeFor(inspectionId);
+
     step = 'editor';
     try {
       await deps.onPurging(inspectionId);
@@ -253,8 +313,14 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
     } catch {
       // Whatever could not be cancelled finds its row gone, or is refused at its next block check.
     }
-    const media = await removeMedia(deps, inspectionId, go);
-    if (media !== null) return media;
+    if (mark === TOMBSTONE_AUTO) {
+      // An automatic purge was decided on "no photo is stored". A photo row that exists now arrived after that decision,
+      // so it is not this purge's to delete: it stops here, tombstone kept, and the person-confirmed removal handles it.
+      if ((await count(deps.db, 'SELECT COUNT(*) AS n FROM media WHERE inspection_id = ?', [inspectionId])) > 0) return failed('files', 'unexpected_data');
+    } else {
+      const media = await removeMedia(deps, inspectionId, go);
+      if (media !== null) return media;
+    }
 
     step = 'cache';
     if (!(await go())) return failed('cache', 'interrupted');
@@ -275,7 +341,7 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
       const row = rows[0];
       if (row === undefined) return { kind: 'purged' };
       if (!sameAccount(account, row.tenant_id, row.user_id) || (Number(row.purging) !== TOMBSTONE_AUTO && Number(row.purging) !== TOMBSTONE_USER)) return refused('changed');
-      if ((await count(tx, 'SELECT COUNT(*) AS n FROM media WHERE inspection_id = ?', [inspectionId])) > 0) return failed('media_rows', 'media_churn');
+      if ((await count(tx, 'SELECT COUNT(*) AS n FROM media WHERE inspection_id = ?', [inspectionId])) > 0) return failed('media_rows', mark === TOMBSTONE_USER ? 'media_churn' : 'unexpected_data');
       if ((await count(tx, 'SELECT COUNT(*) AS n FROM outbox WHERE inspection_id = ?', [inspectionId])) > 0) return failed('outbox', mark === TOMBSTONE_USER ? 'foreign_outbox' : 'unexpected_data');
       // Anything a late writer left since the earlier steps goes in the same transaction that deletes the package row.
       await deleteDocRows(tx, docName);
@@ -357,7 +423,7 @@ export async function resumePurges(deps: ResumeDeps): Promise<ResumeSummary> {
         summary.stopped = lost ? 'lease_lost' : 'locked';
         return;
       }
-      const result = await purgeInspection({ ...deps, checkpoint: open }, id, { mode: 'resume', account: who });
+      const result = await purgeInspection({ ...deps, checkpoint: open }, id, { mode: 'resume', account: who, authority: purgeAuthority() });
       if (result.kind === 'purged') {
         summary.resumed += 1;
         continue;

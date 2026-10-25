@@ -50,8 +50,24 @@ export interface QuarantineDeps {
 
 export interface QuarantineOptions {
   account: Account;
-  /** The fingerprint the plan rested on. Omitted when a purge turned into a quarantine because unsent data was found: the safe direction needs no plan. */
-  expectedFingerprint?: string;
+  /**
+   * The fingerprint the plan rested on, or `null` when a purge turned into a quarantine because unsent data was found
+   * (the safe direction needs no plan). There is no default: leaving it out is not `null`, it is a mismatch.
+   */
+  expectedFingerprint: string | null;
+}
+
+export interface UnquarantineOptions {
+  account: Account;
+  /** The fingerprint the plan rested on. REQUIRED: bringing an inspection back into use is never done without a plan's facts. */
+  expectedFingerprint: string;
+}
+
+/** True when the facts differ from what the plan rested on. A fingerprint that is missing (not `null`) never matches. */
+async function factsChanged(tx: Db, inspectionId: string, expected: string | null | undefined): Promise<boolean> {
+  if (expected === null) return false;
+  if (typeof expected !== 'string') return true;
+  return (await fingerprintOf(tx, inspectionId)) !== expected;
 }
 
 interface Flags {
@@ -87,7 +103,7 @@ export async function quarantineInspection(deps: QuarantineDeps, inspectionId: s
       if (Number(row.purging) !== 0) return refused('purging');
       if (Number(row.server_confirmed) !== 1) return refused('unconfirmed');
       if (row.quarantine_source !== null) return { kind: 'unchanged' };
-      if (options.expectedFingerprint !== undefined && (await fingerprintOf(tx, inspectionId)) !== options.expectedFingerprint) return refused('changed');
+      if (await factsChanged(tx, inspectionId, options.expectedFingerprint)) return refused('changed');
       const set = await tx.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = ? AND tenant_id = ? AND user_id = ? AND purging = 0 AND quarantine_source IS NULL", [inspectionId, account.tenantId, account.userId]);
       if (set.changes !== 1) return refused('changed');
       const orphaned = await markOrphaned(tx, inspectionId, account);
@@ -125,7 +141,7 @@ export async function quarantineInspection(deps: QuarantineDeps, inspectionId: s
   return closeFailed ? { kind: 'failed', code: 'close_failed' } : result;
 }
 
-export async function unquarantineInspection(deps: QuarantineDeps, inspectionId: string, options: QuarantineOptions): Promise<UnquarantineOutcome> {
+export async function unquarantineInspection(deps: QuarantineDeps, inspectionId: string, options: UnquarantineOptions): Promise<UnquarantineOutcome> {
   if (!isLocalId(inspectionId)) return refused('invalid_id');
   if (!accountUsable(options.account)) return refused('not_owner');
   const { account } = options;
@@ -138,7 +154,7 @@ export async function unquarantineInspection(deps: QuarantineDeps, inspectionId:
       if (!sameAccount(account, row.tenant_id, row.user_id)) return refused('not_owner');
       if (Number(row.purging) !== 0) return refused('purging');
       if (row.quarantine_source === null) return { kind: 'unchanged' };
-      if (options.expectedFingerprint !== undefined && (await fingerprintOf(tx, inspectionId)) !== options.expectedFingerprint) return refused('changed');
+      if (typeof options.expectedFingerprint !== 'string' || (await fingerprintOf(tx, inspectionId)) !== options.expectedFingerprint) return refused('changed');
       const cleared = await tx.run('UPDATE work_package SET quarantine_source = NULL WHERE inspection_id = ? AND tenant_id = ? AND user_id = ? AND purging = 0 AND quarantine_source IS NOT NULL', [inspectionId, account.tenantId, account.userId]);
       if (cleared.changes !== 1) return refused('changed');
       const restored = await unorphan(tx, inspectionId, account);

@@ -71,10 +71,10 @@ export interface ReconcileDeps {
   /**
    * The data-layer block (`createBlockedGuard`). Rows of a blocked inspection are skipped: not started, not finished,
    * not failed, not counted and not waited for (they wake again through `trigger()` when the block is lifted). Asked once per
-   * inspection per run; a guard that rejects counts as blocked. Without it nothing is skipped, so the composition root
-   * must pass the real guard.
+   * inspection per run; a guard that rejects counts as blocked. REQUIRED, with no default: a composition root that
+   * forgets it does not compile.
    */
-  isBlocked?: (inspectionId: string) => Promise<boolean>;
+  isBlocked: (inspectionId: string) => Promise<boolean>;
   timers?: TimerPort;
   /**
    * The slow fallback timer, armed only while the reconciler is started and the last run was cut short (signed
@@ -195,12 +195,11 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
 
   /** True when the inspection of a row is blocked (or the guard cannot say). Asked once per inspection per run. */
   function isBlockedFor(inspectionId: string, run: RunReport): Promise<boolean> {
-    if (deps.isBlocked === undefined) return Promise.resolve(false);
     const known = run.blockedAnswers.get(inspectionId);
     if (known !== undefined) return known;
     const asked = (async (): Promise<boolean> => {
       try {
-        return (await deps.isBlocked?.(inspectionId)) !== false;
+        return (await deps.isBlocked(inspectionId)) !== false;
       } catch {
         return true;
       }

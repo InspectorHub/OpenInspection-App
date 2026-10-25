@@ -2,6 +2,7 @@ import type { NativeCollabConnector } from '../collab/connector';
 import type { Clock } from '../platform/clock';
 import { SYNC_LEASE, withLease, type LeaseHandle } from './lease';
 import { sameAccount, type Account } from './outbox';
+import { isIssuedPlan } from './plan-brand';
 import { purgeInspection, type PurgeDeps } from './purge';
 import { quarantineInspection, unquarantineInspection, type QuarantineOutcome, type UnquarantineOutcome } from './quarantine';
 import { DEFAULT_PLAN_MAX_AGE_MS, fingerprintOf, MASS_FRACTION, MASS_MIN_MISSING, planIsStale, REASON_NOT_VISIBLE, type ReconcilePlan } from './reconcile-decision';
@@ -62,7 +63,7 @@ export interface ExecuteSummary {
   failures: Record<string, number>;
 }
 
-export type ExecuteStop = 'stale_plan' | 'no_account' | 'account_mismatch' | 'locked' | 'busy' | 'lease_lost';
+export type ExecuteStop = 'plan_not_issued' | 'stale_plan' | 'no_account' | 'account_mismatch' | 'locked' | 'busy' | 'lease_lost';
 
 export type ExecuteResult = { kind: 'done'; summary: ExecuteSummary } | { kind: 'stopped'; reason: ExecuteStop; summary: ExecuteSummary };
 
@@ -180,6 +181,8 @@ export async function executeReconcilePlan(deps: ExecuteDeps, plan: ReconcilePla
     return null;
   };
 
+  // Only the object `decideReconcile` returned: a copy, a clone or a hand-built plan with the right fingerprints is not one.
+  if (!isIssuedPlan(plan)) return stopped('plan_not_issued');
   if (planIsStale(plan, deps.clock.now(), deps.maxPlanAgeMs ?? DEFAULT_PLAN_MAX_AGE_MS)) return stopped('stale_plan');
   const first = await closed(null);
   if (first !== null) return stopped(first);
@@ -218,7 +221,7 @@ export async function executeReconcilePlan(deps: ExecuteDeps, plan: ReconcilePla
             const purged = await purgeInspection({ ...deps, checkpoint }, task.id, { mode: 'auto', account: plan.account, expectedFingerprint: expected });
             if (purged.kind === 'purged') summary.purged += 1;
             else if (purged.kind === 'deferred') summary.deferred += 1;
-            else if (purged.kind === 'unsent_now') noteQuarantine(summary, await quarantineInspection(quarantineDeps, task.id, { account: plan.account }));
+            else if (purged.kind === 'unsent_now') noteQuarantine(summary, await quarantineInspection(quarantineDeps, task.id, { account: plan.account, expectedFingerprint: null }));
             else if (purged.kind === 'refused') {
               if (purged.reason === 'changed') summary.skippedChanged += 1;
               else fail(summary, purged.reason);

@@ -13,6 +13,7 @@ import { migrate } from '../platform/schema';
 import { createCollabConnector, resultsDocName, type CollabConnectorDeps, type CollabSocket, type CollabStatus, type SocketHandlers } from './connector';
 import { deleteSetKey, docIsCovered } from './sync-proof';
 import { createManualTimers } from './test-support/manual-timers';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const ORIGIN = 'https://oi.example.test';
 const MSG_SYNC = 0;
@@ -90,6 +91,7 @@ async function createWorld(wrap?: (db: Db) => Db, overrides: Partial<CollabConne
     checkSession: vi.fn(() => Promise.resolve<SessionCheck>({ kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } })),
   };
   world.connector = createCollabConnector({
+    isBlocked: neverBlocked,
     db,
     http,
     tokens: tokens as unknown as Pick<TokenManager, 'getAccessToken' | 'checkSession'>,

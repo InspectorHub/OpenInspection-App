@@ -96,7 +96,7 @@ describe('the replayer leaves the writes of a blocked inspection alone', () => {
     expect(asked).toEqual(['a']);
   });
 
-  it('control: a replayer built without a guard sends everything (the guard is optional for this module)', async () => {
+  it('control: a replayer whose guard says free sends everything', async () => {
     const w = await createReplayWorld();
     seed(w, 'a');
     await w.queue('inspection.update', UPDATE('a'));

@@ -3,6 +3,7 @@ import type { Db } from '../platform/db';
 import { createMediaStore, MAX_MEDIA_BYTES } from './store';
 import { createMediaWorld, INSPECTION, jpegBlob, jpegBytes, photoRecord } from './test-support/fakes';
 import { createMemoryFiles } from '../app/test-support/memory-files';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const ID = '11111111-2222-4333-8444-555555555555';
 
@@ -33,7 +34,7 @@ describe('media store: put', () => {
       log.push('file');
       return original(path, data);
     };
-    const store = createMediaStore({ db: spyDb(world.db, log), files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: spyDb(world.db, log), files });
     await store.put(photoRecord(ID));
     expect(log).toEqual(['file', 'row']);
     expect(files.paths()).toEqual([`media/${ID}.jpg`]);
@@ -46,11 +47,11 @@ describe('media store: put', () => {
     const world = await createMediaWorld();
     const failing = createMemoryFiles();
     failing.failWrites();
-    const bad = createMediaStore({ db: world.db, files: failing });
+    const bad = createMediaStore({ isBlocked: neverBlocked, db: world.db, files: failing });
     await expect(bad.put(photoRecord(ID))).rejects.toMatchObject({ code: 'WRITE_FAILED' });
     expect(await world.db.query('SELECT * FROM media')).toEqual([]);
 
-    const good = createMediaStore({ db: world.db, files: world.files });
+    const good = createMediaStore({ isBlocked: neverBlocked, db: world.db, files: world.files });
     await good.put(photoRecord(ID));
     expect(await world.db.query('SELECT * FROM media')).toHaveLength(1);
   });
@@ -58,7 +59,7 @@ describe('media store: put', () => {
   it('a row insert failure after the file was written removes the file', async () => {
     const world = await createMediaWorld();
     const log: string[] = [];
-    const store = createMediaStore({ db: spyDb(world.db, log, true), files: world.files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: spyDb(world.db, log, true), files: world.files });
     const err: unknown = await store.put(photoRecord(ID)).catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'DB_FAILED' });
     expect(String((err as Error).message)).not.toContain('/private');
@@ -206,7 +207,7 @@ describe('media store: get, list, objectUrl, delete', () => {
     expect(await world.db.query('SELECT * FROM media')).toHaveLength(1);
     // The file vanished by other means (a failed remove after the bytes were already gone): the row can go.
     const files = createMemoryFiles();
-    const store = createMediaStore({ db: world.db, files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: world.db, files });
     await expect(store.delete(ID)).resolves.toBeUndefined();
     expect(await world.db.query('SELECT * FROM media')).toEqual([]);
   });
@@ -348,7 +349,7 @@ describe('media store: onStored', () => {
   it('is called once for a new row, not for a repeated put and not for a failed one', async () => {
     const world = await createMediaWorld();
     const stored: string[] = [];
-    const store = createMediaStore({ db: world.db, files: world.files, onStored: (id) => stored.push(id) });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: world.db, files: world.files, onStored: (id) => stored.push(id) });
     await store.put(photoRecord('p1'));
     await store.put(photoRecord('p1'));
     expect(stored).toEqual(['p1']);
@@ -359,7 +360,7 @@ describe('media store: onStored', () => {
 
   it('a throwing callback does not fail the put', async () => {
     const world = await createMediaWorld();
-    const store = createMediaStore({ db: world.db, files: world.files, onStored: () => { throw new Error('listener'); } });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: world.db, files: world.files, onStored: () => { throw new Error('listener'); } });
     await expect(store.put(photoRecord('p1'))).resolves.toBeUndefined();
     expect(await store.getRow('p1')).not.toBeNull();
   });

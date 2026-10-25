@@ -5,6 +5,7 @@ import { createManualTimers } from '../collab/test-support/manual-timers';
 import { createNativeUploader, MAX_UPLOAD_ATTEMPTS } from './native-uploader';
 import { createMediaReconciler } from './reconcile';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, response } from './test-support/fakes';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const SECRET_TOKEN = 'access-token-secret';
 const SESSION_OK = { kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } } as const;
@@ -18,6 +19,7 @@ async function build(options: { origin?: string; allowInsecureHttp?: boolean } =
   const errors: unknown[] = [];
   const clock = createManualClock(1_000_000);
   const uploader = createNativeUploader({
+    isBlocked: neverBlocked,
     store: world.store,
     http: world.engine.http,
     tokens: { getAccessToken: () => Promise.resolve(state.token), checkSession: () => Promise.resolve(SESSION_OK) },
@@ -107,6 +109,7 @@ describe('SECURITY 1: the signed url is only ever used against the pinned origin
     const s = await build();
     await s.world.store.put(photoRecord('p1'));
     const uploader = createNativeUploader({
+      isBlocked: neverBlocked,
       store: s.world.store, http: { request: () => Promise.reject(new AuthError('server_redirected')) },
       tokens: { getAccessToken: () => Promise.resolve(SECRET_TOKEN), checkSession: () => Promise.resolve(SESSION_OK) },
       plugin: s.plugin, origin: ORIGIN, isLocked: () => false, clientHeaders: {}, timers: s.timers,
@@ -216,6 +219,7 @@ describe('SECURITY 4: a locked, revoked or signed-out device uploads nothing and
     expect(await s.world.store.getRow('p1')).toMatchObject({ state: 'pending', attempts: 0 });
 
     const throwing = createNativeUploader({
+      isBlocked: neverBlocked,
       store: s.world.store, http: s.world.engine.http,
       tokens: { getAccessToken: () => Promise.resolve(SECRET_TOKEN), checkSession: () => Promise.resolve(SESSION_OK) },
       plugin: s.plugin, origin: ORIGIN, isLocked: () => Promise.reject(new Error('storage')), clientHeaders: {}, timers: s.timers,
@@ -231,6 +235,7 @@ describe('SECURITY 4: a locked, revoked or signed-out device uploads nothing and
     const s = await build();
     await s.world.store.put(photoRecord('p1'));
     const uploader = createNativeUploader({
+      isBlocked: neverBlocked,
       store: s.world.store,
       http: {
         request: (req) => {
@@ -318,6 +323,7 @@ describe('SECURITY 7: the file outlives the document update by construction', ()
       return originalDelete(id);
     };
     const rec = createMediaReconciler({
+      isBlocked: neverBlocked,
       store: s.world.store, uploader: s.uploader,
       resolvePending: () => {
         order.push('resolve');
@@ -339,6 +345,7 @@ describe('SECURITY 7: the file outlives the document update by construction', ()
     const s = await build();
     await s.world.store.put(photoRecord('p1'));
     const rec = createMediaReconciler({
+      isBlocked: neverBlocked,
       store: s.world.store, uploader: s.uploader, resolvePending: () => Promise.reject(new Error('doc unavailable')),
       isLocked: () => false, network: { online: () => Promise.resolve(true), onChange: () => () => undefined }, clock: createManualClock(5), timers: s.timers,
       onError: (e) => s.errors.push(e),
@@ -391,6 +398,7 @@ describe('SECURITY 9: hostile database content does not break the loop', () => {
     await s.world.db.run(insert, ['weird-2', INSPECTION, 'photo', 'media/weird-2.jpg', 'image/jpeg', meta, '', 0, 1]);
     await s.world.db.run(insert, ['neg-attempts', INSPECTION, 'photo', 'media/neg-attempts.jpg', 'image/jpeg', meta, 'failed', -5, 1]);
     const rec = createMediaReconciler({
+      isBlocked: neverBlocked,
       store: s.world.store, uploader: s.uploader, resolvePending: () => Promise.resolve('resolved'),
       isLocked: () => false, network: { online: () => Promise.resolve(true), onChange: () => () => undefined }, clock: createManualClock(5), timers: s.timers,
     });

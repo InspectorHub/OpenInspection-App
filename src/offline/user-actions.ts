@@ -3,8 +3,10 @@ import type { Db } from '../platform/db';
 import { isValidMediaId } from '../media/errors';
 import { SYNC_LEASE, withLease } from './lease';
 import { sameAccount, type Account } from './outbox';
-import { purgeInspection, type PurgeDeps, type PurgeOutcome, type PurgeRefusal } from './purge';
-import { planIsStale, REASON_MASS_SUSPICIOUS, type ReconcilePlan } from './reconcile-decision';
+import { isIssuedPlan } from './plan-brand';
+import { purgeAuthority } from './purge-authority';
+import { namesMassSuspicious, purgeInspection, TOMBSTONE_AUTO, TOMBSTONE_USER, type PurgeDeps, type PurgeOutcome, type PurgeRefusal } from './purge';
+import { planIsStale, type ReconcilePlan } from './reconcile-decision';
 import { ALLOWED_GLOBAL_OPS, isLocalId } from './registry';
 
 /**
@@ -13,23 +15,30 @@ import { ALLOWED_GLOBAL_OPS, isLocalId } from './registry';
  * is a bug that cannot go unnoticed), each one is narrow enough that it cannot be used to wipe a healthy inspection or an
  * ordinary queue, and each one reports with fixed codes only: no path, payload text or error message is ever in a result,
  * with the single exception of `discardOutboxRow`, whose whole point is to hand the discarded payload back for export.
+ *
+ * Every destructive action here also refuses while the device is locked, revoked, expired or its clock is wrong
+ * (`isLocked`, REQUIRED; an answer that is not exactly `false`, or a throw, counts as locked): a person confirming a
+ * removal on a locked device is not the person the lock is protecting the data from. Listing is read-only and allowed.
  */
 
 export interface UserActionDeps extends PurgeDeps {
   clock: Clock;
   account(): Account | null | Promise<Account | null>;
+  /** True when the offline lock holds or the device is revoked. REQUIRED: a missing answer would mean "not locked". */
+  isLocked(): boolean | Promise<boolean>;
   leaseTtlMs?: number;
   newToken?: () => string;
 }
 
-export type RemoveOutcome = PurgeOutcome | { kind: 'busy' } | { kind: 'refused'; reason: PurgeRefusal | 'no_account' | 'not_quarantined' };
+export type RemoveOutcome = PurgeOutcome | { kind: 'busy' } | { kind: 'locked' } | { kind: 'refused'; reason: PurgeRefusal | 'no_account' | 'not_quarantined' | 'plan_not_issued' };
 
 export interface RemoveOptions {
   confirmed: true;
   /**
    * The latest reconcile plan, for an inspection the answer called suspicious (every inspection would have been removed)
-   * and that has not been quarantined yet. It must be this account's, not stale, name the id in its quarantine list and
-   * give `mass_suspicious` as the reason. Without it only a quarantined inspection (or a purge that stopped on its own) can be removed.
+   * and that has not been quarantined yet. It must be the object `decideReconcile` returned (a copy is refused as
+   * `plan_not_issued`), this account's, not stale, name the id in its quarantine list and give `mass_suspicious` as the
+   * reason. Without it only a quarantined inspection (or a purge that stopped on its own) can be removed.
    */
   plan?: ReconcilePlan;
 }
@@ -39,14 +48,16 @@ function requireConfirmation(options: { confirmed?: unknown } | undefined, what:
 }
 
 function massEvidence(plan: ReconcilePlan | undefined, id: string, account: Account, now: number): boolean {
-  return (
-    plan !== undefined &&
-    plan.massSuspicious &&
-    sameAccount(plan.account, account.tenantId, account.userId) &&
-    !planIsStale(plan, now) &&
-    plan.quarantine.includes(id) &&
-    (plan.reasons[id] ?? []).includes(REASON_MASS_SUSPICIOUS)
-  );
+  return plan !== undefined && namesMassSuspicious(plan, id, account) && !planIsStale(plan, now);
+}
+
+/** True unless `isLocked` answered exactly `false`. */
+async function lockedNow(deps: Pick<UserActionDeps, 'isLocked'>): Promise<boolean> {
+  try {
+    return (await deps.isLocked()) !== false;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -58,6 +69,8 @@ function massEvidence(plan: ReconcilePlan | undefined, id: string, account: Acco
 export async function removeFromDevice(deps: UserActionDeps, inspectionId: string, options: RemoveOptions): Promise<RemoveOutcome> {
   requireConfirmation(options, 'Removing an inspection');
   if (!isLocalId(inspectionId)) return { kind: 'refused', reason: 'invalid_id' };
+  if (options.plan !== undefined && !isIssuedPlan(options.plan)) return { kind: 'refused', reason: 'plan_not_issued' };
+  if (await lockedNow(deps)) return { kind: 'locked' };
   let account: Account | null;
   try {
     account = await deps.account();
@@ -75,7 +88,11 @@ export async function removeFromDevice(deps: UserActionDeps, inspectionId: strin
     const flag = Number(row.purging);
     if (flag === 0 && row.quarantine_source === null && !massEvidence(options.plan, inspectionId, who, deps.clock.now())) return { kind: 'refused', reason: 'not_quarantined' };
     // A person-confirmed tombstone is finished as it is; an automatic one that got stuck is taken over by this confirmation.
-    return purgeInspection(deps, inspectionId, flag === 2 ? { mode: 'resume', account: who } : { mode: 'user_confirmed', account: who });
+    // The purge asks again between its steps, so a lock that arrives mid-way stops it with the tombstone kept.
+    const checkpoint = async (): Promise<boolean> => !(await lockedNow(deps)) && (deps.checkpoint === undefined ? true : (await Promise.resolve(deps.checkpoint()).catch(() => false)) !== false);
+    const authority = purgeAuthority();
+    const purgeDeps: PurgeDeps = { ...deps, checkpoint };
+    return purgeInspection(purgeDeps, inspectionId, flag === TOMBSTONE_USER ? { mode: 'resume', account: who, authority } : { mode: 'user_confirmed', account: who, authority, ...(options.plan === undefined ? {} : { plan: options.plan }) });
   });
   return outcome.acquired ? outcome.value : { kind: 'busy' };
 }
@@ -83,25 +100,48 @@ export async function removeFromDevice(deps: UserActionDeps, inspectionId: strin
 export type DiscardMediaOutcome =
   | { kind: 'discarded'; inspectionId: string }
   | { kind: 'not_found' }
-  | { kind: 'refused'; reason: 'purging' }
+  | { kind: 'locked' }
+  | { kind: 'refused'; reason: 'purging' | 'no_account' | 'not_removable' }
   | { kind: 'failed'; code: 'file_remove_failed' | 'storage_failed' };
 
 const MEDIA_PATH = /^media\/([A-Za-z0-9_-]{1,64})\.(?:jpg|png|heic|mp4|mov)$/;
 
 /**
- * Deletes one stuck photo or clip: its file first, then its row. The way out of "any photo row counts as unsent". A file
- * that is already gone is fine; a file that cannot be removed keeps the row. Refused for a photo of an inspection that is
- * being purged (the purge removes it). The file touched is only ever `media/<this row's id>.<ext>`.
+ * Deletes one stuck photo or clip: its file first, then its row. The way out of "any photo row counts as unsent", for
+ * photos that can no longer be sent. It removes a photo only when that is the person's own business and the inspection is
+ * not healthy:
+ *  - the photo's inspection has a package row owned by THIS account (both tenant and user; a row with one of them empty
+ *    is nobody's here) AND is quarantined, or is being purged on the person's word (tombstone 2); or
+ *  - the photo has no package row at all (an orphan row nothing else will ever look at).
+ * Anything else is refused as `not_removable`: another account's photo, and a photo of a healthy inspection that is still
+ * uploading, are never deleted from here. A photo of an inspection that a purge decided on its own (tombstone 1) is
+ * `purging`: the person-confirmed removal of the inspection takes it. A file that is already gone is fine; a file that
+ * cannot be removed keeps the row. The file touched is only ever `media/<this row's id>.<ext>`. Refused while locked.
  */
-export async function discardMedia(deps: Pick<UserActionDeps, 'db' | 'files'>, pendingId: string, options: { confirmed: true }): Promise<DiscardMediaOutcome> {
+export async function discardMedia(deps: Pick<UserActionDeps, 'db' | 'files' | 'account' | 'isLocked'>, pendingId: string, options: { confirmed: true }): Promise<DiscardMediaOutcome> {
   requireConfirmation(options, 'Discarding a photo');
+  if (await lockedNow(deps)) return { kind: 'locked' };
   if (!isValidMediaId(pendingId)) return { kind: 'not_found' };
+  let account: Account | null;
+  try {
+    account = await deps.account();
+  } catch {
+    account = null;
+  }
+  if (account === null) return { kind: 'refused', reason: 'no_account' };
+  const who = account;
   try {
     const rows = await deps.db.query<{ pending_id: string; inspection_id: string; path: string }>('SELECT pending_id, inspection_id, path FROM media WHERE pending_id = ?', [pendingId]);
     const row = rows[0];
     if (row === undefined) return { kind: 'not_found' };
-    const flags = await deps.db.query<{ purging: number }>('SELECT purging FROM work_package WHERE inspection_id = ?', [row.inspection_id]);
-    if (flags[0] !== undefined && Number(flags[0].purging) !== 0) return { kind: 'refused', reason: 'purging' };
+    const packages = await deps.db.query<{ tenant_id: string | null; user_id: string | null; purging: number; quarantine_source: string | null }>('SELECT tenant_id, user_id, purging, quarantine_source FROM work_package WHERE inspection_id = ?', [row.inspection_id]);
+    const owner = packages[0];
+    if (owner !== undefined) {
+      if (!sameAccount(who, owner.tenant_id, owner.user_id)) return { kind: 'refused', reason: 'not_removable' };
+      const flag = Number(owner.purging);
+      if (flag === TOMBSTONE_AUTO) return { kind: 'refused', reason: 'purging' };
+      if (flag !== TOMBSTONE_USER && owner.quarantine_source === null) return { kind: 'refused', reason: 'not_removable' };
+    }
     const match = MEDIA_PATH.exec(row.path);
     if (match !== null && match[1] === row.pending_id) {
       try {
@@ -174,6 +214,7 @@ export async function listUnattributableOutbox(db: Db, account: Account): Promis
 export type DiscardOutboxOutcome =
   | { kind: 'discarded'; idempotencyKey: string; op: string; /** The stored payload text, unparsed, so it can be offered for export. */ payload: string }
   | { kind: 'not_found' }
+  | { kind: 'locked' }
   | { kind: 'refused'; reason: 'not_unattributable' | 'foreign' | 'no_account' };
 
 /**
@@ -181,8 +222,9 @@ export type DiscardOutboxOutcome =
  * transaction that deletes it. Never touches a row that names its inspection (those have their own retry and discard) and
  * never another account's row.
  */
-export async function discardOutboxRow(deps: Pick<UserActionDeps, 'db' | 'account'>, idempotencyKey: string, options: { confirmed: true }): Promise<DiscardOutboxOutcome> {
+export async function discardOutboxRow(deps: Pick<UserActionDeps, 'db' | 'account' | 'isLocked'>, idempotencyKey: string, options: { confirmed: true }): Promise<DiscardOutboxOutcome> {
   requireConfirmation(options, 'Discarding a queued write');
+  if (await lockedNow(deps)) return { kind: 'locked' };
   let account: Account | null;
   try {
     account = await deps.account();

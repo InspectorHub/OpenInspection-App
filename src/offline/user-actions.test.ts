@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PLAN_MAX_AGE_MS, REASON_MASS_SUSPICIOUS, REASON_NOT_VISIBLE, type ReconcilePlan } from './reconcile-decision';
+import { issuePlanForTest } from './test-support/brands';
 import { unsentData } from './unsent';
 import { discardMedia, discardOutboxRow, listUnattributableOutbox, removeFromDevice, type UserActionDeps } from './user-actions';
 import { createPurgeWorld, type InspectionTable, type PurgeWorld } from './test-support/purge-world';
@@ -14,7 +15,7 @@ beforeEach(async () => {
 const ZERO: Record<InspectionTable | 'files', number> = { work_package: 0, outbox: 0, media: 0, ydoc_updates: 0, ydoc_sync: 0, resource_cache: 0, files: 0 };
 
 function deps(overrides: Partial<UserActionDeps> = {}): UserActionDeps {
-  return { ...world.purgeDeps(), clock: world.clock, account: () => world.state.account, ...overrides };
+  return { ...world.purgeDeps(), clock: world.clock, account: () => world.state.account, isLocked: () => world.state.locked, ...overrides };
 }
 
 async function planOf(...hidden: string[]): Promise<ReconcilePlan> {
@@ -97,7 +98,7 @@ describe('removeFromDevice', () => {
     await world.seedPurgeable('p3');
     const plan = await planOf('p1', 'p2', 'p3');
     const hash = await world.hash();
-    expect(await removeFromDevice(deps(), 'p2', { confirmed: true, plan: change(plan) })).toEqual({ kind: 'refused', reason: 'not_quarantined' });
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true, plan: issuePlanForTest(change(plan)) })).toEqual({ kind: 'refused', reason: 'not_quarantined' });
     expect(await world.hash()).toBe(hash);
   });
 
@@ -150,19 +151,20 @@ describe('discardMedia', () => {
 
   it('is the way out of "any photo row counts as unsent": once the last one is gone the predicate no longer lists it', async () => {
     await world.seedPurgeable('p2');
+    await world.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = 'p2'");
     await world.mediaFile('p2', 'only', 'failed');
     expect((await unsentData(world.db, 'p2', ALICE)).reasons).toContain('media_not_uploaded');
     await discardMedia(deps(), 'only', { confirmed: true });
     expect((await unsentData(world.db, 'p2', ALICE)).unsent).toBe(false);
   });
 
-  it('refuses a photo of an inspection that is being purged; the same photo of one that is not is discarded', async () => {
+  it('refuses a photo of an inspection that a purge decided on its own; the same photo once the block is a quarantine is discarded', async () => {
     await world.seedFull('p2');
     await world.db.run('UPDATE work_package SET purging = 1 WHERE inspection_id = ?', ['p2']);
     const hash = await world.hash();
     expect(await discardMedia(deps(), 'p2-m1', { confirmed: true })).toEqual({ kind: 'refused', reason: 'purging' });
     expect(await world.hash()).toBe(hash);
-    await world.db.run('UPDATE work_package SET purging = 0 WHERE inspection_id = ?', ['p2']);
+    await world.db.run("UPDATE work_package SET purging = 0, quarantine_source = 'reconcile_missing' WHERE inspection_id = ?", ['p2']);
     expect(await discardMedia(deps(), 'p2-m1', { confirmed: true })).toMatchObject({ kind: 'discarded' });
   });
 

@@ -19,6 +19,7 @@ import {
   VIDEO_MAX_SECONDS,
   videoRefFromKey,
 } from './video';
+import { neverBlocked } from '../test-support/never-blocked';
 
 const ID = 'vid-aaaa-1111';
 const ORIGIN = 'https://oi.example.test';
@@ -51,7 +52,7 @@ describe('video store: putVideo', () => {
       },
       transaction: (fn) => world.db.transaction((tx) => fn(tx)),
     };
-    const store = createMediaStore({ db, files: world.files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db, files: world.files });
     await store.putVideo(videoRecord(ID, { durationSec: 12 }));
     expect(log).toEqual(['file', 'row']);
     expect(world.files.paths()).toEqual([`media/${ID}.mp4`]);
@@ -92,7 +93,7 @@ describe('video store: putVideo', () => {
     const world = await createMediaWorld();
     const full = createMemoryFiles();
     full.failWrites();
-    const bad = createMediaStore({ db: world.db, files: full });
+    const bad = createMediaStore({ isBlocked: neverBlocked, db: world.db, files: full });
     await expect(bad.putVideo(videoRecord(ID))).rejects.toMatchObject({ code: 'DISK_FULL' });
     expect(await world.db.query('SELECT * FROM media')).toEqual([]);
     expect(full.paths()).toEqual([]);
@@ -123,7 +124,7 @@ describe('video store: putVideo', () => {
 
   it('a row insert failure after the file was written removes the file', async () => {
     const world = await createMediaWorld();
-    const store = createMediaStore({ db: failingInsertDb(world.db), files: world.files });
+    const store = createMediaStore({ isBlocked: neverBlocked, db: failingInsertDb(world.db), files: world.files });
     const err: unknown = await store.putVideo(videoRecord(ID)).catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'DB_FAILED' });
     expect(world.files.paths()).toEqual([]);

@@ -193,10 +193,10 @@ export interface MediaStoreDeps {
   /**
    * The data-layer block (`createBlockedGuard`). A photo or clip for a blocked inspection is refused with `BLOCKED`
    * before anything is written, and checked again between the file and the row so a purge that began meanwhile does
-   * not get a row back. A guard that rejects counts as blocked. Without it nothing is checked, so the composition root
-   * must pass the real guard.
+   * not get a row back. A guard that rejects counts as blocked. REQUIRED, with no default: a composition root that
+   * forgets it does not compile. The row insert itself also refuses a blocked package, atomically (see `insertRow`).
    */
-  isBlocked?: (inspectionId: string) => Promise<boolean>;
+  isBlocked: (inspectionId: string) => Promise<boolean>;
 }
 
 const COLUMNS = 'pending_id, inspection_id, kind, path, content_type, meta, state, attempts, uploaded_key, created_at';
@@ -348,9 +348,8 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
   /** A put for an id waits for the one before it, so two puts of one id never write the file at the same time. */
   const putChain = new Map<string, Promise<void>>();
 
-  /** True when the guard says blocked or cannot say. Without a guard nothing is blocked. */
+  /** True when the guard says blocked or cannot say. */
   async function blocked(inspectionId: string): Promise<boolean> {
-    if (deps.isBlocked === undefined) return false;
     try {
       return (await deps.isBlocked(inspectionId)) !== false;
     } catch {
@@ -361,6 +360,40 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
   async function rawRow(pendingId: string): Promise<Record<string, unknown> | null> {
     const rows = await db.query<Record<string, unknown>>(`SELECT ${COLUMNS} FROM media WHERE pending_id = ?`, [pendingId]);
     return rows[0] ?? null;
+  }
+
+  /**
+   * Inserts the row ONLY IF the package is neither being purged nor quarantined, in the same statement that checks it. The
+   * guard above is asked before this, and a tombstone transaction can land between that answer and this insert; the
+   * check inside the statement cannot be overtaken. A refused insert removes the file that was written for it. A row
+   * that already exists (a repeated id) is left alone, as before.
+   */
+  async function insertRow(pendingId: string, inspectionId: string, values: unknown[], path: string): Promise<void> {
+    let changes: number;
+    try {
+      changes = (
+        await db.run(
+          `INSERT OR IGNORE INTO media (${COLUMNS}) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM work_package WHERE inspection_id = ? AND (purging <> 0 OR quarantine_source IS NOT NULL))`,
+          [...values, inspectionId],
+        )
+      ).changes;
+    } catch {
+      // The row is the only thing that would ever find this file; without it the file is an orphan.
+      await files.remove(path).catch(() => undefined);
+      throw new MediaError('DB_FAILED');
+    }
+    if (changes > 0) return;
+    // Nothing was inserted: either the id already has a row (a retried save; its file is not ours to remove) or the package is blocked.
+    let there: boolean;
+    try {
+      there = (await rawRow(pendingId)) !== null;
+    } catch {
+      // Cannot tell a repeated id from a refusal: the file may be another row's, so it is kept (the orphan sweep finds it).
+      throw new MediaError('DB_FAILED');
+    }
+    if (there) return;
+    await files.remove(path).catch(() => undefined);
+    throw new MediaError('BLOCKED');
   }
 
   async function putLocked(rec: PendingMediaRecord): Promise<void> {
@@ -397,16 +430,7 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       await files.remove(path).catch(() => undefined);
       throw new MediaError('BLOCKED');
     }
-    try {
-      await db.run(
-        `INSERT OR IGNORE INTO media (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [rec.pendingId, rec.inspectionId, rec.kind, path, contentType, metaJson, 'pending', 0, null, Math.floor(rec.createdAt)],
-      );
-    } catch {
-      // The row is the only thing that would ever find this file; without it the file is an orphan.
-      await files.remove(path).catch(() => undefined);
-      throw new MediaError('DB_FAILED');
-    }
+    await insertRow(rec.pendingId, rec.inspectionId, [rec.pendingId, rec.inspectionId, rec.kind, path, contentType, metaJson, 'pending', 0, null, Math.floor(rec.createdAt)], path);
     try {
       deps.onStored?.(rec.pendingId);
     } catch {
@@ -460,15 +484,7 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       await files.remove(path).catch(() => undefined);
       throw new MediaError('BLOCKED');
     }
-    try {
-      await db.run(
-        `INSERT OR IGNORE INTO media (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [rec.pendingId, rec.inspectionId, 'video', path, declaredType, metaJson, 'pending', 0, null, Math.floor(rec.createdAt)],
-      );
-    } catch {
-      await files.remove(path).catch(() => undefined);
-      throw new MediaError('DB_FAILED');
-    }
+    await insertRow(rec.pendingId, rec.inspectionId, [rec.pendingId, rec.inspectionId, 'video', path, declaredType, metaJson, 'pending', 0, null, Math.floor(rec.createdAt)], path);
     try {
       deps.onStored?.(rec.pendingId);
     } catch {

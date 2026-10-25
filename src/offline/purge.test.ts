@@ -3,6 +3,7 @@ import { CollabBlockedError } from '../collab/connector';
 import type { Db } from '../platform/db';
 import { isNotFoundError } from '../platform/files';
 import { enqueue, OutboxError, accountKey } from './outbox';
+import { purgeAuthorityForTest } from './test-support/brands';
 import { purgeInspection, resumePurges, type PurgeDeps, type PurgeOutcome } from './purge';
 import { fingerprintOf } from './reconcile-decision';
 import { replaceInspectionResources } from './resource-cache';
@@ -21,8 +22,15 @@ const ZERO: Record<InspectionTable | 'files', number> = { work_package: 0, outbo
 async function auto(id: string, deps: PurgeDeps = world.purgeDeps(), fingerprint?: string): Promise<PurgeOutcome> {
   return purgeInspection(deps, id, { mode: 'auto', account: ALICE, expectedFingerprint: fingerprint ?? (await fingerprintOf(world.db, id)) });
 }
-const confirmed = (id: string, deps: PurgeDeps = world.purgeDeps()): Promise<PurgeOutcome> => purgeInspection(deps, id, { mode: 'user_confirmed', account: ALICE });
-const resume = (id: string, deps: PurgeDeps = world.purgeDeps()): Promise<PurgeOutcome> => purgeInspection(deps, id, { mode: 'resume', account: ALICE });
+/**
+ * A person-confirmed purge. The tests in this file are about the steps of the purge, not about which inspections may be
+ * removed (`purge-hardening.test.ts` covers that), so a healthy inspection is quarantined first, as it would be in use.
+ */
+const confirmed = async (id: string, deps: PurgeDeps = world.purgeDeps()): Promise<PurgeOutcome> => {
+  await world.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = ? AND purging = 0 AND quarantine_source IS NULL", [id]);
+  return purgeInspection(deps, id, { mode: 'user_confirmed', account: ALICE, authority: purgeAuthorityForTest() });
+};
+const resume = (id: string, deps: PurgeDeps = world.purgeDeps()): Promise<PurgeOutcome> => purgeInspection(deps, id, { mode: 'resume', account: ALICE, authority: purgeAuthorityForTest() });
 
 const purgingOf = async (id: string): Promise<number | null> => {
   const rows = await world.db.query<{ purging: number }>('SELECT purging FROM work_package WHERE inspection_id = ?', [id]);
@@ -97,6 +105,7 @@ describe('an automatic purge of one inspection', () => {
         order.push(`signal:${String(await purgingOf(id))}`);
       },
       connector: {
+        closeFor: (id) => world.connector.closeFor(id),
         purge: async (id) => {
           order.push('connector');
           await world.connector.purge(id);
@@ -393,7 +402,7 @@ describe('the tombstone', () => {
 
   it('every module refuses a tombstoned inspection: connect, queue, package refresh, new photo', async () => {
     await world.seedPurgeable('p2');
-    const failed = await auto('p2', world.purgeDeps({ connector: { purge: () => Promise.reject(new Error('injected')) } }));
+    const failed = await auto('p2', world.purgeDeps({ connector: { closeFor: (id) => world.connector.closeFor(id), purge: () => Promise.reject(new Error('injected')) } }));
     expect(failed).toMatchObject({ kind: 'failed', step: 'connector' });
     await expect(world.connect('p2').persistenceSynced).rejects.toBeInstanceOf(CollabBlockedError);
     const error = await enqueue({ db: world.db, clock: world.clock }, 'inspection.update', { inspectionId: 'p2', changes: { sqft: 1 } }, { account: ALICE }).catch((e: unknown) => e);
@@ -475,7 +484,7 @@ describe('the crash points: a failure after each step leaves a state the next ru
 
   const points: Point[] = [
     { name: 'the tombstone write fails', mode: 'auto', deps: () => world.purgeDeps({ db: failingDb(world.db, /UPDATE work_package SET purging/, 1) }), step: 'tombstone', gone: {}, tombstone: 0 },
-    { name: 'after the tombstone (the connector fails)', mode: 'auto', deps: () => world.purgeDeps({ connector: { purge: () => Promise.reject(new Error('injected')) } }), step: 'connector', gone: {}, tombstone: 1 },
+    { name: 'after the tombstone (the connector fails)', mode: 'auto', deps: () => world.purgeDeps({ connector: { closeFor: (id) => world.connector.closeFor(id), purge: () => Promise.reject(new Error('injected')) } }), step: 'connector', gone: {}, tombstone: 1 },
     {
       name: 'after the connector (a file cannot be removed)',
       mode: 'user_confirmed',
