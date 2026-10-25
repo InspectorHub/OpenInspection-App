@@ -1,3 +1,4 @@
+import { FORMAT_LOCALE } from '../platform/format-locale';
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { AppServices } from '../app/compose';
 import { clientPolicy, factsFor } from '../app/client-state';
@@ -49,7 +50,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * The back key and the Back button both return to the list.
  */
 export function Settings({ services, origin, stack, onBack, onExport, onSignedOut, onCleared, timers, locale }: SettingsProps) {
-  const language = locale ?? (typeof navigator === 'undefined' ? undefined : navigator.language);
+  const language = locale ?? FORMAT_LOCALE;
   const state = useClientState(services.clientState);
   const policy = clientPolicy(state, origin);
   const accountUrl = factsFor(state, origin).accountUrl;

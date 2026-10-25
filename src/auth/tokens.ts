@@ -155,7 +155,10 @@ export type SessionCheck =
 export interface TokenManager {
   /** Stores the tokens of a completed sign-in: the refresh token first, then the in-memory access token. */
   adopt(origin: string, tokens: TokenResponse): Promise<void>;
-  /** The access token for `origin`, refreshing when it is close to expiry; null when there is none to give. */
+  /**
+   * The access token for `origin`, refreshing when it is close to expiry. Null only when the session is over (signed out, or the
+   * refresh was refused); rejects with an `AuthError` when the refresh could not reach a verdict, and the session is still good.
+   */
   getAccessToken(origin: string): Promise<string | null>;
   refresh(origin: string, options?: { ignoreBackoff?: boolean }): Promise<RefreshResult>;
   /**
@@ -171,6 +174,14 @@ export interface TokenManager {
   signOut(origin: string): Promise<void>;
   /** Best-effort RFC 7009 revocation of a refresh token that is not (or no longer) stored. */
   revokeRefreshToken(origin: string, refreshToken: string): Promise<void>;
+}
+
+/** The error a caller sees when a token could not be had and the session is still fine. */
+function codeForRetry(reason: RetryReason): 'server_timeout' | 'storage_failed' | 'server_response_invalid' | 'server_unreachable' {
+  if (reason === 'timeout') return 'server_timeout';
+  if (reason === 'storage') return 'storage_failed';
+  if (reason === 'malformed') return 'server_response_invalid';
+  return 'server_unreachable';
 }
 
 function formBody(values: Record<string, string>): { headers: Record<string, string>; body: string } {
@@ -365,7 +376,11 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     if (isSigningOut(origin)) return null;
     if (access && access.expiresAt - REFRESH_EARLY_MS > deps.clock.now()) return access.token;
     const result = await refresh(origin);
-    return result.kind === 'ok' ? result.accessToken : null;
+    if (result.kind === 'ok') return result.accessToken;
+    // A refresh that reached no verdict (no connection, a timeout, a 5xx, a rate limit, a back-off) is not "no token":
+    // null is for a signed-out or refused session only, because every caller reads null as "sign in again".
+    if (result.kind === 'retry') throw new AuthError(codeForRetry(result.reason));
+    return null;
   }
 
   async function checkSession(origin: string, options: { ignoreBackoff?: boolean } = {}): Promise<SessionCheck> {

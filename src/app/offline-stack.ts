@@ -34,6 +34,7 @@ import type { UploaderPluginLike } from '../platform/uploader';
 import { createDiagnosticRing } from './diagnostics';
 import { createRefreshAfterReplay } from './refresh-after-replay';
 import { createStore, type ReadableStore } from './stack-store';
+import { observeServerContact } from './server-reach';
 import type { TimingCode } from './timings';
 
 /** The orphan and temp-file sweeps run at most this often, however many times a stack is built. */
@@ -62,6 +63,8 @@ export const placeholderResolveVideo: ResolveVideo = () => Promise.resolve('miss
 export interface StackStatus {
   /** A flow was refused by the server's sign-in check: the person must sign in again. Cleared by the next accepted token. */
   auth: boolean;
+  /** The latest contact with the server got no answer (no connection, or none in time) while nothing was refused. Cleared by the next answer. */
+  serverUnreachable: boolean;
   /** The server refuses this app version. Stays until the stack ends (the app has to be updated). */
   upgrade: boolean;
   /** A document could not be stored: the person must be told their edits are not being saved. Sticky until the stack ends. */
@@ -245,7 +248,7 @@ function parseSweepAt(value: string | undefined): number | null {
  * lock check that throws means locked; `stop()` is terminal, and every flow's lock check answers "locked" from then on.
  */
 export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
-  const { db, files, http, tokens, origin, clock, network, appState } = deps;
+  const { db, files, origin, clock, network, appState } = deps;
   const bound: Account = { tenantId: deps.identity.tenantId, userId: deps.identity.userId };
   const clientHeaders = clientHeadersOnly(deps.clientHeaders);
   const insecure = deps.allowInsecureHttp === undefined ? {} : { allowInsecureHttp: deps.allowInsecureHttp };
@@ -288,7 +291,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   const diagnosticRing = createDiagnosticRing<StackDiagnostic>();
   const handles = new Set<{ destroy(): void }>();
   const editorListeners = new Set<(event: EditorEvent) => void>();
-  const status = createStore<StackStatus>({ auth: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never' });
+  const status = createStore<StackStatus>({ auth: false, serverUnreachable: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never' });
+  // Every server contact reports whether the server answered, so a refused connection is told apart from a refused sign-in.
+  const { http, tokens } = observeServerContact(deps.http, deps.tokens, { reached: () => status.patch({ serverUnreachable: false }), unreachable: () => status.patch({ serverUnreachable: true }) });
 
   function report(code: StackDiagnostic): () => void {
     return () => {

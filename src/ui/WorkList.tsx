@@ -1,3 +1,4 @@
+import { FORMAT_LOCALE } from '../platform/format-locale';
 import { useId, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { setPinned } from '../offline/pins';
@@ -36,7 +37,7 @@ export interface WorkListProps {
   /** Link state. Without it the page's own online and offline events are used. */
   network?: Pick<Network, 'online' | 'onChange'>;
   now?: () => number;
-  /** The device language, for the relative and calendar wording. Defaults to the page's. */
+  /** The language of the relative and calendar wording. Defaults to the interface language (`FORMAT_LOCALE`), never the device's. */
   locale?: string;
   /** How often the list is read again while the page is visible. 0 turns the interval off. */
   pollMs?: number;
@@ -80,7 +81,7 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
  * shown is read from the database through the stack; the screen remembers only what it is in the middle of doing.
  */
 export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices, onSettings, settingsRef }: WorkListProps) {
-  const language = locale ?? (typeof navigator === 'undefined' ? undefined : navigator.language);
+  const language = locale ?? FORMAT_LOCALE;
   const model = useWorkListModel(stack, { now, pollMs });
   const status = useSyncExternalStore(stack.status.subscribe, stack.status.get);
   const online = useOnline(network);
@@ -158,7 +159,7 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
           settingsRef={settingsRef}
         />
         {notices}
-        <StatusStrip status={status} />
+        <StatusStrip status={status} online={online} />
         {snapshot !== null && (
           <ReconcileStatus
             outcome={snapshot.reconcile}

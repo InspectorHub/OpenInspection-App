@@ -79,6 +79,9 @@ const REFRESH_HALT_TEXT: Record<RefreshHalt, string> = {
 
 export const REFRESH_THREW_TEXT = 'The download did not finish. Try again.';
 
+/** The network is up but the last contact with the server got no answer. Nothing is wrong with the sign-in. */
+export const SERVER_UNREACHABLE_TEXT = "The server can't be reached right now. Your work is saved on this device and will sync when it is back.";
+
 /** One sentence group for what a download run did. */
 export function refreshSummaryText(summary: RefreshSummary): string {
   if (summary.halted !== null) {

@@ -1,3 +1,4 @@
+import { FORMAT_LOCALE } from '../../platform/format-locale';
 import { DATE_UNAVAILABLE } from './copy';
 
 /** Which part of the work list an inspection sits under. */
@@ -35,16 +36,17 @@ export function groupOf(scheduledAt: number | null, now: number): GroupKey {
   return 'later';
 }
 
-function formatter(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+/** A formatter in `locale` and the device's own time zone. A locale the platform rejects falls back to the interface language. */
+function formatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   try {
     return new Intl.DateTimeFormat(locale, options);
   } catch {
-    return new Intl.DateTimeFormat(undefined, options);
+    return new Intl.DateTimeFormat(FORMAT_LOCALE, options);
   }
 }
 
 /** The time of day for today and tomorrow, the date and time for other days, null when there is no date. */
-export function whenLabel(scheduledAt: number | null, group: GroupKey, locale?: string): string | null {
+export function whenLabel(scheduledAt: number | null, group: GroupKey, locale: string = FORMAT_LOCALE): string | null {
   if (scheduledAt === null) return null;
   // A date that is stored but cannot be used (not a number, out of range) is said to be unavailable, never left to throw.
   if (group === 'unscheduled') return DATE_UNAVAILABLE;
@@ -57,7 +59,7 @@ export function whenLabel(scheduledAt: number | null, group: GroupKey, locale?: 
 }
 
 /** A calendar date in the device's own time zone ("January 3, 2027"), or "Date unavailable" when the value cannot be shown. */
-export function dateLabel(at: number, locale?: string): string {
+export function dateLabel(at: number, locale: string = FORMAT_LOCALE): string {
   if (!validDate(at)) return DATE_UNAVAILABLE;
   try {
     return formatter(locale, { year: 'numeric', month: 'long', day: 'numeric' }).format(at);
@@ -66,12 +68,12 @@ export function dateLabel(at: number, locale?: string): string {
   }
 }
 
-function relative(at: number, now: number, locale: string | undefined): string {
+function relative(at: number, now: number, locale: string): string {
   let rtf: Intl.RelativeTimeFormat;
   try {
     rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
   } catch {
-    rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+    rtf = new Intl.RelativeTimeFormat(FORMAT_LOCALE, { numeric: 'auto' });
   }
   // A time in the future means the clock moved: read it as "now" rather than invent a countdown.
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
@@ -83,8 +85,8 @@ function relative(at: number, now: number, locale: string | undefined): string {
   return rtf.format(-Math.floor(hours / 24), 'day');
 }
 
-/** "Updated 5 minutes ago", in the device's language for the time part. Never a raw timestamp. */
-export function updatedLabel(at: number | null, now: number, locale?: string): string {
+/** "Updated 5 minutes ago", in the interface language (`FORMAT_LOCALE`) for the time part. Never a raw timestamp. */
+export function updatedLabel(at: number | null, now: number, locale: string = FORMAT_LOCALE): string {
   if (at === null) return 'Not updated yet';
   try {
     return `Updated ${relative(at, now, locale)}`;
@@ -94,7 +96,7 @@ export function updatedLabel(at: number | null, now: number, locale?: string): s
 }
 
 /** "Checked 2 minutes ago", or "Not checked yet". */
-export function checkedLabel(at: number | null, now: number, locale?: string): string {
+export function checkedLabel(at: number | null, now: number, locale: string = FORMAT_LOCALE): string {
   if (at === null) return 'Not checked yet';
   try {
     return `Checked ${relative(at, now, locale)}`;

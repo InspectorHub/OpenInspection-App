@@ -41,6 +41,6 @@ export function renderList(stack: OfflineStack, props: Partial<WorkListProps> = 
 
 /** The same stack with a status store the test can write to. */
 export function withStatus(stack: OfflineStack, initial: Partial<StackStatus> = {}): { stack: OfflineStack; status: WritableStore<StackStatus> } {
-  const status = createStore<StackStatus>({ auth: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never', ...initial });
+  const status = createStore<StackStatus>({ auth: false, serverUnreachable: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never', ...initial });
   return { stack: { ...stack, status }, status };
 }

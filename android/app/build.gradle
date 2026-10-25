@@ -1,5 +1,22 @@
 apply plugin: 'com.android.application'
 
+// The one source of the app version is package.json: the web bundle (and the X-Client-Version header and the Settings screen)
+// read it through vite.config.ts, and the native versionName reads it here, so the three can never disagree.
+def appPackage = new groovy.json.JsonSlurper().parse(file('../../package.json'))
+def appVersionMatch = (appPackage.version =~ /^(\d+)\.(\d+)\.(\d+)/)
+if (!appVersionMatch.find()) {
+    throw new GradleException("package.json version '${appPackage.version}' is not major.minor.patch")
+}
+def appVersionName = "${appVersionMatch.group(1)}.${appVersionMatch.group(2)}.${appVersionMatch.group(3)}"
+// versionCode for now: major * 10000 + minor * 100 + patch, never below 1 (Android needs a positive code). The release workflow
+// passes an explicit value with -PappVersionCode=N, because the release rule is defined with the release workflow.
+int appVersionCodeValue
+if (project.hasProperty('appVersionCode')) {
+    appVersionCodeValue = project.property('appVersionCode').toString().toInteger()
+} else {
+    appVersionCodeValue = Math.max(1, appVersionMatch.group(1).toInteger() * 10000 + appVersionMatch.group(2).toInteger() * 100 + appVersionMatch.group(3).toInteger())
+}
+
 android {
     namespace = "io.inspectorhub.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +24,8 @@ android {
         applicationId "io.inspectorhub.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCodeValue
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
