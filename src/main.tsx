@@ -9,6 +9,7 @@ import { createRealStackFactory } from './app/real-stack';
 import { createCapacitorAppState } from './offline/lock-monitor';
 import { createRealNetwork } from './platform/network';
 import './styles.css';
+import { registerBackButton } from './ui/back-button';
 import { followSystemColorScheme } from './ui/color-scheme';
 import { createSystemBarsSync } from './ui/system-bars';
 
@@ -19,6 +20,8 @@ followSystemColorScheme(document.documentElement, window.matchMedia('(prefers-co
 
 // Registered at start, before the database opens, so a callback that arrives early finds a listener.
 const callbacks = registerCallbackRouter(CapacitorApp);
+// One back-key listener for the whole app: without it the system back key leaves the app from any screen.
+registerBackButton(CapacitorApp);
 const appState = createCapacitorAppState(CapacitorApp);
 const offlineStack = createRealStackFactory({ appState });
 const network = createRealNetwork();

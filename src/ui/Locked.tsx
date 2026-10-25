@@ -9,6 +9,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
+import { SignOutControl } from './SignOutControl';
 
 export interface LockedProps {
   services: AppServices;
@@ -25,6 +26,8 @@ export interface LockedProps {
    * never offers an action the app cannot perform.
    */
   onExport?(): void;
+  /** The person signed out from the lock screen. Local data is untouched. The button is shown only when this is supplied. */
+  onSignedOut?(): void;
 }
 
 const HEADINGS: Record<LockReason, string> = {
@@ -62,7 +65,7 @@ function items(count: number): string {
  * data must stay closed. It offers only what is true for the reason: verifying online (expired, clock),
  * exporting (when the app can), and clearing the device. Nothing here deletes anything on its own.
  */
-export function Locked({ services, origin, reason, onOutcome, onSignInRequired, onCleared, onExport }: LockedProps) {
+export function Locked({ services, origin, reason, onOutcome, onSignInRequired, onCleared, onExport, onSignedOut }: LockedProps) {
   const [waiting, setWaiting] = useState<number | null>(null);
   const [company, setCompany] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -194,6 +197,7 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
         <Button ref={trigger} variant="secondary" disabled={verifying} onClick={() => setConfirming(true)}>
           Clear local data
         </Button>
+        {onSignedOut && <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />}
       </div>
       {confirming && (
         <ConfirmDialog

@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useEscapeLayer } from './escape-layer';
+import { haptic } from '../platform/haptics';
 import { Button, Notice } from './kit';
 
 export interface ConfirmDialogProps {
@@ -24,6 +26,11 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
   const descriptionId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+
+  // The back key sends Escape to the window; a dialog that is busy still uses the press up and stays open.
+  useEscapeLayer(() => {
+    if (!busy) onCancel();
+  });
 
   const opener = useRef<Element | null>(null);
   const fallback = useContext(DialogFocusFallback);
@@ -80,7 +87,11 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
         {details}
         {error && <Notice tone="bad">{error}</Notice>}
         <div className="flex flex-col gap-3">
-          <Button ref={confirmRef} variant={destructive ? 'danger' : 'primary'} disabled={busy || confirmDisabled} onClick={onConfirm}>
+          <Button ref={confirmRef} variant={destructive ? 'danger' : 'primary'} disabled={busy || confirmDisabled} onClick={() => {
+              if (destructive) haptic('warning');
+              onConfirm();
+            }}
+          >
             {confirmLabel}
           </Button>
           <Button ref={cancelRef} variant="secondary" disabled={busy} onClick={onCancel}>

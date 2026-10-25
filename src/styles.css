@@ -2,6 +2,15 @@
 @import '@inspectorhub/field-ui/theme.css';
 @source "../node_modules/@inspectorhub/field-ui/dist";
 
+/*
+ * The system font stack on both faces: the theme lists named web fonts first, but the app bundles none, so on a device they would
+ * fall through to the system face anyway. Saying it here keeps that from depending on what a device happens to have installed.
+ */
+@theme {
+  --font-ih-display: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-ih-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
 @layer base {
   html,
   body,

@@ -9,6 +9,7 @@ import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, INPUT_CLASSES, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NATIVE_LOGIN_HELP } from './messages';
+import { useBackHandler } from './use-back-handler';
 
 /** The hosted service's engine address (APP_BASE_URL of the engine's SaaS deployment). */
 export const DEFAULT_SERVER_URL = 'https://app.inspectorhub.io';
@@ -37,6 +38,13 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
   const [error, setError] = useState<string | null>(null);
   const [nativeUnavailable, setNativeUnavailable] = useState(false);
   const latch = useActionLatch();
+
+  // Back from the address check returns to the address, like "Change address"; while connecting it is used up and does nothing.
+  useBackHandler(() => {
+    if (step.kind !== 'confirm') return false;
+    if (!step.busy) setStep({ kind: 'edit' });
+    return true;
+  });
 
   function review(event: FormEvent): void {
     event.preventDefault();

@@ -17,6 +17,7 @@ import { RepairPanel } from './worklist/RepairPanel';
 import { RowBoundary } from './worklist/RowBoundary';
 import { StatusStrip } from './worklist/StatusStrip';
 import { useOnline } from './worklist/useOnline';
+import { usePullToRefresh } from './worklist/usePullToRefresh';
 import { WorkListHeader } from './worklist/WorkListHeader';
 
 export const DEFAULT_POLL_MS = 5000;
@@ -103,6 +104,9 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
       await model.reload();
     }
   }
+
+  // Pulling the page down is the same download as the button, through the same latch.
+  usePullToRefresh(() => void latch(download), !downloading);
 
   async function togglePin(row: WorkListRow): Promise<void> {
     setNote(null);

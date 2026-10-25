@@ -104,6 +104,11 @@ export interface CompatInfo {
   /** Untrusted: https only, and only to be opened when the user taps it. */
   downloadUrl: string | null;
   serverContractVersion: number;
+  /**
+   * Where the server says a person manages or deletes their account. Untrusted like `downloadUrl`: https only, and opened only when
+   * the person taps it. Absent when the server does not offer one (older servers); the app never makes an address up.
+   */
+  accountUrl?: string | null;
   /** The server speaks an older contract than this app needs. A state to show, not a login block. */
   serverTooOld: boolean;
   /** Always false: the compat endpoint does not check whether native sign-in is switched on. */
@@ -143,6 +148,7 @@ export async function fetchCompat(
     minSupported,
     recommended,
     downloadUrl: httpsHref(downloadUrl),
+    accountUrl: typeof data?.accountUrl === 'string' ? httpsHref(data.accountUrl) : null,
     serverContractVersion: version,
     serverTooOld: version < MIN_SERVER_CONTRACT_VERSION,
     nativeLoginVerified: false,

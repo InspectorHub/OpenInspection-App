@@ -13,7 +13,9 @@ import { createMemoryKeyValue, createPreferencesKeyValue, type KeyValue } from '
 import { createRealSecureStore, type SecureStore } from '../platform/secure-store';
 import { recordRefreshed, recordVerified, setRevoked } from '../offline/lock-state';
 import { Browser } from '@capacitor/browser';
+import { createRealNotificationPermission, type NotificationPermissionPort } from '../platform/notifications';
 import { createClientState, type ClientStateController } from './client-state';
+import { createNotificationAsk, type NotificationAsk } from './notification-ask';
 
 export type ClientPlatform = 'android' | 'ios';
 
@@ -39,6 +41,12 @@ export interface AppServices {
    * that is not the server's) changes no fact. A call made while one is in flight shares it.
    */
   refreshCompat(origin: string, options?: { timeoutMs?: number }): Promise<void>;
+  /** Non-secret app state kept across launches (dismissed notices, the notification question). */
+  kv: KeyValue;
+  /** The system's notification permission (Android only; `unsupported` elsewhere). */
+  notifications: NotificationPermissionPort;
+  /** When to explain the notification permission and the memory of the answer. */
+  notificationAsk: NotificationAsk;
   /** Hands an https address to the system browser. Callers check the address first (`httpsHref`); rejects when it cannot be opened. */
   openExternal(url: string): Promise<void>;
   /**
@@ -61,15 +69,24 @@ export interface ComposeParts {
   appVersion: string;
   /** Non-secret app state (the dismissed update banner). Defaults to an in-memory store. */
   kv?: KeyValue;
+  /** The notification permission. Defaults to one that reports `unsupported`. */
+  notifications?: NotificationPermissionPort;
   builtAt?: string;
   openExternal?: (url: string) => Promise<void>;
   closeDb?: () => Promise<void>;
 }
 
+const UNSUPPORTED_NOTIFICATIONS: NotificationPermissionPort = {
+  check: () => Promise.resolve('unsupported'),
+  request: () => Promise.resolve('unsupported'),
+};
+
 /** The wiring, with every adapter supplied. Tests pass fakes; `composeReal` passes the device's. */
 export function composeWith(parts: ComposeParts): AppServices {
   const { db, files, store, clock, platform, appVersion } = parts;
-  const clientState = createClientState({ kv: parts.kv ?? createMemoryKeyValue(), appVersion });
+  const kv = parts.kv ?? createMemoryKeyValue();
+  const notifications = parts.notifications ?? UNSUPPORTED_NOTIFICATIONS;
+  const clientState = createClientState({ kv, appVersion });
   const http = createHttp({
     fetch: parts.fetch,
     defaultHeaders: { 'X-Client-Platform': platform, 'X-Client-Version': appVersion },
@@ -125,6 +142,9 @@ export function composeWith(parts: ComposeParts): AppServices {
     appVersion,
     builtAt: parts.builtAt ?? null,
     clientState,
+    kv,
+    notifications,
+    notificationAsk: createNotificationAsk({ kv, permission: notifications }),
     refreshCompat,
     openExternal: parts.openExternal ?? (() => Promise.reject(new Error('This build cannot open links'))),
     onTokenVerified,
@@ -180,6 +200,7 @@ export async function composeReal(adapters: RealAdapters = realAdapters): Promis
     appVersion: __APP_VERSION__,
     builtAt: __APP_BUILT_AT__,
     kv: createPreferencesKeyValue(),
+    notifications: createRealNotificationPermission(toClientPlatform(Capacitor.getPlatform())),
     openExternal: (url) => Browser.open({ url }),
     closeDb: adapters.closeDb,
   });

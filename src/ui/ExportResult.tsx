@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEscapeLayer } from './escape-layer';
 import { Button } from './kit';
 
 export interface ExportResultProps {
@@ -12,6 +13,8 @@ export interface ExportResultProps {
 export function ExportResult({ title, children, onClose }: ExportResultProps) {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEscapeLayer(onClose);
 
   useEffect(() => {
     closeRef.current?.focus();

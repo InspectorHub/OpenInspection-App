@@ -88,3 +88,18 @@ foreground. To see each state, point the app at a local engine and change that e
 | Server version too old (nothing syncs, local work continues; editor writes answer that the server is too old) | Build the app with a higher `MIN_SERVER_CONTRACT_VERSION` in `src/auth/server-config.ts` than the engine's `SERVER_CONTRACT_VERSION`. |
 | Server without the check for removed inspections (a notice, and that one check is skipped; everything else syncs) | Point the app at an engine whose `SERVER_CONTRACT_VERSION` is below `MIN_CONTRACT_FOR_RECONCILE` in `src/auth/server-config.ts` (or temporarily raise that constant above the engine's). The notice shows once per server and can be dismissed. |
 | Test build expiry (iOS only) | Build with `APP_BUILT_AT` set to a UTC ISO instant 76 or more days ago, for example `APP_BUILT_AT=2026-07-01T00:00:00.000Z npm run build`. The warning only ever shows on iOS builds, and also on the lock, sign-in and server screens. |
+
+## Trying Settings and the platform details on a device
+
+Open Settings from the work list. Check each of these in the light and the dark scheme, on a phone and a tablet width, at font scale 1.3 and with
+"Remove animations" on:
+
+| Area | How to check it |
+|---|---|
+| Sync window | Choose 7, 30, then 14 days: one download starts per change, nothing disappears from the list, the choice survives a restart. |
+| Back key and gesture | From Settings: a dialog closes first, then Settings returns to the list, then the app exits. On the server-address check and on a sign-in reached from the lock screen, back returns one step. |
+| Notification question | On Android 13 or later, with a fresh install and one photo waiting to upload (offline), our explanation appears once; "Allow notifications" shows the system prompt; "Not now" never asks again and Settings shows the state. Turning notifications off in Android Settings and coming back updates the Notifications section. |
+| Pull to refresh | At the top of the work list, drag down with one finger: the same download as the button. A drag that starts lower down only scrolls. |
+| Haptics | A short vibration on the destructive confirmations, on a finished export and on signing out. |
+| Open source | "Source code" and "Read the licence" open in the browser; the version and build date are shown. |
+| Delete account | The row appears only when the server's compat answer carries an `accountUrl` (https). |

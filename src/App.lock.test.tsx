@@ -33,7 +33,7 @@ describe('boot decides the lock before the signed-in screen', () => {
     render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} scheduler={fakeScheduler()} />);
     expect(await screen.findByRole('heading', { name: 'Verification needed' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    expect(screen.queryByTestId('identity-role')).toBeNull();
     expect(await screen.findByTestId('waiting-count')).toHaveTextContent('2 items waiting to upload');
     expect(calls).toEqual([]);
     expect(await rowCounts(world.db)).toEqual(before);

@@ -213,6 +213,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
           onSignInRequired={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: screen.identity })}
           onCleared={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
           onExport={() => setLockedExport(true)}
+          onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
         />
         {lockedExport && <ExportFlow services={services} onClose={() => setLockedExport(false)} />}
         </>

@@ -7,6 +7,7 @@ import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NOTICE_MESSAGES } from './messages';
+import { useBackHandler } from './use-back-handler';
 
 export interface SignInProps {
   services: AppServices;
@@ -26,6 +27,15 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
   const [error, setError] = useState<string | null>(null);
   const [browserClosed, setBrowserClosed] = useState(false);
   const latch = useActionLatch();
+
+  // The same Back as the button: reached from the lock screen, back returns to it. While a login page is open the press is
+  // used up (the sign-in is cancelled with its own button), so it can never leave the app in the middle of a sign-in.
+  useBackHandler(() => {
+    if (busy) return true;
+    if (!onBack) return false;
+    onBack();
+    return true;
+  });
 
   useEffect(() => {
     if (!busy) return undefined;

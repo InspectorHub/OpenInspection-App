@@ -28,9 +28,9 @@ function ConnectionChip({ online }: { online: boolean | null }) {
 }
 
 /**
- * The title, how fresh the data is, whether the device is online, and the one button that fetches today's work. The
- * pull-to-refresh gesture is NOT implemented: this always-visible button is the only way to start a download, and it runs
- * the single flight the refresher allows.
+ * The title, how fresh the data is, whether the device is online, and the one button that fetches today's work. Pulling the
+ * page down does the same thing (`usePullToRefresh`); this always-visible button is the accessible way, and both run the single
+ * flight the refresher allows.
  */
 export function WorkListHeader({ updatedAt, now, locale, online, downloading, summary, onDownload, onExport, headingRef }: WorkListHeaderProps) {
   return (

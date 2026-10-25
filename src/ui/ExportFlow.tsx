@@ -25,6 +25,7 @@ import {
 import { createExporter, type ExportFilesPort, type ExportOutcome, type Preflight } from '../export/exporter';
 import type { ReconcileGate } from '../export/reconcile-gate';
 import { createRealSharer, type Sharer } from '../export/share-package';
+import { haptic } from '../platform/haptics';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExportResult } from './ExportResult';
 import { Button, Notice } from './kit';
@@ -100,7 +101,10 @@ export function ExportFlow({ services, reconcile, sharer, timers, only, onClose 
     setBusy(false);
     if (outcome.kind === 'failed') setError(FAILURE_TEXT[outcome.code]);
     else if (outcome.kind === 'busy') setError(FAILURE_TEXT.busy);
-    else setFinished(outcome);
+    else {
+      if (outcome.kind === 'shared') haptic('success');
+      setFinished(outcome);
+    }
   }
 
   if (finished !== null) {

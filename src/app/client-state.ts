@@ -17,6 +17,8 @@ export interface OriginFacts {
   serverTooOld: boolean;
   /** Where to get the update, as the compat answer gave it (already https-only; still re-checked when it is opened). */
   downloadUrl: string | null;
+  /** Where the server says an account is managed or deleted (already https-only; still re-checked when it is opened), or null. */
+  accountUrl: string | null;
   /** The newest version the server recommends, when the compat answer said. */
   recommendedVersion: string | null;
   /** Whether the server can answer the check for removed inspections: true or false once the contract is known, null before. */
@@ -40,6 +42,7 @@ const UNKNOWN: OriginFacts = {
   upgrade: 'none',
   serverTooOld: false,
   downloadUrl: null,
+  accountUrl: null,
   recommendedVersion: null,
   reconcileSupported: null,
   compatKnown: false,
@@ -223,6 +226,7 @@ export function createClientState(deps: ClientStateDeps): ClientStateController 
           upgrade,
           serverTooOld: compat.serverTooOld,
           downloadUrl: compat.downloadUrl,
+          accountUrl: compat.accountUrl ?? null,
           recommendedVersion: compat.recommended,
           reconcileSupported: compat.serverContractVersion >= MIN_CONTRACT_FOR_RECONCILE,
           compatKnown: true,
