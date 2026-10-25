@@ -167,7 +167,11 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
             disabled={verifying}
             onClick={() =>
               void latch(() => {
-                onSignInRequired();
+                try {
+                  onSignInRequired();
+                } catch {
+                  setNotice('Could not open sign-in. Try again.');
+                }
                 return Promise.resolve();
               })
             }

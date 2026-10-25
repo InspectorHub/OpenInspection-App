@@ -8,10 +8,10 @@ import { readPackageRows, readPackageStates, type RefreshErrorCode } from '../..
 import { namesMassSuspicious } from '../../offline/purge';
 import { planIsStale, type ReconcilePlan } from '../../offline/reconcile-decision';
 import type { ReconcileOutcome } from '../../offline/reconciler';
-import { isLocalId } from '../../offline/registry';
+import { DEFAULT_REGISTRY, isLocalId } from '../../offline/registry';
 import type { UnattributableRow } from '../../offline/user-actions';
 import { OUTBOX_ERROR_CODES, type OutboxErrorCode } from '../../platform/schema';
-import { groupOf, type GroupKey } from './format';
+import { groupOf, shortTitle, stripBidi, type GroupKey } from './format';
 
 /** What the work list reads from the stack. A pick, so a test can stand in for any part. */
 export type WorkListStack = Pick<OfflineStack, 'db' | 'account' | 'status' | 'replayer' | 'refresher' | 'reconciler' | 'uploader' | 'userActions' | 'store' | 'lastPlan'>;
@@ -50,8 +50,10 @@ export interface WorkListRow {
   needAttention: number;
   /** Queued writes of an inspection that left the list; never counted as waiting. */
   orphaned: number;
-  /** A person may remove it from the device: it is quarantined, or the latest suspicious answer names it. */
+  /** A person may remove it from the device: it is quarantined, the latest suspicious answer names it, or it was never sent. */
   removable: boolean;
+  /** Made on this device, not acknowledged by the server, and no create is queued for it any more (in any state, for any account). */
+  neverSent: boolean;
   /** The removal rests on the latest suspicious answer rather than on a quarantine. */
   namedByPlan: boolean;
 }
@@ -62,6 +64,8 @@ export interface FailedOutboxItem {
   inspectionId: string | null;
   error: OutboxErrorCode | null;
   bytes: number;
+  /** The write that makes the inspection on the server. */
+  isCreate: boolean;
 }
 
 export interface FailedMediaItem {
@@ -80,7 +84,15 @@ export interface WorkListSnapshot {
   updatedAt: number | null;
   failedOutbox: FailedOutboxItem[];
   failedMedia: FailedMediaItem[];
-  repair: { rows: RepairItem[]; foreign: number };
+  repair: {
+    rows: RepairItem[];
+    /** Queued changes of other accounts: counted, never listed. */
+    foreign: number;
+    /** Stuck photos and clips whose inspection has no package on this device: listed, discardable, never retried. */
+    orphanMedia: FailedMediaItem[];
+    /** Stuck photos and clips of another account's inspections (or of nobody's): counted, never listed. */
+    foreignMedia: number;
+  };
   /** The company name for the responsibility wording, or null. */
   company: string | null;
   reconcile: ReconcileOutcome;
@@ -107,8 +119,9 @@ function addressOf(body: string): string | null {
     const inspection = data.inspection;
     if (typeof inspection !== 'object' || inspection === null || !('propertyAddress' in inspection)) return null;
     const address = inspection.propertyAddress;
-    if (typeof address !== 'string' || address.trim().length === 0) return null;
-    return truncate(address.trim());
+    if (typeof address !== 'string') return null;
+    const clean = stripBidi(address).trim();
+    return clean.length === 0 ? null : truncate(clean);
   } catch {
     return null;
   }
@@ -150,8 +163,25 @@ async function readMediaCounts(stack: SnapshotSource): Promise<Map<string, Media
   return out;
 }
 
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** By scheduled time ascending (no date last), then by the title shown, then by id, so the order never depends on read order. */
 function byTime(a: WorkListRow, b: WorkListRow): number {
-  return (a.scheduledAt ?? Number.MAX_SAFE_INTEGER) - (b.scheduledAt ?? Number.MAX_SAFE_INTEGER) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const at = Number.isFinite(a.scheduledAt) ? (a.scheduledAt as number) : Number.MAX_SAFE_INTEGER;
+  const bt = Number.isFinite(b.scheduledAt) ? (b.scheduledAt as number) : Number.MAX_SAFE_INTEGER;
+  return at - bt || compare(shortTitle(a), shortTitle(b)) || compare(a.id, b.id);
+}
+
+/** The inspections that have a create queued, in any state, for any account: such a package is still on its way to the server. */
+async function readCreateTargets(db: Db): Promise<Set<string>> {
+  const ops = DEFAULT_REGISTRY.filter((def) => def.createsInspection === true).map((def) => def.op);
+  if (ops.length === 0) return new Set();
+  const rows = await db.query<{ inspection_id: string | null }>(`SELECT DISTINCT inspection_id FROM outbox WHERE op IN (${ops.map(() => '?').join(', ')})`, ops);
+  return new Set(rows.flatMap((r) => (r.inspection_id === null ? [] : [r.inspection_id])));
+}
+
+function isCreateOp(op: string): boolean {
+  return DEFAULT_REGISTRY.some((def) => def.createsInspection === true && def.op === op);
 }
 
 /**
@@ -165,6 +195,7 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
   const titles = await readTitles(stack, memo);
   const outbox = await outboxCountsByInspection(db, { account });
   const media = await readMediaCounts(stack);
+  const creates = await readCreateTargets(db);
   const plan: ReconcilePlan | null = stack.lastPlan();
   const planFresh = plan !== null && !planIsStale(plan, now);
 
@@ -178,6 +209,7 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
     const confirmed = Number(pkg.server_confirmed) === 1;
     const scheduledAt = pkg.scheduled_at === null ? null : Number(pkg.scheduled_at);
     const namedByPlan = blocked === 'none' && plan !== null && planFresh && namesMassSuspicious(plan, pkg.inspection_id, account);
+    const neverSent = blocked === 'none' && !confirmed && !creates.has(pkg.inspection_id);
     rows.push({
       id: pkg.inspection_id,
       title: titles.get(pkg.inspection_id) ?? null,
@@ -192,7 +224,8 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
       waiting: (counts?.pending ?? 0) + (photos?.waiting ?? 0),
       needAttention: (counts?.failed ?? 0) + (photos?.failed ?? 0),
       orphaned: counts?.orphaned ?? 0,
-      removable: blocked === 'quarantined' || namedByPlan,
+      removable: blocked === 'quarantined' || namedByPlan || neverSent,
+      neverSent,
       namedByPlan,
     });
   }
@@ -204,9 +237,20 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
   const encoder = new TextEncoder();
   for (const row of await listOutbox(db, { account, states: ['failed'] })) {
     if (repairKeys.has(row.idempotencyKey)) continue;
-    failedOutbox.push({ key: row.idempotencyKey, op: row.op, inspectionId: isLocalId(row.inspectionId) ? row.inspectionId : null, error: isOutboxErrorCode(row.lastError) ? row.lastError : null, bytes: encoder.encode(row.payload).byteLength });
+    failedOutbox.push({ key: row.idempotencyKey, op: row.op, inspectionId: isLocalId(row.inspectionId) ? row.inspectionId : null, error: isOutboxErrorCode(row.lastError) ? row.lastError : null, bytes: encoder.encode(row.payload).byteLength, isCreate: isCreateOp(row.op) });
   }
-  const failedMedia = (await stack.store.listRows({ states: ['failed'] })).map((m) => ({ pendingId: m.pendingId, inspectionId: m.inspectionId, kind: m.kind }));
+  // A stuck photo is shown, and may be retried, only when its package is this account's (tenant AND user). One with no package
+  // at all is an orphan (discardable, never retried); anyone else's is only counted.
+  const failedMedia: FailedMediaItem[] = [];
+  const orphanMedia: FailedMediaItem[] = [];
+  let foreignMedia = 0;
+  for (const m of await stack.store.listRows({ states: ['failed'] })) {
+    const item: FailedMediaItem = { pendingId: m.pendingId, inspectionId: m.inspectionId, kind: m.kind };
+    const owner = packages.get(m.inspectionId);
+    if (owner === undefined) orphanMedia.push(item);
+    else if (sameAccount(account, owner.tenant_id, owner.user_id)) failedMedia.push(item);
+    else foreignMedia += 1;
+  }
 
   let updatedAt: number | null = null;
   for (const state of states.values()) if (state.lastRefreshedAt !== null && (updatedAt === null || state.lastRefreshedAt > updatedAt)) updatedAt = state.lastRefreshedAt;
@@ -216,7 +260,7 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
     updatedAt,
     failedOutbox,
     failedMedia,
-    repair: { rows: repairList.rows.map((r) => ({ ...r, lastError: isOutboxErrorCode(r.lastError) ? r.lastError : null })), foreign: repairList.foreign },
+    repair: { rows: repairList.rows.map((r) => ({ ...r, lastError: isOutboxErrorCode(r.lastError) ? r.lastError : null })), foreign: repairList.foreign, orphanMedia, foreignMedia },
     company: await loadTenantName(db),
     reconcile: stack.reconciler.last,
   };

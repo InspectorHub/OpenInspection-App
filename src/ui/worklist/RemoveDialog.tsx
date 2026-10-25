@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Account } from '../../offline/outbox';
 import { namesMassSuspicious } from '../../offline/purge';
 import { planIsStale, type ReconcilePlan } from '../../offline/reconcile-decision';
@@ -6,17 +6,28 @@ import { unsentData, type UnsentResult } from '../../offline/unsent';
 import type { RemoveOutcome, RemoveOptions } from '../../offline/user-actions';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useActionLatch } from '../latch';
-import { COUNTS_FAILED, REMOVE_THREW_TEXT, removeFailureText } from './copy';
-import type { WorkListRow, WorkListStack } from './model';
+import { COUNTS_FAILED, DISCARD_CHANGE_GONE, REMOVE_GONE, REMOVE_NOT_ALLOWED, REMOVE_RUNNING, REMOVE_THREW_TEXT, removeFailureText } from './copy';
 import { REMOVE_LABEL } from './InspectionRow';
+import { readWorkListSnapshot, type WorkListRow, type WorkListStack } from './model';
+
+export const DISCARD_AND_REMOVE_LABEL = 'Discard and remove this inspection from this device';
 
 export interface RemoveDialogProps {
   stack: WorkListStack;
-  row: WorkListRow;
+  row: Pick<WorkListRow, 'id' | 'neverSent'>;
+  /**
+   * The key of the failed `inspection.create` of this inspection. When given, confirming discards that queued write first
+   * and then removes the inspection that was never sent, so there is one action and no half-done state to find later.
+   */
+  discardKey?: string;
   now(): number;
+  /** Reads the list again. Called after every attempt that did not remove the inspection. */
+  reload(): Promise<void>;
   onClose(): void;
   /** The inspection is gone from the device. */
   onRemoved(): void;
+  /** The inspection can no longer be removed from here (it is gone, or no longer removable): the dialog closes with this fixed message. */
+  onUnavailable(message: string): void;
 }
 
 type Counts = { kind: 'loading' } | { kind: 'failed' } | { kind: 'ready'; result: UnsentResult };
@@ -34,43 +45,80 @@ function yesNo(value: boolean): string {
 /**
  * Asks before the data of one inspection leaves this device. The counts are read when the dialog opens, from the same
  * predicate the removal itself checks, and the confirm button stays off until they are known: nobody confirms a loss
- * they have not been shown. Only reachable for a quarantined row or one the latest suspicious answer names.
+ * they have not been shown. After any attempt that did not remove it, the counts and the row are read again, so the
+ * next confirmation is made on what is true now; if the inspection can no longer be removed the dialog closes.
+ * Reachable for a quarantined row, one the latest suspicious answer names, and one that was never sent.
  */
-export function RemoveDialog({ stack, row, now, onClose, onRemoved }: RemoveDialogProps) {
+export function RemoveDialog({ stack, row, discardKey, now, reload, onClose, onRemoved, onUnavailable }: RemoveDialogProps) {
   const [counts, setCounts] = useState<Counts>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latch = useActionLatch();
+  const newest = useRef(0);
+  const alive = useRef(true);
+  const neverSent = discardKey !== undefined || row.neverSent;
+
+  const readCounts = useCallback(async (): Promise<void> => {
+    newest.current += 1;
+    const mine = newest.current;
+    try {
+      const result = await unsentData(stack.db, row.id, stack.account);
+      if (alive.current && mine === newest.current) setCounts({ kind: 'ready', result });
+    } catch {
+      if (alive.current && mine === newest.current) setCounts({ kind: 'failed' });
+    }
+  }, [stack, row.id]);
 
   useEffect(() => {
-    let live = true;
-    unsentData(stack.db, row.id, stack.account).then(
-      (result) => {
-        if (live) setCounts({ kind: 'ready', result });
-      },
-      () => {
-        if (live) setCounts({ kind: 'failed' });
-      },
-    );
+    alive.current = true;
+    void readCounts();
     return () => {
-      live = false;
+      alive.current = false;
     };
-  }, [stack, row.id]);
+  }, [readCounts]);
+
+  /** What is true now: false when the dialog was closed because the inspection can no longer be removed. */
+  async function stillRemovable(): Promise<boolean> {
+    try {
+      const fresh = (await readWorkListSnapshot(stack, now())).rows.find((r) => r.id === row.id);
+      if (fresh === undefined) onUnavailable(REMOVE_GONE);
+      else if (fresh.blocked === 'purging') onUnavailable(REMOVE_RUNNING);
+      else if (!fresh.removable && !(discardKey !== undefined && fresh.createdLocally)) onUnavailable(REMOVE_NOT_ALLOWED);
+      else return true;
+      return false;
+    } catch {
+      return true;
+    }
+  }
 
   async function remove(): Promise<void> {
     setError(null);
     setBusy(true);
+    let message: string | null = null;
     try {
-      const plan = planFor(stack, row.id, stack.account, now());
-      const options: RemoveOptions = plan === null ? { confirmed: true } : { confirmed: true, plan };
-      const outcome: RemoveOutcome = await stack.userActions.removeFromDevice(row.id, options);
-      if (outcome.kind === 'purged') onRemoved();
-      else setError(removeFailureText(outcome));
+      if (discardKey !== undefined) {
+        const gone = await stack.replayer.discard(discardKey, { confirmed: true });
+        // Nothing found to discard is fine when the queued create is already gone; the removal re-checks it either way.
+        if (!gone && (await createStillQueued(stack, discardKey))) message = DISCARD_CHANGE_GONE;
+      }
+      if (message === null) {
+        const plan = planFor(stack, row.id, stack.account, now());
+        const options: RemoveOptions = plan === null ? { confirmed: true } : { confirmed: true, plan };
+        const outcome: RemoveOutcome = await stack.userActions.removeFromDevice(row.id, options);
+        if (outcome.kind === 'purged') {
+          onRemoved();
+          return;
+        }
+        message = removeFailureText(outcome);
+      }
     } catch {
-      setError(REMOVE_THREW_TEXT);
+      message = REMOVE_THREW_TEXT;
     } finally {
       setBusy(false);
     }
+    setError(message);
+    await reload();
+    if (await stillRemovable()) await readCounts();
   }
 
   const ready = counts.kind === 'ready' ? counts.result : null;
@@ -91,8 +139,12 @@ export function RemoveDialog({ stack, row, now, onClose, onRemoved }: RemoveDial
   return (
     <ConfirmDialog
       title="Remove this inspection from this device?"
-      description="This removes the inspection and everything stored for it on this device. This cannot be undone."
-      confirmLabel={REMOVE_LABEL}
+      description={
+        neverSent
+          ? 'This inspection was never sent to the server. Everything on this device for it, including photos and edits, will be permanently removed. This cannot be undone.'
+          : 'This removes the inspection and everything stored for it on this device. This cannot be undone.'
+      }
+      confirmLabel={discardKey !== undefined ? DISCARD_AND_REMOVE_LABEL : REMOVE_LABEL}
       destructive
       details={details}
       confirmDisabled={counts.kind !== 'ready'}
@@ -102,4 +154,12 @@ export function RemoveDialog({ stack, row, now, onClose, onRemoved }: RemoveDial
       onCancel={onClose}
     />
   );
+}
+
+async function createStillQueued(stack: Pick<WorkListStack, 'db'>, key: string): Promise<boolean> {
+  try {
+    return (await stack.db.query('SELECT 1 FROM outbox WHERE idempotency_key = ?', [key])).length > 0;
+  } catch {
+    return true;
+  }
 }

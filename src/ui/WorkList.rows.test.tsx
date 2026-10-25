@@ -227,7 +227,7 @@ describe('WorkList: quarantined rows and their wording', () => {
     const row = await rowOf('q1');
     expect(within(row).getByText('Quarantined')).toBeInTheDocument();
     expect(row).toHaveTextContent('No longer assigned to you or removed from the server.');
-    expect(row).toHaveTextContent('Your unsent data is still on this device.');
+    expect(row).toHaveTextContent('If anything on this inspection was not sent, it is still on this device.');
   });
 
   it('never says deleted, and never recommends a legal action', async () => {
@@ -243,11 +243,11 @@ describe('WorkList: quarantined rows and their wording', () => {
   it('a summary banner counts them, singular and plural', async () => {
     await quarantined(2);
     const first = renderList(w.stack);
-    expect(await screen.findByText('2 inspections are no longer on your list. Their unsent data is still on this device.')).toBeInTheDocument();
+    expect(await screen.findByText('2 inspections are no longer on your list. If anything on them was not sent, it is still on this device.')).toBeInTheDocument();
     first.unmount();
     await w.db.run("DELETE FROM work_package WHERE inspection_id = 'q2'");
     renderList(w.stack);
-    expect(await screen.findByText('1 inspection is no longer on your list. Its unsent data is still on this device.')).toBeInTheDocument();
+    expect(await screen.findByText('1 inspection is no longer on your list. If anything on it was not sent, it is still on this device.')).toBeInTheDocument();
   });
 
   it('no summary banner when nothing is quarantined', async () => {

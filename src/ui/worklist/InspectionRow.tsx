@@ -1,7 +1,7 @@
 import { Button } from '../kit';
 import { Badge } from './Badge';
 import { REFRESH_ERROR_TEXT, plural } from './copy';
-import { whenLabel } from './format';
+import { shortTitle, whenLabel } from './format';
 import type { WorkListRow } from './model';
 import { ExportBlock, RowQuarantineBanner } from './QuarantineBanner';
 
@@ -17,11 +17,6 @@ export interface InspectionRowProps {
   onRemove(row: WorkListRow): void;
   /** When absent, no export button and no export wording is rendered. */
   onExport: ((id: string) => void) | undefined;
-}
-
-/** The title shown for an inspection with no cached address: a short form of its id. */
-export function shortTitle(row: Pick<WorkListRow, 'id' | 'title'>): string {
-  return row.title ?? `Inspection ${row.id.slice(0, 8)}`;
 }
 
 /** The colour of the card's left edge: the worst thing true of the inspection, so a list can be scanned by edge alone. */
@@ -41,7 +36,7 @@ export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRem
   return (
     <li data-testid={`row-${row.id}`} className={`relative flex flex-col gap-3 rounded-ih-card border border-l-4 border-ih-border bg-ih-bg-card p-3 shadow-ih-card ${edgeOf(row)}`}>
       <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
           <h3 className="font-ih-display text-base font-semibold leading-snug text-ih-fg-1">
             <button
               type="button"
@@ -50,7 +45,7 @@ export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRem
               onClick={() => {
                 if (!inert) onOpen(row);
               }}
-              className={`min-h-11 w-full break-words rounded-ih-button py-2 text-left focus-visible:outline-none focus-visible:shadow-ih-focus after:absolute after:inset-0 after:content-[''] ${inert ? 'cursor-default' : ''}`}
+              className={`min-h-11 w-full break-words [overflow-wrap:anywhere] rounded-ih-button py-2 text-left focus-visible:outline-none focus-visible:shadow-ih-focus after:absolute after:inset-0 after:content-[''] ${inert ? 'cursor-default' : ''}`}
             >
               {title}
             </button>

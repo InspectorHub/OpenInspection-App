@@ -1,4 +1,5 @@
 import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { realTimers, type TimerPort } from '../collab/timers';
 import { setPinned } from '../offline/pins';
 import type { Network } from '../platform/network';
 import { Button, Notice } from './kit';
@@ -12,6 +13,7 @@ import { QuarantineSummary } from './worklist/QuarantineBanner';
 import { ReconcileStatus } from './worklist/ReconcileStatus';
 import { RemoveDialog } from './worklist/RemoveDialog';
 import { RepairPanel } from './worklist/RepairPanel';
+import { RowBoundary } from './worklist/RowBoundary';
 import { StatusStrip } from './worklist/StatusStrip';
 import { useOnline } from './worklist/useOnline';
 import { WorkListHeader } from './worklist/WorkListHeader';
@@ -22,7 +24,10 @@ export interface WorkListProps {
   stack: WorkListStack;
   /** The editor opens here (Task 9). The default does nothing. A quarantined or removing row never calls it. */
   onOpenInspection?: (inspectionId: string) => void;
-  /** Offers an export on quarantined rows, with the responsibility wording. Without it no export is offered. */
+  /**
+   * Offers an export on quarantined rows, with the responsibility wording. Without it no export is offered. `SignedIn` does not
+   * supply it yet (Task 11 builds the export), so the quarantined rows of the real app show no export button for now.
+   */
   onExport?: (inspectionId: string) => void;
   /** Link state. Without it the page's own online and offline events are used. */
   network?: Pick<Network, 'online' | 'onChange'>;
@@ -31,6 +36,8 @@ export interface WorkListProps {
   locale?: string;
   /** How often the list is read again while the page is visible. 0 turns the interval off. */
   pollMs?: number;
+  /** The timers that end a short-lived note. Defaults to the real ones. */
+  timers?: TimerPort;
 }
 
 function Skeleton() {
@@ -62,7 +69,7 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
  * The home of a signed-in device: today's work, what is on the device, and what has not reached the server. Everything
  * shown is read from the database through the stack; the screen remembers only what it is in the middle of doing.
  */
-export function WorkList({ stack, onOpenInspection, onExport, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS }: WorkListProps) {
+export function WorkList({ stack, onOpenInspection, onExport, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers }: WorkListProps) {
   const language = locale ?? (typeof navigator === 'undefined' ? undefined : navigator.language);
   const model = useWorkListModel(stack, { now, pollMs });
   const status = useSyncExternalStore(stack.status.subscribe, stack.status.get);
@@ -135,7 +142,15 @@ export function WorkList({ stack, onOpenInspection, onExport, network, now = Dat
       />
       <StatusStrip status={status} />
       {snapshot !== null && (
-        <ReconcileStatus outcome={snapshot.reconcile} now={now()} locale={language} onCheck={() => stack.reconciler.trigger('manual')} onReview={snapshot.repair.rows.length > 0 ? review : null} />
+        <ReconcileStatus
+          outcome={snapshot.reconcile}
+          now={now()}
+          locale={language}
+          onCheck={() => stack.reconciler.trigger('manual')}
+          canRun={online !== false && snapshot.reconcile.status !== 'never'}
+          timers={timers}
+          onReview={snapshot.repair.rows.length > 0 ? review : null}
+        />
       )}
       <QuarantineSummary count={quarantined} />
       {note !== null && <Notice tone="info">{note}</Notice>}
@@ -156,33 +171,50 @@ export function WorkList({ stack, onOpenInspection, onExport, network, now = Dat
         return (
           <Group key={group} group={group} rows={inGroup}>
             {inGroup.map((row) => (
-              <InspectionRow
-                key={row.id}
-                row={row}
-                locale={language}
-                company={snapshot?.company ?? null}
-                onOpen={(r) => onOpenInspection?.(r.id)}
-                onTogglePin={(r) => void latch(() => togglePin(r))}
-                onRemove={(r) => {
-                  trigger.current = document.activeElement;
-                  setRemoving(r);
-                }}
-                onExport={onExport}
-              />
+              <RowBoundary key={row.id}>
+                <InspectionRow
+                  row={row}
+                  locale={language}
+                  company={snapshot?.company ?? null}
+                  onOpen={(r) => onOpenInspection?.(r.id)}
+                  onTogglePin={(r) => void latch(() => togglePin(r))}
+                  onRemove={(r) => {
+                    trigger.current = document.activeElement;
+                    setRemoving(r);
+                  }}
+                  onExport={onExport}
+                />
+              </RowBoundary>
             ))}
           </Group>
         );
       })}
 
-      {snapshot !== null && <FailedItemsPanel stack={stack} rows={rows} outbox={snapshot.failedOutbox} media={snapshot.failedMedia} reload={model.reload} />}
-      {snapshot !== null && <RepairPanel stack={stack} rows={snapshot.repair.rows} foreign={snapshot.repair.foreign} reload={model.reload} headingRef={repairRef} />}
+      {snapshot !== null && <FailedItemsPanel stack={stack} rows={rows} outbox={snapshot.failedOutbox} media={snapshot.failedMedia} now={now} reload={model.reload} notify={setNote} />}
+      {snapshot !== null && (
+        <RepairPanel
+          stack={stack}
+          rows={snapshot.repair.rows}
+          foreign={snapshot.repair.foreign}
+          orphanMedia={snapshot.repair.orphanMedia}
+          foreignMedia={snapshot.repair.foreignMedia}
+          reload={model.reload}
+          headingRef={repairRef}
+        />
+      )}
 
       {removing !== null && (
         <RemoveDialog
           stack={stack}
           row={removing}
           now={now}
+          reload={model.reload}
           onClose={closeRemove}
+          onUnavailable={(message) => {
+            setRemoving(null);
+            setNote(message);
+            headingRef.current?.focus();
+          }}
           onRemoved={() => {
             setRemoving(null);
             setNote('Removed from this device.');

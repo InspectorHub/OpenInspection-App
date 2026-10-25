@@ -181,3 +181,24 @@ export const DISCARD_THREW = 'Could not discard this change. Try again.';
 export const PIN_REFUSED = 'This inspection cannot be pinned right now.';
 export const LOAD_FAILED = 'Could not read the work list from this device.';
 export const COUNTS_FAILED = 'Could not check what is on this device. Close this and try again.';
+
+export const RETRY_THREW = 'Could not retry. Try again.';
+export const CHECK_THREW = 'Could not start the check. Try again.';
+export const CHECK_REQUESTED = 'Check requested.';
+export const CHECK_IGNORED = 'Check could not run (offline or locked)';
+export const DATE_UNAVAILABLE = 'Date unavailable';
+export const ROW_UNAVAILABLE = 'This inspection could not be displayed';
+export const REMOVE_GONE = 'This inspection is no longer on this device.';
+export const REMOVE_NOT_ALLOWED = 'This inspection can no longer be removed from here. Check the list.';
+export const REMOVE_RUNNING = 'This inspection is being removed. It will finish on its own.';
+
+const OP_CONSEQUENCE: Record<string, string> = {
+  'inspection.update': 'These edits to the inspection details will not be sent.',
+  'inspection.complete': 'Marking the inspection complete will not be sent.',
+  'inspection.create': 'This new inspection will not be sent to the server.',
+};
+
+/** What is lost when a queued change of this kind is discarded. Fixed text per kind; an unknown kind gets the general one. */
+export function opConsequence(op: string): string {
+  return Object.hasOwn(OP_CONSEQUENCE, op) ? (OP_CONSEQUENCE[op] ?? 'This queued change will not be sent.') : 'This queued change will not be sent.';
+}

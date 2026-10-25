@@ -172,8 +172,10 @@ export async function setRevoked(db: Db): Promise<void> {
 
 /** The company name shown on the revoked screen: stored text, trimmed, bounded, or null. React escapes it on render. */
 export async function loadTenantName(db: Db): Promise<string | null> {
-  const rows = await db.query<{ value: string }>("SELECT value FROM device_state WHERE key = 'tenant_name'");
-  const trimmed = rows[0]?.value.trim() ?? '';
+  const rows = await db.query<{ value: unknown }>("SELECT value FROM device_state WHERE key = 'tenant_name'");
+  const value = rows[0]?.value;
+  // A value that is not text (an adapter may hand back null or bytes) is absent, never a failure of the whole read.
+  const trimmed = typeof value === 'string' ? value.trim() : '';
   if (trimmed.length === 0) return null;
   return Array.from(trimmed).slice(0, MAX_TENANT_NAME_LENGTH).join('');
 }

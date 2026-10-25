@@ -186,7 +186,8 @@ async function removeFile(files: PurgeDeps['files'], path: string): Promise<bool
 /**
  * Re-reads everything the decision engine looked at and sets the tombstone, in one transaction. Automatic: the owner, the
  * server's acknowledgement, no quarantine, no create still queued, the same fingerprint as the plan and an unsent
- * predicate that is false. User-confirmed: the owner, the acknowledgement and no create still queued. Resume: the owner
+ * predicate that is false. User-confirmed: the owner, no create still queued, and either the acknowledgement or (a package that
+ * was never sent) the absence of any create row, which is then the whole evidence. Resume: the owner
  * and a tombstone; an automatic one must still have no queued write and no photo row.
  */
 async function tombstone(deps: PurgeDeps, id: string, options: PurgeOptions): Promise<Phase> {
@@ -205,11 +206,15 @@ async function tombstone(deps: PurgeDeps, id: string, options: PurgeOptions): Pr
       }
       return { kind: 'go', tombstone: flag };
     }
-    if (Number(row.server_confirmed) !== 1) return refused('unconfirmed');
+    // The server never acknowledged it. Automatic mode never touches such a package. A person may remove one that was
+    // NEVER SENT: no create is queued for it any more (checked below, in this same transaction), so nothing can still
+    // make it exist on the server. This is the only way a package that is not server-confirmed becomes removable.
+    const neverSent = Number(row.server_confirmed) !== 1;
+    if (neverSent && options.mode !== 'user_confirmed') return refused('unconfirmed');
     // A person may take over an automatic tombstone that got stuck; nothing else may touch a row that is being purged.
     if (flag !== 0 && !(options.mode === 'user_confirmed' && flag === TOMBSTONE_AUTO)) return refused('tombstoned');
     // A person's word removes a quarantined inspection, or one a suspicious answer named; never a healthy one.
-    if (options.mode === 'user_confirmed' && flag === 0 && row.quarantine_source === null) {
+    if (options.mode === 'user_confirmed' && flag === 0 && row.quarantine_source === null && !neverSent) {
       if (!namesMassSuspicious(options.plan, id, account)) return refused('not_quarantined');
       // The plan is evidence about the state it saw. Minutes later the person may have kept editing, or the server may list the
       // inspection again; the confirmation covers only what the plan looked at, so any change refuses (a missing fingerprint too).

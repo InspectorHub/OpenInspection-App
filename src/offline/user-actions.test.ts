@@ -130,6 +130,76 @@ describe('removeFromDevice', () => {
   });
 });
 
+describe('removeFromDevice: an inspection that was never sent', () => {
+  /** Made on this device (server_confirmed = 0) with its photos, document, cache and edits, and no create queued any more. */
+  async function seedNeverSent(id: string): Promise<void> {
+    await world.seedFull(id);
+    await world.db.run('UPDATE work_package SET server_confirmed = 0 WHERE inspection_id = ?', [id]);
+  }
+
+  it('removes it with everything it holds for the account that owns it, and touches no other inspection', async () => {
+    await world.seedFull('p1');
+    await seedNeverSent('p2');
+    await world.seedFull('p3', { quarantine: 'reconcile_missing' });
+    expect((await world.counts('p2')).outbox).toBeGreaterThan(0);
+    expect((await world.counts('p2')).media).toBeGreaterThan(0);
+    const keep = [await world.data('p1'), await world.data('p3')];
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'purged' });
+    expect(await world.counts('p2')).toEqual(ZERO);
+    expect([await world.data('p1'), await world.data('p3')]).toEqual(keep);
+    expect(world.purgingSignals).toEqual(['p2']);
+  });
+
+  it('still needs the explicit confirmation', async () => {
+    await seedNeverSent('p2');
+    const hash = await world.hash();
+    await expect(removeFromDevice(deps(), 'p2', {} as { confirmed: true })).rejects.toThrow(/confirm/i);
+    expect(await world.hash()).toBe(hash);
+  });
+
+  it.each([['pending'], ['failed'], ['orphaned']])('refuses it while a create is still queued (%s): create_pending, nothing changes', async (state) => {
+    await seedNeverSent('p2');
+    await world.outbox('p2', state, { op: 'inspection.create' });
+    const hash = await world.hash();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'refused', reason: 'create_pending' });
+    expect(await world.hash()).toBe(hash);
+  });
+
+  it('never makes a healthy, server-confirmed inspection removable', async () => {
+    await world.seedFull('p2');
+    const hash = await world.hash();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'refused', reason: 'not_quarantined' });
+    expect(await world.hash()).toBe(hash);
+  });
+
+  it("refuses another account's never-sent inspection, and one that belongs to nobody", async () => {
+    await seedNeverSent('p2');
+    await world.db.run("UPDATE work_package SET user_id = 'bob' WHERE inspection_id = 'p2'");
+    const hash = await world.hash();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'refused', reason: 'not_owner' });
+    expect(await world.hash()).toBe(hash);
+    await world.db.run('UPDATE work_package SET tenant_id = NULL, user_id = NULL WHERE inspection_id = ?', ['p2']);
+    const hash2 = await world.hash();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'refused', reason: 'not_owner' });
+    expect(await world.hash()).toBe(hash2);
+  });
+
+  it('is refused while the device is locked, with nothing changed', async () => {
+    await seedNeverSent('p2');
+    const hash = await world.hash();
+    world.state.locked = true;
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'locked' });
+    expect(await world.hash()).toBe(hash);
+  });
+
+  it("a create row of ANOTHER account for the same id counts as a create still queued: refused, nothing deleted", async () => {
+    await seedNeverSent('p2');
+    await world.outbox('p2', 'failed', { op: 'inspection.create', account: BOB });
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true })).toEqual({ kind: 'refused', reason: 'create_pending' });
+    expect((await world.counts('p2')).work_package).toBe(1);
+  });
+});
+
 describe('discardMedia', () => {
   it('throws without an explicit confirmation and changes nothing', async () => {
     await seedQuarantined('p2');

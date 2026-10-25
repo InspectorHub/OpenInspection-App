@@ -1,3 +1,5 @@
+import { DATE_UNAVAILABLE } from './copy';
+
 /** Which part of the work list an inspection sits under. */
 export type GroupKey = 'today' | 'tomorrow' | 'later' | 'earlier' | 'unscheduled';
 
@@ -18,9 +20,14 @@ function dayNumber(ms: number): number {
   return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000);
 }
 
+/** True for a number a `Date` can hold (beyond +-8.64e15 ms it is an invalid date and every formatter throws). */
+function validDate(ms: number): boolean {
+  return Number.isFinite(ms) && !Number.isNaN(new Date(ms).getTime());
+}
+
 /** The group of a scheduled time, by the device's own calendar day. */
 export function groupOf(scheduledAt: number | null, now: number): GroupKey {
-  if (scheduledAt === null || !Number.isFinite(scheduledAt)) return 'unscheduled';
+  if (scheduledAt === null || !Number.isFinite(scheduledAt) || !validDate(scheduledAt) || !validDate(now)) return 'unscheduled';
   const diff = dayNumber(scheduledAt) - dayNumber(now);
   if (diff < 0) return 'earlier';
   if (diff === 0) return 'today';
@@ -38,9 +45,15 @@ function formatter(locale: string | undefined, options: Intl.DateTimeFormatOptio
 
 /** The time of day for today and tomorrow, the date and time for other days, null when there is no date. */
 export function whenLabel(scheduledAt: number | null, group: GroupKey, locale?: string): string | null {
-  if (scheduledAt === null || group === 'unscheduled') return null;
-  if (group === 'today' || group === 'tomorrow') return formatter(locale, { hour: 'numeric', minute: '2-digit' }).format(scheduledAt);
-  return formatter(locale, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(scheduledAt);
+  if (scheduledAt === null) return null;
+  // A date that is stored but cannot be used (not a number, out of range) is said to be unavailable, never left to throw.
+  if (group === 'unscheduled') return DATE_UNAVAILABLE;
+  try {
+    if (group === 'today' || group === 'tomorrow') return formatter(locale, { hour: 'numeric', minute: '2-digit' }).format(scheduledAt);
+    return formatter(locale, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(scheduledAt);
+  } catch {
+    return DATE_UNAVAILABLE;
+  }
 }
 
 function relative(at: number, now: number, locale: string | undefined): string {
@@ -62,10 +75,33 @@ function relative(at: number, now: number, locale: string | undefined): string {
 
 /** "Updated 5 minutes ago", in the device's language for the time part. Never a raw timestamp. */
 export function updatedLabel(at: number | null, now: number, locale?: string): string {
-  return at === null ? 'Not updated yet' : `Updated ${relative(at, now, locale)}`;
+  if (at === null) return 'Not updated yet';
+  try {
+    return `Updated ${relative(at, now, locale)}`;
+  } catch {
+    return DATE_UNAVAILABLE;
+  }
 }
 
 /** "Checked 2 minutes ago", or "Not checked yet". */
 export function checkedLabel(at: number | null, now: number, locale?: string): string {
-  return at === null ? 'Not checked yet' : `Checked ${relative(at, now, locale)}`;
+  if (at === null) return 'Not checked yet';
+  try {
+    return `Checked ${relative(at, now, locale)}`;
+  } catch {
+    return DATE_UNAVAILABLE;
+  }
+}
+
+/** Direction-changing and invisible mark characters (U+202A-202E, U+2066-2069, U+200E, U+200F): they can reorder the text around them. */
+const BIDI = /[‪-‮⁦-⁩‎‏]/g;
+
+/** Text from the server or from a cache, made safe to place next to our own words. */
+export function stripBidi(text: string): string {
+  return text.replace(BIDI, '');
+}
+
+/** The title shown for an inspection with no cached address: a short form of its id. */
+export function shortTitle(row: { id: string; title: string | null }): string {
+  return row.title ?? `Inspection ${row.id.slice(0, 8)}`;
 }

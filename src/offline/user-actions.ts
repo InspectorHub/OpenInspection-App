@@ -64,7 +64,8 @@ async function lockedNow(deps: Pick<UserActionDeps, 'isLocked'>): Promise<boolea
 /**
  * "No longer on the server, remove from this device." A person-confirmed purge: the queued writes and photos of the
  * inspection go too. Only for an inspection that is quarantined, one a suspicious answer named in the latest plan, or one
- * whose purge stopped on its own (tombstone 1 or 2: the person finishes it). Anything else is refused as `not_quarantined`:
+ * whose purge stopped on its own (tombstone 1 or 2: the person finishes it), or one made on this device that was never
+ * sent (`server_confirmed = 0`) and has no create queued, in any state, for any account (`create_pending` otherwise). Anything else is refused as `not_quarantined`:
  * this is not a way to wipe a healthy inspection. Takes the shared lease (`busy` when another flow holds it) and renews it
  * between the purge's steps (`lease_lost` when it was taken over).
  *
@@ -88,12 +89,18 @@ export async function removeFromDevice(deps: UserActionDeps, inspectionId: strin
   const who = account;
   const leaseOptions = { clock: deps.clock, ...(deps.leaseTtlMs === undefined ? {} : { ttlMs: deps.leaseTtlMs }), ...(deps.newToken === undefined ? {} : { newToken: deps.newToken }) };
   const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease): Promise<RemoveOutcome> => {
-    const rows = await deps.db.query<{ tenant_id: string | null; user_id: string | null; purging: number; quarantine_source: string | null }>('SELECT tenant_id, user_id, purging, quarantine_source FROM work_package WHERE inspection_id = ?', [inspectionId]);
+    const rows = await deps.db.query<{ tenant_id: string | null; user_id: string | null; purging: number; quarantine_source: string | null; server_confirmed: number }>(
+      'SELECT tenant_id, user_id, purging, quarantine_source, server_confirmed FROM work_package WHERE inspection_id = ?',
+      [inspectionId],
+    );
     const row = rows[0];
     if (row === undefined) return { kind: 'refused', reason: 'no_package' };
     if (!sameAccount(who, row.tenant_id, row.user_id)) return { kind: 'refused', reason: 'not_owner' };
     const flag = Number(row.purging);
-    if (flag === 0 && row.quarantine_source === null && !massEvidence(options.plan, inspectionId, who, deps.clock.now())) return { kind: 'refused', reason: 'not_quarantined' };
+    // A package the server never acknowledged is the person's own to remove once no create is queued for it; the purge
+    // re-checks both facts inside its tombstone transaction. A server-confirmed one still needs the quarantine or the plan.
+    const neverSent = Number(row.server_confirmed) !== 1;
+    if (flag === 0 && row.quarantine_source === null && !neverSent && !massEvidence(options.plan, inspectionId, who, deps.clock.now())) return { kind: 'refused', reason: 'not_quarantined' };
     // A person-confirmed tombstone is finished as it is; an automatic one that got stuck is taken over by this confirmation.
     // The purge asks again between its steps, so a lock that arrives mid-way stops it with the tombstone kept.
     // It also renews the shared lease, like the resume and the executor: a purge of an inspection with many photos can outlive

@@ -6,13 +6,13 @@ import { Button, Notice } from '../kit';
  */
 export function QuarantineSummary({ count }: { count: number }) {
   if (count === 0) return null;
-  return <Notice tone="watch">{count === 1 ? '1 inspection is no longer on your list. Its unsent data is still on this device.' : `${String(count)} inspections are no longer on your list. Their unsent data is still on this device.`}</Notice>;
+  return <Notice tone="watch">{count === 1 ? '1 inspection is no longer on your list. If anything on it was not sent, it is still on this device.' : `${String(count)} inspections are no longer on your list. If anything on them was not sent, it is still on this device.`}</Notice>;
 }
 
 export function RowQuarantineBanner() {
   return (
     <p className="rounded-ih-card bg-ih-watch-bg px-3 py-2 text-sm leading-relaxed text-ih-watch-fg">
-      No longer assigned to you or removed from the server. Your unsent data is still on this device. It can no longer be edited or sent.
+      No longer assigned to you or removed from the server. If anything on this inspection was not sent, it is still on this device. It can no longer be edited or sent.
     </p>
   );
 }

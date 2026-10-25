@@ -451,13 +451,34 @@ describe('the user-confirmed purge', () => {
     expect(await confirmed('p2')).toEqual({ kind: 'purged' });
   });
 
-  it('still refuses a package of another account and one the server never acknowledged', async () => {
+  it('still refuses a package of another account, and one the server never acknowledged while its create is queued', async () => {
     await world.seedFull('p2');
     await world.db.run("UPDATE work_package SET user_id = 'bob' WHERE inspection_id = 'p2'");
     expect(await confirmed('p2')).toEqual({ kind: 'refused', reason: 'not_owner' });
     await world.db.run("UPDATE work_package SET user_id = 'alice', server_confirmed = 0 WHERE inspection_id = 'p2'");
-    expect(await confirmed('p2')).toEqual({ kind: 'refused', reason: 'unconfirmed' });
-    expect((await world.counts('p2')).outbox).toBe(2);
+    await world.outbox('p2', 'failed', { op: 'inspection.create' });
+    expect(await confirmed('p2')).toEqual({ kind: 'refused', reason: 'create_pending' });
+    expect((await world.counts('p2')).outbox).toBe(3);
+  });
+
+  it('a package that was never sent (not acknowledged, no create queued) is removed on the owner confirming it, quarantined or not', async () => {
+    await world.seedFull('p2');
+    await world.db.run('UPDATE work_package SET server_confirmed = 0 WHERE inspection_id = ?', ['p2']);
+    expect(await purgeInspection(world.purgeDeps(), 'p2', { mode: 'user_confirmed', account: ALICE, authority: purgeAuthorityForTest() })).toEqual({ kind: 'purged' });
+    expect(await world.counts('p2')).toEqual(ZERO);
+  });
+
+  it('control: the automatic mode still refuses the same never-sent package as unconfirmed', async () => {
+    await world.seedPurgeable('p2');
+    await world.db.run('UPDATE work_package SET server_confirmed = 0 WHERE inspection_id = ?', ['p2']);
+    expect(await auto('p2')).toEqual({ kind: 'refused', reason: 'unconfirmed' });
+  });
+
+  it('a healthy server-confirmed package that is not quarantined is still refused as not_quarantined', async () => {
+    await world.seedFull('p2');
+    const hash = await world.hash();
+    expect(await purgeInspection(world.purgeDeps(), 'p2', { mode: 'user_confirmed', account: ALICE, authority: purgeAuthorityForTest() })).toEqual({ kind: 'refused', reason: 'not_quarantined' });
+    expect(await world.hash()).toBe(hash);
   });
 
   it("another account's queued write for the same inspection id stops the purge instead of being deleted", async () => {

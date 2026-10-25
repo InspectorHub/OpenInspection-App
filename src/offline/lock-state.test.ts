@@ -270,6 +270,16 @@ describe('loadTenantName', () => {
     expect(await loadTenantName(db)).toBeNull();
   });
 
+  it.each([[null], [42], [new Uint8Array([65])], [{ a: 1 }]])('treats a stored value that is not text (%j) as absent instead of throwing', async (value) => {
+    const stub: Db = {
+      execute: () => Promise.reject(new Error('unused')),
+      query: <T>() => Promise.resolve([{ value }] as unknown as T[]),
+      run: () => Promise.reject(new Error('unused')),
+      transaction: () => Promise.reject(new Error('unused')),
+    };
+    expect(await loadTenantName(stub)).toBeNull();
+  });
+
   it('returns the stored name trimmed', async () => {
     await put('tenant_name', '  Acme Inspections  ');
     expect(await loadTenantName(db)).toBe('Acme Inspections');

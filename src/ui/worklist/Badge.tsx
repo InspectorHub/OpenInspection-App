@@ -12,5 +12,5 @@ const TONES: Record<BadgeTone, string> = {
 
 /** A short state label. The words carry the meaning; the tone only helps the eye, so it is never the only signal. */
 export function Badge({ tone, children }: { tone: BadgeTone; children: ReactNode }) {
-  return <span className={`inline-flex max-w-full items-center rounded-ih-pill px-2 py-1 text-left text-xs font-bold leading-snug ${TONES[tone]}`}>{children}</span>;
+  return <span className={`inline-flex max-w-full items-center break-words [overflow-wrap:anywhere] rounded-ih-pill px-2 py-1 text-left text-xs font-bold leading-snug ${TONES[tone]}`}>{children}</span>;
 }
