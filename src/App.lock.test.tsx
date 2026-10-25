@@ -93,7 +93,8 @@ describe('the lock is decided again while the app is open', () => {
     await screen.findByRole('heading', { name: 'Verification needed' });
     expect(await dataRows(world.db)).toEqual(before);
     await setRevoked(world.db);
-    await waitFor(() => expect(appState.listeners()).toBe(1));
+    // The lock monitor, and the sweep of old export archives that runs on every return to the foreground.
+    await waitFor(() => expect(appState.listeners()).toBe(2));
     act(() => appState.emit(true));
     await screen.findByText(/This data belongs to your company/);
     expect(await dataRows(world.db)).toEqual(before);
@@ -107,8 +108,8 @@ describe('the lock is decided again while the app is open', () => {
     world.clock.advance(DAY_MS);
     await evaluateAndPersist(world.db, world.clock.now());
     world.clock.set(START);
-    // Two subscribers: the lock monitor, and the server version policy that is read again on every return to the foreground.
-    await waitFor(() => expect(appState.listeners()).toBe(2));
+    // Three subscribers: the lock monitor, the sweep of old export archives, and the server version policy that is read again on every return to the foreground.
+    await waitFor(() => expect(appState.listeners()).toBe(3));
     act(() => appState.emit(true));
     expect(await screen.findByRole('heading', { name: 'Check your date and time' })).toBeInTheDocument();
   });

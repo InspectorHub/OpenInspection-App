@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { clientPolicy, createClientState } from '../app/client-state';
 import { createMemoryKeyValue } from '../platform/kv';
 import { createExporter, type Exporter, type ExporterDeps } from './exporter';
+import type { ReconcileGate } from './reconcile-gate';
 import { EXPORT_FILE_PATTERN } from './format';
 import { createExportWorld, seedInspection, sharedPackage, snapshotTables, tableCounts, type ExportWorld } from './test-support/world';
 import { manifestViolations } from './test-support/engine-contract';
 
 function exporterFor(world: ExportWorld, extra: Partial<ExporterDeps> = {}): Exporter {
-  return createExporter({ db: world.db, files: world.files, clock: world.clock, sharer: world.sharer, ...extra });
+  return createExporter({ db: world.db, files: world.files, clock: world.clock, sharer: world.sharer, platform: 'ios', ...extra });
 }
 
 async function threeInspections(world: ExportWorld, quarantined: string[] = []): Promise<void> {
@@ -94,7 +95,7 @@ describe('preparing: counts, company and the reconcile that runs before building
     });
     const prep = await exporter.prepare();
     expect(seen).toEqual(['read:0 written:0']);
-    expect(prep).toEqual({ confirmed: true, included: 3, quarantined: 0, company: 'Acme Inspections' });
+    expect(prep).toEqual({ confirmed: true, included: 3, quarantined: 0, company: 'Acme Inspections', reportIdUnknown: 3, ids: ['insp-a', 'insp-b', 'insp-c'] });
   });
 
   it('counts the quarantined ones apart from the rest', async () => {
@@ -106,7 +107,7 @@ describe('preparing: counts, company and the reconcile that runs before building
   it('without a reconcile (the lock screen has none) the check is unconfirmed, and the company is null when unknown', async () => {
     const world = await createExportWorld();
     await threeInspections(world);
-    expect(await exporterFor(world).prepare()).toEqual({ confirmed: false, included: 3, quarantined: 0, company: null });
+    expect(await exporterFor(world).prepare()).toMatchObject({ confirmed: false, included: 3, quarantined: 0, company: null });
   });
 
   it('a reconcile that fails or throws is unconfirmed and does not stop the export', async () => {
@@ -182,6 +183,71 @@ describe('export never changes anything on the device', () => {
     const world = await createExportWorld({ account: null });
     expect(await exporterFor(world).run({ includeQuarantined: false, confirmed: false })).toEqual({ kind: 'failed', code: 'not_signed_in' });
     expect(world.sharer.calls).toEqual([]);
+  });
+});
+
+describe('preparing may change the device, running never may', () => {
+  it('only the reconcile inside prepare can change state; run changes nothing even after it did', async () => {
+    const world = await createExportWorld();
+    await threeInspections(world);
+    const reconcile: ReconcileGate = async () => {
+      await world.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = 'insp-b'");
+      return true;
+    };
+    const exporter = exporterFor(world, { reconcile });
+    const before = await snapshotTables(world.db);
+    const prep = await exporter.prepare();
+    expect(await snapshotTables(world.db)).not.toEqual(before);
+    expect(prep).toMatchObject({ included: 2, quarantined: 1 });
+    const afterPrepare = await snapshotTables(world.db);
+    await exporter.run({ includeQuarantined: false, confirmed: true, expected: prep.ids });
+    expect(await snapshotTables(world.db)).toEqual(afterPrepare);
+  });
+
+  it('an inspection that became quarantined or purging after the question is left out and counted', async () => {
+    for (const change of ["quarantine_source = 'reconcile_missing'", 'purging = 1']) {
+      const world = await createExportWorld();
+      await threeInspections(world);
+      const exporter = exporterFor(world);
+      const prep = await exporter.prepare();
+      expect(prep.ids).toEqual(['insp-a', 'insp-b', 'insp-c']);
+      await world.db.run(`UPDATE work_package SET ${change} WHERE inspection_id = 'insp-b'`);
+      const outcome = await exporter.run({ includeQuarantined: false, confirmed: true, expected: prep.ids });
+      expect(outcome).toMatchObject({ kind: 'shared', inspections: 2, changedSincePrepare: 1 });
+      expect(sharedPackage(world).manifest.inspections.map((row) => row.id)).toEqual(['insp-a', 'insp-c']);
+    }
+  });
+
+  it('control: nothing changed since the question counts zero', async () => {
+    const world = await createExportWorld();
+    await threeInspections(world);
+    const exporter = exporterFor(world);
+    const prep = await exporter.prepare();
+    expect(await exporter.run({ includeQuarantined: false, confirmed: true, expected: prep.ids })).toMatchObject({ changedSincePrepare: 0 });
+  });
+
+  it('says so when everything the person saw is gone', async () => {
+    const world = await createExportWorld();
+    await seedInspection(world, 'insp-a', { writes: ['update'] });
+    const exporter = exporterFor(world);
+    const prep = await exporter.prepare();
+    await world.db.run('UPDATE work_package SET purging = 1');
+    expect(await exporter.run({ includeQuarantined: false, confirmed: true, expected: prep.ids })).toEqual({ kind: 'nothing', changedSincePrepare: 1 });
+  });
+});
+
+describe('an account the engine would refuse', () => {
+  it('is refused with its own fixed code, and nothing is built or shared', async () => {
+    const world = await createExportWorld({ account: { tenantId: 'tenant-1', userId: 'alice smith!' } });
+    await seedInspection(world, 'insp-a', { owner: { tenantId: 'tenant-1', userId: 'alice smith!' }, writes: ['update'] });
+    expect(await exporterFor(world).run({ includeQuarantined: false, confirmed: true })).toEqual({ kind: 'failed', code: 'invalid_account' });
+    expect(world.sharer.calls).toEqual([]);
+    expect(world.files.writtenBytes()).toBe(0);
+  });
+
+  it('a tenant id outside the pattern is refused the same way', async () => {
+    const world = await createExportWorld({ account: { tenantId: 'tenant/1', userId: 'alice' } });
+    expect(await exporterFor(world).run({ includeQuarantined: false, confirmed: true })).toEqual({ kind: 'failed', code: 'invalid_account' });
   });
 });
 

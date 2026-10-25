@@ -53,3 +53,11 @@ export const EXPORT_FILE_PATTERN = /^inspectorhub-export-(\d{10,16})\.zip$/;
 export function exportFileName(nowMs: number): string {
   return `${EXPORT_FILE_PREFIX}${String(Math.floor(nowMs))}.zip`;
 }
+
+/**
+ * How long an export archive stays in the cache after the share sheet returned, on Android. @capacitor/share has no "the target
+ * finished reading" signal: on Android its promise settles when the chooser closes or a target is picked, and a translucent or
+ * dialog-style target makes it reject "Share canceled" although the person did pick one. Deleting at once could pull the file out
+ * from under Gmail or Drive, so the archive is kept for this long and swept by age (the time is in the file name).
+ */
+export const EXPORT_RETAIN_MS = 10 * 60_000;

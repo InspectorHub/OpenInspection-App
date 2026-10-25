@@ -85,6 +85,21 @@ export interface ReplaceInspectionInput {
   refreshedAt: number;
 }
 
+const MAX_REPORT_ID_LENGTH = 128;
+
+/** The server's primary report id from the cached inspection read (`data.primaryReportId`), or null when absent or unusable. */
+export function primaryReportIdOf(resource: StagedResource | undefined): string | null {
+  if (resource === undefined) return null;
+  try {
+    const body: unknown = JSON.parse(resource.body);
+    const data = typeof body === 'object' && body !== null ? (body as { data?: unknown }).data : undefined;
+    const id = typeof data === 'object' && data !== null ? (data as { primaryReportId?: unknown }).primaryReportId : undefined;
+    return typeof id === 'string' && id.length > 0 && id.length <= MAX_REPORT_ID_LENGTH ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Replaces every cached resource of one inspection in ONE short transaction, after checking in that same
  * transaction that the package still exists, is not being purged, is not quarantined, is still confirmed by the server, belongs to
@@ -108,6 +123,9 @@ export async function replaceInspectionResources(db: Db, input: ReplaceInspectio
     if (bumped.changes !== 1) return 'stale_generation';
     await tx.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ?', [input.accountKey, input.inspectionId]);
     await insertAll(tx, input.accountKey, input.inspectionId, input.resources);
+    const reportId = primaryReportIdOf(input.resources.get(`/api/inspections/${input.inspectionId}`));
+    // Only a usable id is stored, and never over a stored one with nothing: an old server that does not send it changes no row.
+    if (reportId !== null) await tx.run('UPDATE work_package SET report_id = ? WHERE inspection_id = ? AND tenant_id = ? AND user_id = ?', [reportId, input.inspectionId, row.tenant_id, row.user_id]);
     return 'replaced';
   });
 }

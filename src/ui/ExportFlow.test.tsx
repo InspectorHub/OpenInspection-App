@@ -1,33 +1,13 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReconcileGate } from '../export/reconcile-gate';
-import { createExportWorld, seedInspection, sharedPackage, snapshotTables, type ExportWorld } from '../export/test-support/world';
-import { ExportFlow, type ExportFlowProps } from './ExportFlow';
+import { createExportWorld, seedInspection, sharedPackage, snapshotTables } from '../export/test-support/world';
+import { QUARANTINE_LABEL, RESPONSIBILITY, UNCONFIRMED, ready, threeWithOneQuarantined, view } from './test-support/export-view';
 
 afterEach(cleanup);
-
-const RESPONSIBILITY = (who: string): string => `This file contains customers' personal information and is not encrypted. ${who} is responsible for storing and deleting the file.`;
-const UNCONFIRMED = 'We could not confirm these inspections still exist, so the receiving office may refuse some of them.';
-const QUARANTINE_LABEL = 'Include inspections that were removed from my list (quarantined)';
-
-async function threeWithOneQuarantined(world: ExportWorld): Promise<void> {
-  for (const id of ['insp-a', 'insp-b', 'insp-c']) await seedInspection(world, id, { quarantined: id === 'insp-b', writes: ['update'], photos: [{ pendingId: `photo-${id}` }] });
-}
-
-function view(world: ExportWorld, props: Partial<ExportFlowProps> = {}) {
-  const onClose = vi.fn();
-  render(<ExportFlow services={{ db: world.db, files: world.files, clock: world.clock }} sharer={world.sharer} reconcile={() => Promise.resolve(true)} onClose={onClose} {...props} />);
-  return { onClose };
-}
-
-async function ready(): Promise<HTMLElement> {
-  const dialog = await screen.findByRole('alertdialog');
-  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Export' })).toBeEnabled());
-  return dialog;
-}
 
 describe('the question before an export', () => {
   it('states that the file is unencrypted and who keeps it, with the company name when it is known', async () => {
@@ -196,7 +176,7 @@ describe('pressing Export twice in one frame', () => {
     const dialog = await ready();
     await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Export' }));
     await inSheet;
-    expect(within(dialog).getByRole('status')).toHaveTextContent('Preparing the export');
+    expect(within(dialog).getByText('Preparing the export…')).toHaveAttribute('role', 'status');
     expect(within(dialog).getByRole('button', { name: 'Export' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
     await act(async () => {
@@ -243,7 +223,8 @@ describe('what the person is told afterwards', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Export' }));
     const result = await screen.findByRole('dialog');
     expect(within(result).getByRole('heading', { name: 'Export cancelled' })).toBeInTheDocument();
-    expect(within(result).getByText(/export file was deleted/)).toBeInTheDocument();
+    expect(within(result).getByText(/Sharing was cancelled or did not finish/)).toBeInTheDocument();
+    expect(within(result).queryByText(/export file was deleted/)).toBeNull();
     expect(world.files.cacheNames()).toEqual([]);
   });
 

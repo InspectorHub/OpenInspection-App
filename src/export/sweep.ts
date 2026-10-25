@@ -1,8 +1,8 @@
 import type { Files } from '../platform/files';
-import { EXPORT_FILE_PATTERN } from './format';
+import { EXPORT_FILE_PATTERN, EXPORT_RETAIN_MS } from './format';
 
-/** At app start the share sheet of a killed run may still be reading its file, so only archives older than this are removed. */
-export const APP_START_SWEEP_AGE_MS = 15 * 60_000;
+/** The age from which a sweep at start, on return to the foreground and on sign-out removes an archive: the bound the export itself keeps. */
+export const SWEEP_AGE_MS = EXPORT_RETAIN_MS;
 
 export interface SweepResult {
   removed: number;
@@ -16,7 +16,7 @@ export interface SweepResult {
  * Only names this app wrote are touched: `inspectorhub-export-<milliseconds>.zip`. The age comes from the time in the name, so no
  * platform timestamp is needed; a name dated in the future (the clock moved back) counts as stale. Nothing else in the cache is
  * listed, read or removed. `minAgeMs` of zero removes every such file, which is right at the start of an export (one at a time is
- * enforced) and wrong at app start, where the share sheet of a killed run may still be reading the file.
+ * enforced) and wrong elsewhere, where a share target may still be reading a recent file.
  *
  * Never throws: a cache that cannot be listed removes nothing, and a file that cannot be removed is counted.
  */

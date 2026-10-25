@@ -80,3 +80,19 @@ export function mediaIndexViolations(value: unknown): string[] {
   if (new Set(ids).size !== ids.length) out.push('duplicate pending id');
   return out;
 }
+
+/**
+ * The importer's report id rule (OpenInspection `server/services/offline-import.service.ts`, the loop over `existing`): for an
+ * inspection that already exists on the server and that the package does NOT create, the manifest's `reportId` must equal the
+ * server's primary report id, or the WHOLE package is refused with 400 "exported from a different report". For an inspection
+ * the package creates, the value is only a placeholder. `serverReports` maps each inspection the server has to its primary report id.
+ */
+export function reportIdViolations(manifest: { inspections: { id: string; reportId: string }[] }, outbox: { op: string; payload: Record<string, unknown> }[], serverReports: Readonly<Record<string, string>>): string[] {
+  const creates = new Set(outbox.filter((entry) => entry.op === 'inspection.create').map((entry) => entry.payload.id));
+  const out: string[] = [];
+  for (const row of manifest.inspections) {
+    const server = serverReports[row.id];
+    if (server !== undefined && !creates.has(row.id) && row.reportId !== server) out.push(`${row.id}: exported from a different report`);
+  }
+  return out;
+}

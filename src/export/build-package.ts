@@ -1,5 +1,6 @@
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
 import * as Y from 'yjs';
+import { resultsDocName } from '../collab/connector';
 import { MAX_MEDIA_BYTES } from '../media/store';
 import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
@@ -75,7 +76,7 @@ export async function readMergedState(db: Db, inspectionId: string): Promise<Uin
   try {
     let after = 0;
     for (;;) {
-      const rows = await db.query<{ id: number; data: unknown }>('SELECT id, data FROM ydoc_updates WHERE doc_name = ? AND id > ? ORDER BY id LIMIT ?', [`results-${inspectionId}`, after, UPDATE_PAGE_SIZE]);
+      const rows = await db.query<{ id: number; data: unknown }>('SELECT id, data FROM ydoc_updates WHERE doc_name = ? AND id > ? ORDER BY id LIMIT ?', [resultsDocName(inspectionId), after, UPDATE_PAGE_SIZE]);
       for (const row of rows) {
         Y.applyUpdate(doc, toBytes(row.data));
         after = Number(row.id);

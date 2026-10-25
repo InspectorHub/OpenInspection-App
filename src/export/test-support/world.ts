@@ -1,12 +1,16 @@
 import { unzipSync, type Unzipped } from 'fflate';
 import * as Y from 'yjs';
 import { saveIdentity } from '../../auth/server-config';
+import { resultsDocName } from '../../collab/connector';
+import { recordServerDeleteSet, recordServerStateVector } from '../../collab/sync-proof';
+import type { TimerPort } from '../../collab/timers';
 import { createManualClock, type ManualClock } from '../../platform/clock';
 import type { Db } from '../../platform/db';
 import { createSqlJsDb } from '../../platform/db-sqljs';
 import type { FileEntry } from '../../platform/files';
 import { migrate } from '../../platform/schema';
 import type { Account } from '../../offline/outbox';
+import type { ReconcileOutcome } from '../../offline/reconciler';
 import type { ExportFilesPort } from '../exporter';
 import type { Sharer } from '../share-package';
 
@@ -201,6 +205,8 @@ export interface SeedOptions {
   purging?: boolean;
   /** Number of edits stored as Yjs updates. 0 stores none. */
   edits?: number;
+  /** What the server is recorded to hold of the document: everything, only the first update, or nothing recorded (the default). */
+  server?: 'all' | 'first' | 'none';
   photos?: SeedPhoto[];
   writes?: ('create' | 'update' | 'complete')[];
   /** Overrides the state of every queued write seeded (a quarantined inspection holds them as orphaned). */
@@ -228,7 +234,8 @@ export function localDoc(world: ExportWorld, id: string): Promise<Y.Doc> {
 export async function seedInspection(world: ExportWorld, id: string, options: SeedOptions = {}): Promise<void> {
   const owner = options.owner ?? ALICE;
   const quarantined = options.quarantined === true;
-  const reportId = options.reportId === undefined ? `report-${id}` : options.reportId;
+  // The device never stores a report id unless the server sent one (see `primaryReportIdOf`), so the default is none.
+  const reportId = options.reportId === undefined ? null : options.reportId;
   await world.db.run(
     'INSERT INTO work_package (inspection_id, report_id, refreshed_at, quarantine_source, server_confirmed, tenant_id, user_id, purging) VALUES (?, ?, 1, ?, ?, ?, ?, ?)',
     [id, reportId, quarantined ? 'reconcile_missing' : null, options.confirmed === false ? 0 : 1, owner.tenantId, owner.userId, options.purging === true ? 1 : 0],
@@ -241,7 +248,16 @@ export async function seedInspection(world: ExportWorld, id: string, options: Se
     doc.on('update', (update: Uint8Array) => updates.push(update));
     for (let i = 0; i < edits; i += 1) doc.getMap<unknown>('results').set(`item-${String(i)}`, { rating: i, note: `note ${id} ${String(i)}` });
     doc.getMap<unknown>('results').set('photo', `pending:${options.photos?.[0]?.pendingId ?? 'none'}`);
-    for (const update of updates) await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [`results-${id}`, update]);
+    for (const update of updates) await world.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [resultsDocName(id), update]);
+    if (options.server === 'all') {
+      await recordServerStateVector(world.db, resultsDocName(id), Y.encodeStateVector(doc), NOW);
+      await recordServerDeleteSet(world.db, resultsDocName(id), Y.encodeStateAsUpdate(doc), NOW);
+    } else if (options.server === 'first' && updates[0] !== undefined) {
+      const first = new Y.Doc();
+      Y.applyUpdate(first, updates[0]);
+      await recordServerStateVector(world.db, resultsDocName(id), Y.encodeStateVector(first), NOW);
+      await recordServerDeleteSet(world.db, resultsDocName(id), Y.encodeStateAsUpdate(first), NOW);
+    }
   }
 
   for (const photo of options.photos ?? []) {
@@ -320,4 +336,48 @@ export function sharedPackage(world: ExportWorld, call = 0): ReadPackage {
   const bytes = world.sharer.calls[call]?.bytes;
   if (bytes === undefined) throw new Error('Nothing was shared');
   return readPackage(bytes);
+}
+
+/** Timers a test fires by hand: nothing runs until `fire()`. */
+export interface ManualTimers extends TimerPort {
+  /** Delays asked for and not yet fired or cleared. */
+  pending(): number[];
+  /** Every delay ever asked for, in order. */
+  asked(): number[];
+  /** Handles passed to `clearTimeout`. */
+  cleared(): unknown[];
+  /** Runs every pending callback. */
+  fire(): void;
+}
+
+export function createManualTimers(): ManualTimers {
+  const waiting = new Map<number, { ms: number; run: () => void }>();
+  const asked: number[] = [];
+  const cleared: unknown[] = [];
+  let next = 1;
+  return {
+    setTimeout: (run, ms) => {
+      const handle = next;
+      next += 1;
+      asked.push(ms);
+      waiting.set(handle, { ms, run });
+      return handle;
+    },
+    clearTimeout: (handle) => {
+      cleared.push(handle);
+      waiting.delete(handle as number);
+    },
+    pending: () => [...waiting.values()].map((entry) => entry.ms),
+    asked: () => [...asked],
+    cleared: () => [...cleared],
+    fire: () => {
+      const due = [...waiting.values()];
+      waiting.clear();
+      for (const entry of due) entry.run();
+    },
+  };
+}
+
+export function outcomeFixture(patch: Partial<ReconcileOutcome> = {}): ReconcileOutcome {
+  return { status: 'done', reason: null, at: 1, massSuspicious: false, allMissing: false, candidateCount: 0, unavailableRole: false, refusedNullInspectionId: false, counts: null, resumed: 0, resumeFailed: false, ...patch };
 }

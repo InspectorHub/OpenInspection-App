@@ -53,6 +53,8 @@ export interface WorldOptions {
   /** Replaces the network entirely (a device with no connection). */
   fetch?: FetchLike;
   appVersion?: string;
+  /** The manual clock's first instant. Defaults to a small number; set a real epoch time where file names carry the time. */
+  startMs?: number;
 }
 
 /** The real wiring over in-memory fakes: sql.js for the database, a map for the secure store. */
@@ -62,7 +64,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   await migrate(db, 0);
   const store = createMemorySecureStore();
   const files = createMemoryFiles();
-  const clock = createManualClock(9_000_000);
+  const clock = createManualClock(options.startMs ?? 9_000_000);
   const fetched: string[] = [];
   const base: FetchLike = options.fetch ?? server.fetch;
   const services = composeWith({
@@ -163,8 +165,8 @@ export function restartOffline(world: World): { services: AppServices; calls: st
 }
 
 /** A world where the app has connected to the fake server and signed in once. */
-export async function createSignedInWorld(): Promise<World> {
-  const world = await createWorld();
+export async function createSignedInWorld(options: WorldOptions = {}): Promise<World> {
+  const world = await createWorld(options);
   await connectToServer(world.services, world.server.origin);
   await world.services.flow.signIn(world.server.origin);
   return world;

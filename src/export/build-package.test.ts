@@ -3,8 +3,8 @@ import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 import { collectPlan } from './collect';
 import { buildPackage } from './build-package';
-import { ALICE, BOB, SECRETS, createExportWorld, jpegBytes, localDoc, seedInspection, type ExportWorld } from './test-support/world';
-import { ALLOWED_ENTRY, mediaIndexViolations, manifestViolations, outboxViolations } from './test-support/engine-contract';
+import { ALICE, BOB, SECRETS, createExportWorld, jpegBytes, localDoc, readPackage, seedInspection, type ExportWorld } from './test-support/world';
+import { ALLOWED_ENTRY, mediaIndexViolations, manifestViolations, outboxViolations, reportIdViolations } from './test-support/engine-contract';
 
 const IDENTITY = { tenantId: ALICE.tenantId, userId: ALICE.userId };
 
@@ -29,7 +29,7 @@ function manifestOf(bytes: Uint8Array): Record<string, unknown> {
 describe('the package the engine accepts', () => {
   it('writes a manifest that passes the engine schema, from the verified identity and the device', async () => {
     const world = await createExportWorld();
-    await seedInspection(world, 'insp-1', { writes: ['update'] });
+    await seedInspection(world, 'insp-1', { writes: ['update'], reportId: 'report-insp-1' });
     const { bytes } = await build(world);
     const manifest = manifestOf(bytes);
     expect(manifestViolations(manifest)).toEqual([]);
@@ -146,7 +146,7 @@ describe('the package the engine accepts', () => {
     });
     const plan = await collectPlan(world.db, IDENTITY, { includeQuarantined: false });
     expect(plan.photos.map((photo) => photo.pendingId)).toEqual(['p1']);
-    expect(plan.omitted).toMatchObject({ videos: 1, photoEdits: 2 });
+    expect(plan.omitted).toMatchObject({ videos: 1, photoEdits: 1 });
   });
 
   it('skips a photo it cannot read, empty or over the size limit, and says how many', async () => {
@@ -177,13 +177,34 @@ describe('the package the engine accepts', () => {
     expect(planted).toContain(SECRETS[0]);
   });
 
-  it('uses a placeholder report id for an inspection whose report id the device never learned', async () => {
+  it('writes the report id the server gave, and the importer accepts it for an inspection the server already has', async () => {
     const world = await createExportWorld();
-    await seedInspection(world, 'insp-1', { reportId: null, confirmed: false, writes: ['create'] });
+    await seedInspection(world, 'insp-1', { reportId: 'report-9', writes: ['update'] });
     const { bytes } = await build(world);
-    const manifest = manifestOf(bytes) as { inspections: { reportId: string }[] };
-    expect(manifest.inspections[0]?.reportId).toBe('unassigned');
-    expect(manifestViolations(manifest)).toEqual([]);
+    const pkg = readPackage(bytes);
+    expect(pkg.manifest.inspections[0]?.reportId).toBe('report-9');
+    expect(reportIdViolations(pkg.manifest, pkg.outbox, { 'insp-1': 'report-9' })).toEqual([]);
+  });
+
+  it('writes a placeholder when the report id is unknown, which the importer refuses for an inspection it has and the package does not create', async () => {
+    const world = await createExportWorld();
+    await seedInspection(world, 'insp-1', { writes: ['update'] });
+    const { bytes } = await build(world);
+    const pkg = readPackage(bytes);
+    expect(pkg.manifest.inspections[0]?.reportId).toBe('unassigned');
+    expect(manifestViolations(pkg.manifest)).toEqual([]);
+    // Documented expectation, not a pass: the format is valid, and the importer still refuses the whole package here.
+    expect(reportIdViolations(pkg.manifest, pkg.outbox, { 'insp-1': 'report-9' })).toEqual(['insp-1: exported from a different report']);
+  });
+
+  it('control: the same placeholder is fine for an inspection the package creates', async () => {
+    const world = await createExportWorld();
+    await seedInspection(world, 'insp-1', { confirmed: false, writes: ['create'] });
+    const { bytes } = await build(world);
+    const pkg = readPackage(bytes);
+    expect(pkg.manifest.inspections[0]?.reportId).toBe('unassigned');
+    expect(reportIdViolations(pkg.manifest, pkg.outbox, { 'insp-1': 'report-9' })).toEqual([]);
+    expect(reportIdViolations({ inspections: [{ id: 'x', reportId: 'a' }] }, [], { x: 'b' })).toEqual(['x: exported from a different report']);
   });
 });
 

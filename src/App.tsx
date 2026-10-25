@@ -4,7 +4,7 @@ import { loadIdentity, type StoredIdentity } from './auth/server-config';
 import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
 import { appDiagnostics } from './app/diagnostics';
-import { APP_START_SWEEP_AGE_MS, sweepStaleExports } from './export/sweep';
+import { SWEEP_AGE_MS, sweepStaleExports } from './export/sweep';
 import { createUnlockEmitter } from './app/lock-events';
 import { OfflineStackContext } from './app/stack-context';
 import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
@@ -93,10 +93,18 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
     };
   }, [open, allowInsecureHttp]);
 
-  // An export archive left in the cache by a run that never finished holds customers' data in the clear: remove it at every start.
+  // An export archive left in the cache holds customers' data in the clear. Archives older than the bound the export itself keeps are
+  // removed at start and whenever the screen changes kind (a lock, a sign-out, a cleared device), and again on every return to the foreground.
   useEffect(() => {
-    if (services) void sweepStaleExports(services.files, services.clock.now(), APP_START_SWEEP_AGE_MS);
-  }, [services]);
+    if (services) void sweepStaleExports(services.files, services.clock.now(), SWEEP_AGE_MS);
+  }, [services, screen.kind]);
+
+  useEffect(() => {
+    if (!services || !appState) return undefined;
+    return appState.onChange((active) => {
+      if (active) void sweepStaleExports(services.files, services.clock.now(), SWEEP_AGE_MS);
+    });
+  }, [services, appState]);
 
   useEffect(() => {
     if (screen.kind !== 'locked') setLockedExport(false);

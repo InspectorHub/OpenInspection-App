@@ -15,7 +15,7 @@ describe('a large export does not hold the photos in memory', () => {
     await seedInspection(world, 'insp-1', { photos });
     for (const photo of photos) world.files.generate(`media/${photo.pendingId}.jpg`, PHOTO_BYTES);
 
-    const outcome = await createExporter({ db: world.db, files: world.files, clock: world.clock, sharer: world.sharer }).run({ includeQuarantined: false, confirmed: true });
+    const outcome = await createExporter({ db: world.db, files: world.files, clock: world.clock, sharer: world.sharer, platform: 'ios' }).run({ includeQuarantined: false, confirmed: true });
     expect(outcome).toMatchObject({ kind: 'shared', photos: PHOTOS });
 
     const reads = world.files.reads().filter((read) => read.path.startsWith('media/p'));
@@ -41,7 +41,7 @@ describe('a large export does not hold the photos in memory', () => {
     const world = await createExportWorld();
     const photos = Array.from({ length: 40 }, (_, i) => ({ pendingId: `p${String(i)}` }));
     await seedInspection(world, 'insp-1', { photos });
-    await createExporter({ db: world.db, files: world.files, clock: world.clock, sharer: world.sharer }).run({ includeQuarantined: false, confirmed: true });
+    await createExporter({ db: world.db, files: world.files, clock: world.clock, sharer: world.sharer, platform: 'ios' }).run({ includeQuarantined: false, confirmed: true });
     const pkg = sharedPackage(world);
     expect(pkg.media).toHaveLength(40);
     expect(Object.keys(unzipSync(world.sharer.calls[0]?.bytes ?? new Uint8Array())).filter((name) => name.endsWith('.jpg'))).toHaveLength(40);
