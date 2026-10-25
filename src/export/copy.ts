@@ -38,8 +38,12 @@ function plural(count: number, one: string, many: string): string {
   return `${String(count)} ${count === 1 ? one : many}`;
 }
 
-/** What the export will hold, said before the person chooses. */
-export function countsText(included: number, quarantined: number): string {
+/**
+ * What the export will hold, said before the person chooses, for the quarantine box as it is now: with it ticked the removed
+ * inspections that hold something are part of the count and nothing is left out.
+ */
+export function countsText(included: number, quarantined: number, includeQuarantined: boolean): string {
+  if (includeQuarantined) return `${plural(included + quarantined, 'inspection', 'inspections')} will be exported.`;
   const base = `${plural(included, 'inspection', 'inspections')} will be exported.`;
   return quarantined > 0 ? `${base} ${plural(quarantined, 'removed one is', 'removed ones are')} left out.` : base;
 }

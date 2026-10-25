@@ -18,6 +18,8 @@ export interface SignedInProps {
   origin: string;
   identity: StoredIdentity;
   onSignedOut(): void;
+  /** Local data is being cleared (true) or the clear failed (false); the app stops its lock checks meanwhile. */
+  onWiping?(wiping: boolean): void;
   /** Timers of the polling reads (the upload count). Defaults to the real ones. */
   timers?: TimerPort;
 }
@@ -36,7 +38,7 @@ export function roleLabel(role: string): string {
 }
 
 /** The home of a signed-in device: the work list (where there is an offline stack), the account, and the sign-out contract. */
-export function SignedIn({ services, origin, identity, onSignedOut, timers }: SignedInProps) {
+export function SignedIn({ services, origin, identity, onSignedOut, onWiping, timers }: SignedInProps) {
   const [view, setView] = useState<'home' | 'settings'>('home');
   // What the open export covers: everything (an empty object) or the listed inspections (a quarantined row's own export).
   const [exporting, setExporting] = useState<{ only?: readonly string[] } | null>(null);
@@ -85,6 +87,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, timers }: Si
           onExport={() => setExporting({})}
           onSignedOut={onSignedOut}
           onCleared={onSignedOut}
+          onWiping={onWiping}
           timers={timers}
         />
         {exportFlow}

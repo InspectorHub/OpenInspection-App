@@ -25,6 +25,28 @@ describe('clearing the device removes what a crash left behind', () => {
     expect(files.cacheNames().sort()).toEqual(['inspectorhub-export-notes.txt', 'some-other-app-file.zip']);
   });
 
+  it('removes the leftover upload body copies from the cache, of any age (control: names it never writes stay)', async () => {
+    const files = createMemoryFiles();
+    files.seedCache('upload-3744294120499341970.tmp', NOW - 60_000);
+    files.seedCache('upload-123456.tmp', NOW - 10 * 86_400_000);
+    files.seedCache('upload-12345.tmp', NOW - 60_000);
+    files.seedCache('upload-3744294120499341970.tmp.bak', NOW - 60_000);
+    files.seedCache('upload-abc.tmp', NOW - 60_000);
+    files.seedCache('some-other-app-file.tmp', NOW - 60_000);
+    await clearLocalData(db, files, NOW);
+    expect(files.cacheNames().sort()).toEqual(['some-other-app-file.tmp', 'upload-12345.tmp', 'upload-3744294120499341970.tmp.bak', 'upload-abc.tmp']);
+  });
+
+  it('a body copy that cannot be removed does not stop the clear or turn into a photo-file failure', async () => {
+    const files = createMemoryFiles();
+    files.seedCache('upload-3744294120499341970.tmp', NOW - 60_000);
+    files.seedCache('upload-3744294120499341971.tmp', NOW - 60_000);
+    files.failRemoveCacheFor('upload-3744294120499341970.tmp');
+    const result = await clearLocalData(db, files, NOW);
+    expect(result.filesFailed).toEqual([]);
+    expect(files.cacheNames()).toEqual(['upload-3744294120499341970.tmp']);
+  });
+
   it('removes a photo file no row refers to, whatever its age, and leaves names the store never writes alone', async () => {
     const files = createMemoryFiles({ 'media/orphan1.jpg': bytes, 'media/orphan2.mp4': bytes, 'media/readme.txt': bytes, 'media/sub dir.jpg': bytes, 'other/keep.jpg': bytes });
     const result = await clearLocalData(db, files, NOW);

@@ -74,6 +74,8 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const [lockedExport, setLockedExport] = useState(false);
+  // True while Settings removes this device's data: the verification marks go with it, so a lock check now would read "expired".
+  const [wiping, setWiping] = useState(false);
   const started = useRef<Promise<BootResult> | null>(null);
   const unlocks = useMemo(() => createUnlockEmitter(), []);
   const insecure = import.meta.env.DEV && allowInsecureHttp;
@@ -108,6 +110,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
 
   useEffect(() => {
     if (screen.kind !== 'locked') setLockedExport(false);
+    if (screen.kind !== 'signed_in') setWiping(false);
   }, [screen.kind]);
 
   const flow = services?.flow;
@@ -116,7 +119,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
     return callbacks.bind(flow);
   }, [callbacks, flow]);
 
-  const lockWatched = screen.kind === 'signed_in' || screen.kind === 'locked';
+  const lockWatched = (screen.kind === 'signed_in' && !wiping) || screen.kind === 'locked';
   useEffect(() => {
     if (!services || !lockWatched) return undefined;
     let failures = 0;
@@ -196,6 +199,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             origin={screen.origin}
             identity={screen.identity}
             onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
+            onWiping={setWiping}
           />
         </OfflineStackContext.Provider>
       );

@@ -81,7 +81,7 @@ export type ExportOutcome = ExportDone | { kind: 'nothing'; changedSincePrepare?
 
 export interface Exporter {
   /**
-   * Sweeps old export files, runs the reconcile when there is one, and counts. The reconcile is the app's own flow and may
+   * Runs the reconcile when there is one, and counts. Removes no file. The reconcile is the app's own flow and may
    * quarantine or purge inspections by its own rules; that is the only thing here that can change the database. `run` and the
    * archive build never write to it.
    */
@@ -105,7 +105,8 @@ async function identityOf(db: Db): Promise<IdentityResult> {
 
 export function createExporter(deps: ExporterDeps): Exporter {
   async function prepare(): Promise<Preflight> {
-    await sweepStaleExports(deps.files, deps.clock.now(), 0);
+    // No file is removed here: opening the question is not the start of an export, and an earlier archive may still be
+    // read by a share target. The sweeps at start and on the foreground, and the next export's own start, remove it.
     const found = await identityOf(deps.db);
     const confirmed = deps.reconcile === undefined ? false : await deps.reconcile().catch(() => false);
     const company = await loadTenantName(deps.db).catch(() => null);

@@ -15,6 +15,24 @@ export const UPLOADER_TEMP_MIN_AGE_MS = MAX_TRANSFER_MS + 60 * 60_000;
 /** The only names the plugin writes: `upload-<digits>.tmp`. Anything else in the cache is left alone. */
 const UPLOADER_TEMP_PATTERN = /^upload-[0-9]{6,24}\.tmp$/;
 
+/**
+ * Removes every body copy the plugin left in the cache directory, whatever its age. Only for the moment the device's data is cleared:
+ * the rows the copies belonged to are gone, so no transfer may claim them. Never throws; a copy that cannot be removed is left for the
+ * age-bound sweep of a later start.
+ */
+export async function removeAllUploaderTempFiles(files: Pick<Files, 'listCache' | 'removeCache'>): Promise<void> {
+  let entries: { name: string }[];
+  try {
+    entries = await files.listCache();
+  } catch {
+    return;
+  }
+  for (const { name } of entries) {
+    if (!UPLOADER_TEMP_PATTERN.test(name)) continue;
+    await files.removeCache(name).catch(() => undefined);
+  }
+}
+
 export interface UploaderTempSweepDeps {
   files: Files;
   clock: Clock;

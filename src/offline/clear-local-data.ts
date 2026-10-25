@@ -1,6 +1,7 @@
 import type { Db } from '../platform/db';
 import { sweepStaleExports } from '../export/sweep';
 import { MEDIA_DIRECTORY, MEDIA_FILE_PATTERN } from '../media/sweep';
+import { removeAllUploaderTempFiles } from '../media/uploader-temp';
 import type { Files } from '../platform/files';
 import { DEVICE_STATE_KEY_PREFIXES, type DeviceStateKey } from '../platform/schema';
 
@@ -79,6 +80,8 @@ export async function clearLocalData(db: Db, files: Pick<Files, 'remove' | 'list
 
   // An export archive holds customers' data in the clear: none stays after a clear, whatever its age.
   await sweepStaleExports(files, nowMs, 0);
+  // The upload plugin's body copies hold photos in the clear too, and a force-stopped upload leaves one behind.
+  await removeAllUploaderTempFiles(files);
 
   return { filesRemoved, filesFailed };
 }

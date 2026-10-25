@@ -147,7 +147,7 @@ export function ExportFlow({ services, reconcile, sharer, timers, only, onClose 
           </Button>
         </div>
       )}
-      {prep !== null && !prepareFailed && only === undefined && <p className="text-sm leading-relaxed text-ih-fg-2">{countsText(prep.included, prep.quarantined)}</p>}
+      {prep !== null && !prepareFailed && only === undefined && <p className="text-sm leading-relaxed text-ih-fg-2">{countsText(prep.included, prep.quarantined, include)}</p>}
       {prep !== null && !prep.confirmed && <Notice tone="watch">{UNCONFIRMED_NOTICE}</Notice>}
       {prep !== null && only === undefined && prep.reportIdUnknown > 0 && <Notice tone="watch">{reportIdNotice(prep.reportIdUnknown)}</Notice>}
       {only === undefined && prep !== null && prep.quarantined > 0 && (

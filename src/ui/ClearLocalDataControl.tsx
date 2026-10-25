@@ -12,6 +12,11 @@ export interface ClearLocalDataControlProps {
   origin: string;
   /** Local data was cleared; the person can sign in again to the same server. */
   onCleared(): void;
+  /**
+   * True from the moment the data starts to be removed until the person leaves for sign-in, false again when the clear failed.
+   * The app stops its lock checks while it is true: a device whose verification marks were just removed is not "expired".
+   */
+  onWiping?(wiping: boolean): void;
 }
 
 const FIRST_DESCRIPTION = 'This permanently removes the inspections, photos and changes stored on this device. This cannot be undone.';
@@ -45,7 +50,7 @@ interface Counted {
  * before a single-step clear, so work that arrived while the dialog was open sends the person to the second step instead of being
  * removed. Signing out follows the clear (the sign-in belongs to the data that was removed). Never `window.confirm`.
  */
-export function ClearLocalDataControl({ services, origin, onCleared }: ClearLocalDataControlProps) {
+export function ClearLocalDataControl({ services, origin, onCleared, onWiping }: ClearLocalDataControlProps) {
   const [step, setStep] = useState<'closed' | 'first' | 'second'>('closed');
   const [opening, setOpening] = useState(0);
   const [counted, setCounted] = useState<Counted | null>(null);
@@ -95,6 +100,7 @@ export function ClearLocalDataControl({ services, origin, onCleared }: ClearLoca
           return;
         }
       }
+      onWiping?.(true);
       const result = await clearLocalData(services.db, services.files, services.clock.now());
       await services.tokens.signOut(origin).catch(() => undefined);
       setStep('closed');
@@ -102,6 +108,7 @@ export function ClearLocalDataControl({ services, origin, onCleared }: ClearLoca
       if (result.filesFailed.length > 0) setLeftover(result.filesFailed.length);
       else onCleared();
     } catch {
+      onWiping?.(false);
       setError(CLEAR_FAILED);
       setBusy(false);
     }

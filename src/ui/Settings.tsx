@@ -27,6 +27,8 @@ export interface SettingsProps {
   onExport(): void;
   onSignedOut(): void;
   onCleared(): void;
+  /** See `ClearLocalDataControl`. */
+  onWiping?(wiping: boolean): void;
   timers?: TimerPort;
   locale?: string;
 }
@@ -49,7 +51,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tied to the server's version policy: whatever else is refused, a person can always get their data out and their sign-in off.
  * The back key and the Back button both return to the list.
  */
-export function Settings({ services, origin, stack, onBack, onExport, onSignedOut, onCleared, timers, locale }: SettingsProps) {
+export function Settings({ services, origin, stack, onBack, onExport, onSignedOut, onCleared, onWiping, timers, locale }: SettingsProps) {
   const language = locale ?? FORMAT_LOCALE;
   const state = useClientState(services.clientState);
   const policy = clientPolicy(state, origin);
@@ -88,7 +90,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
         <Button variant="secondary" onClick={onExport}>
           Export unsent data
         </Button>
-        <ClearLocalDataControl services={services} origin={origin} onCleared={onCleared} />
+        <ClearLocalDataControl services={services} origin={origin} onCleared={onCleared} onWiping={onWiping} />
       </Section>
       <Section title="Account">
         <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
