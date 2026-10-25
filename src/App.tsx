@@ -3,6 +3,7 @@ import { boot, screenForSignedIn, type BootResult, type Screen } from './app/boo
 import { loadIdentity, type StoredIdentity } from './auth/server-config';
 import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
+import { appDiagnostics } from './app/diagnostics';
 import { createUnlockEmitter } from './app/lock-events';
 import { OfflineStackContext } from './app/stack-context';
 import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
@@ -70,7 +71,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   const started = useRef<Promise<BootResult> | null>(null);
   const unlocks = useMemo(() => createUnlockEmitter(), []);
   const insecure = import.meta.env.DEV && allowInsecureHttp;
-  const stack = useOfflineStackLifecycle(services, offline, screen.kind === 'signed_in' ? { origin: screen.origin, identity: screen.identity } : null, insecure, unlocks.onUnlocked);
+  const stack = useOfflineStackLifecycle(services, offline, screen.kind === 'signed_in' ? { origin: screen.origin, identity: screen.identity } : null, insecure, unlocks.onUnlocked, appDiagnostics.push);
 
   useEffect(() => {
     // One open per launch, even where React runs the effect twice.

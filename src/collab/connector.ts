@@ -51,6 +51,19 @@ export function isValidInspectionId(id: string): boolean {
   return INSPECTION_ID_PATTERN.test(id);
 }
 
+/**
+ * What `onError` receives for a failure of the collaboration itself (a socket that would not open, a frame or callback
+ * that failed, an attempt that threw): the document and its stored state are fine. Every other value `onError` receives is a
+ * storage failure (a write or a read of the stored updates), which is the one that means "your edits are not being saved".
+ * The message is a fixed sentence: never a url, a ticket or a platform text.
+ */
+export class CollabIssue extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CollabIssue';
+  }
+}
+
 export type CollabStatus =
   | 'connecting'
   | 'open'
@@ -197,6 +210,8 @@ export function collabEndpoints(origin: string, inspectionId: string): { ticket:
  *    connection (offline, locked, retrying, synced) is reported as `storage_failed` too, until the connection is
  *    destroyed, so a UI keyed on the latest status keeps warning that edits are not being saved. A failed write
  *    is not fatal (it is retried and reported through `onError`), so it does not set it.
+ *    `onError` also receives `CollabIssue` values for failures of the collaboration itself (a socket that would not open,
+ *    a frame or callback that failed): those leave the stored document intact and are not "edits not saved".
  *  - Call `purge(id)` when reconciliation reports the status `denied`, and do not `connect` that inspection
  *    again while its purge is still awaiting: the new connection would load rows the purge is about to delete.
  *  - Call `onLockChange()` whenever the offline lock may have changed, in particular on unlock and after a
@@ -278,7 +293,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       try {
         callback?.();
       } catch {
-        report(new Error('A collaboration callback failed'));
+        report(new CollabIssue('A collaboration callback failed'));
       }
     }
 
@@ -406,7 +421,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         });
       } catch {
         // The platform's message names the URL, and the URL carries the ticket.
-        report(new Error('The collaboration socket could not be opened'));
+        report(new CollabIssue('The collaboration socket could not be opened'));
         scheduleRetry(null);
         return;
       }
@@ -418,7 +433,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       try {
         onFrame(data, from);
       } catch {
-        report(new Error('A collaboration frame could not be read'));
+        report(new CollabIssue('A collaboration frame could not be read'));
         dropSocket();
         // A restore reconnects when it is done.
         if (!restoring) scheduleRetry(null);
@@ -438,7 +453,7 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         Y.applyUpdate(doc, update, from);
       } catch {
         Y.decodeUpdate(update);
-        report(new Error('A collaboration update handler failed'));
+        report(new CollabIssue('A collaboration update handler failed'));
       }
     }
 
@@ -586,8 +601,8 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         if (outcome.kind === 'halt') stop(outcome.reason);
         else if (outcome.kind === 'retry') scheduleRetry(outcome.afterMs);
         else openSocket(outcome.ticket);
-      } catch (error) {
-        report(error);
+      } catch {
+        report(new CollabIssue('A collaboration attempt failed'));
         if (!stale()) scheduleRetry(null);
       } finally {
         busy = false;

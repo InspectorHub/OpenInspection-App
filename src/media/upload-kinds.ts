@@ -22,7 +22,9 @@ export type UploadFailureCode =
   /** Every attempt is used and nothing more is remembered about why; `retry()` is the way out. */
   | 'GIVEN_UP'
   /** The inspection is quarantined or being purged: nothing was sent, nothing was recorded, the row is as it was. */
-  | 'BLOCKED';
+  | 'BLOCKED'
+  /** The uploader was disposed (the session ended): nothing was sent, the row is as it was, and the next session picks it up. */
+  | 'DISPOSED';
 
 export interface Failure {
   code: UploadFailureCode;

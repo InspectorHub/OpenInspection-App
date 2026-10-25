@@ -541,3 +541,32 @@ describe('the outcome object', () => {
     expect(reconciler.last.status).toBe('done');
   });
 });
+
+describe('the first flow after start', () => {
+  it('is not held back by a hold that an earlier trigger set before start()', async () => {
+    const w = createWorld({ fallbackIntervalMs: 600_000 });
+    // A busy answer to a trigger that arrives before start() sets a hold ...
+    w.decisions.push({ kind: 'busy' });
+    w.reconciler.trigger('needs_reconcile');
+    await w.reconciler.idle();
+    expect(w.reconciler.last.status).toBe('busy');
+    const decides = (): number => w.calls.filter((c) => c === 'decide').length;
+    expect(decides()).toBe(1);
+    // ... and start() must still run its own first flow, which is the point of start.
+    w.decisions.push(plan());
+    w.reconciler.start();
+    await w.reconciler.idle();
+    expect(decides()).toBe(2);
+    expect(w.reconciler.last.status).toBe('done');
+  });
+
+  it('control: an ordinary automatic trigger inside the same hold is still held back', async () => {
+    const w = createWorld({ fallbackIntervalMs: 600_000 });
+    w.decisions.push({ kind: 'busy' });
+    w.reconciler.trigger('needs_reconcile');
+    await w.reconciler.idle();
+    w.reconciler.trigger('refresh');
+    await w.reconciler.idle();
+    expect(w.calls.filter((c) => c === 'decide').length).toBe(1);
+  });
+});

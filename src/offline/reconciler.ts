@@ -25,7 +25,7 @@ import type { ExecuteResult } from './reconcile-execute';
  * No loops: an outcome that cannot improve by asking again soon (the role may not reconcile, a queued write names no
  * inspection, the server refuses, the app is too old) or that keeps failing holds the AUTOMATIC triggers back for a time
  * that doubles with every failure up to an hour (the role and null-id refusals hold for the whole hour at once). A held
- * trigger waits for the one timer that is armed for the end of the hold. A person asking (`manual`), the lock being
+ * trigger waits for the one timer that is armed for the end of the hold. The first flow after start() (`start`: it is the one that must run), a person asking (`manual`), the lock being
  * lifted (`unlock`) and a token refresh (`token`: the thing that was wrong may have just been fixed) go through the hold.
  * A lock or being offline is not a failure and holds nothing: the event that ends it runs the flow at once.
  *
@@ -120,7 +120,7 @@ export const HOLD_BUSY_BASE_MS = 5_000;
 export const HOLD_MAX_MS = 3_600_000;
 
 /** Reasons that say something changed, so they are not held back by a hold. */
-const THROUGH_THE_HOLD: ReadonlySet<ReconcileReason> = new Set<ReconcileReason>(['manual', 'unlock', 'token']);
+const THROUGH_THE_HOLD: ReadonlySet<ReconcileReason> = new Set<ReconcileReason>(['start', 'manual', 'unlock', 'token']);
 
 type Failure = { kind: 'ok' } | { kind: 'neutral' } | { kind: 'soft'; retryAfterMs: number | null } | { kind: 'busy' } | { kind: 'permanent' };
 

@@ -3,7 +3,7 @@ import type { AppStatePort } from '../offline/lock-monitor';
 import type { Clock } from '../platform/clock';
 import type { Network } from '../platform/network';
 import { isMediaError, MediaError } from './errors';
-import { isExpectedKey, MAX_UPLOAD_ATTEMPTS, type NativeUploader } from './native-uploader';
+import { isExpectedKey, MAX_UPLOAD_ATTEMPTS, type NativeUploader, type UploadFailureCode } from './native-uploader';
 import type { ResolveResult } from './pending-doc';
 import type { MediaKind, MediaRow, MediaStore } from './store';
 import { videoRefFromKey, type ResolveVideo } from './video';
@@ -91,6 +91,8 @@ export interface ReconcileDeps {
   onProgress?: (pendingId: string, percent: number) => void;
   /** Receives failures of the document step and of storage. Never receives a token, a url or a path. */
   onError?: (error: unknown) => void;
+  /** Receives the fixed code of every upload that stopped the run (`AUTH`, `UPGRADE`, `LOCKED`, ...), so the interface can say why uploads stand still. */
+  onHalt?: (code: UploadFailureCode) => void;
 }
 
 export interface MediaReconciler {
@@ -168,6 +170,14 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
   function report(error: unknown): void {
     try {
       deps.onError?.(error);
+    } catch {
+      // A failing reporter must not change what the run does.
+    }
+  }
+
+  function reportHalt(code: UploadFailureCode): void {
+    try {
+      deps.onHalt?.(code);
     } catch {
       // A failing reporter must not change what the run does.
     }
@@ -311,6 +321,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
       }
       if (!outcome.ok && outcome.code === 'BLOCKED') return false;
       if (outcome.halt) {
+        reportHalt(outcome.code);
         run.blocked = true;
         return true;
       }

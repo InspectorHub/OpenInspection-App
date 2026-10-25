@@ -87,8 +87,13 @@ describe('kill test', () => {
     expect(rig.emitted[0]?.detail).toMatch(/^kill=running done=0 of=20 left=20 pending=\d+ uploading=\d+ uploaded=0 failed=0/);
     expect(rig.emitted[0]?.detail).not.toContain('left=20 pending=20 uploading=0 uploaded=0 failed=0 native_started=0');
 
-    // The process is killed: a fresh page, the same database and files, a working plugin.
+    // The process is killed: it writes nothing on its way out, so the row that was uploading stays uploading. Ending the page's
+    // session puts such a row back (that is what a clean end does), so the killed state is restored by hand.
+    const store = createMediaStore({ isBlocked: neverBlocked, db: rig.services.db, files: rig.services.files });
+    const running = await store.listRows({ states: ['uploading'], limit: 10 });
+    expect(running).toHaveLength(1);
     await stopKillSession();
+    for (const row of running) await store.markState(row.pendingId, 'uploading', { attempts: row.attempts });
     const restarted = await createDiagRig({ wrap: (s) => ({ ...s, db: rig.services.db, files: rig.services.files }) });
     const resumed = await killResume.run(restarted.ctx);
     expect(resumed).toMatchObject({ id: 'kill-resume', ok: true });

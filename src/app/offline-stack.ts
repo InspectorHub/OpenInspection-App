@@ -3,8 +3,8 @@ import type { Http } from '../auth/http';
 import { safeClientHeaders } from '../auth/client-headers';
 import { loadIdentity, writeDeviceState, type StoredIdentity } from '../auth/server-config';
 import type { TokenManager } from '../auth/tokens';
-import { createCollabConnector, type CollabStatus, type NativeCollabConnector, type SocketFactory } from '../collab/connector';
-import type { TimerPort } from '../collab/timers';
+import { CollabIssue, createCollabConnector, type CollabStatus, type NativeCollabConnector, type SocketFactory } from '../collab/connector';
+import { realTimers, type TimerPort } from '../collab/timers';
 import { createNativeUploader, type NativeUploader } from '../media/native-uploader';
 import { createWithDoc, createPendingResolver } from '../media/pending-doc';
 import { createMediaReconciler, type MediaReconciler } from '../media/reconcile';
@@ -31,12 +31,21 @@ import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
 import type { Network } from '../platform/network';
 import type { UploaderPluginLike } from '../platform/uploader';
+import { createDiagnosticRing } from './diagnostics';
 import { createStore, type ReadableStore } from './stack-store';
 
 /** The orphan and temp-file sweeps run at most this often, however many times a stack is built. */
 export const SWEEP_MIN_INTERVAL_MS = 6 * 3_600_000;
-/** The `device_state` key that remembers when the sweeps last completed. */
+/** The `device_state` key that remembers when the orphan-file sweep last completed. */
 export const SWEEP_KEY = 'media_sweep_at';
+/** The key of the uploader temp-copy sweep. Apart from the orphan sweep, because that one is skipped while a row says `uploading` (after a crash one always does). */
+export const TEMP_SWEEP_KEY = 'media_temp_sweep_at';
+/** A sweep that has not answered by then is abandoned (its result ignored) and the start sequence goes on without it. */
+export const SWEEP_TIMEOUT_MS = 10_000;
+/** The first replay run found the shared lease held by someone else: wait this long, then ask again. */
+export const LAUNCH_LEASE_WAIT_MS = 2_500;
+/** How many times the start sequence waits for the lease before it goes on anyway. */
+export const LAUNCH_LEASE_MAX_WAITS = 5;
 
 /**
  * The document step of a clip until the editor can place one (Task 9 replaces this). `missing` is what the media
@@ -53,12 +62,14 @@ export interface StackStatus {
   upgrade: boolean;
   /** A document could not be stored: the person must be told their edits are not being saved. Sticky until the stack ends. */
   editsNotSaved: boolean;
+  /** The collaboration itself failed (a socket that would not open, a frame or callback that broke); the stored document is fine. Cleared by the next synced document. */
+  collabIssue: boolean;
   /** The status code of the latest reconcile outcome (`never` before the first). */
   reconcile: ReconcileOutcome['status'];
 }
 
 /** Fixed codes the stack reports about failures it swallowed. Never an error object, an id, a path or a url. */
-export type StackDiagnostic = 'replay_error' | 'refresh_error' | 'reconcile_error' | 'uploader_error' | 'media_error' | 'collab_error' | 'doc_error' | 'proof_error' | 'sweep_failed' | 'start_failed';
+export type StackDiagnostic = 'replay_error' | 'refresh_error' | 'reconcile_error' | 'uploader_error' | 'media_error' | 'collab_error' | 'doc_error' | 'proof_error' | 'sweep_failed' | 'sweep_timeout' | 'start_failed' | 'factory_failed';
 
 export type EditorEvent = { kind: 'purging' | 'quarantined' | 'unquarantined'; inspectionId: string };
 
@@ -140,6 +151,8 @@ export interface OfflineStack {
    * null when the latest decision made none. Pass it as `plan` to `userActions.removeFromDevice`.
    */
   lastPlan(): ReconcilePlan | null;
+  /** The latest fixed diagnostic codes this stack reported, oldest first (a small ring). Codes only: never an id, a path or a url. */
+  recentDiagnostics(): readonly StackDiagnostic[];
   /** The editor's side of the purge and the quarantine: it must unmount the inspection on `purging` and `quarantined`. */
   onEditorEvent(listener: (event: EditorEvent) => void): () => void;
   /** Idempotent. Does nothing while the device is locked; the first unlock starts it. */
@@ -173,15 +186,18 @@ function parseSweepAt(value: string | undefined): number | null {
  * reconciler, the collaboration connector, and the user actions. One blocked guard is created here and handed to every
  * module that requires it; one clock, one lock check and one lease name are shared.
  *
- * Nothing runs at construction (no request, no timer, no listener). `start()` sweeps, then starts the flows in this order:
- *  1. media uploader/reconciler (own table, no lease);
- *  2. the replayer, and WAIT for its first run: local writes reach the server before anything else decides about them;
- *  3. the reconciler (finishes stopped purges, then asks the server what is still visible), and wait for its first flow;
+ * Nothing runs at construction (no request, no timer, no listener). `start()` starts the flows in this order:
+ *  1. the sweeps (orphan files, uploader temp copies) run at once but hold nothing up: after `SWEEP_TIMEOUT_MS` a sweep that has
+ *     not answered is abandoned. The media uploader/reconciler (own table, no lease) starts when they are done or abandoned;
+ *  2. the replayer, and WAIT for its first run, also when that run was turned away by the lease (a bounded number of retries):
+ *     local writes reach the server before anything else decides about them;
+ *  3. the reconciler (finishes stopped purges, then asks the server what is still visible), and wait for its first flow. No
+ *     trigger reaches it before this point: an accepted token or a refused write cannot start a flow ahead of the replayer;
  *  4. the refresher. A successful refresh triggers the reconciler again (`refresh`).
  * Replay, reconcile and refresh share the `sync` lease, so they never overlap; a flow that finds it held asks again soon.
  *
  * Fail-closed: the account is re-read from the stored identity on every use and a different one means "no account"; a
- * lock check that throws means locked; `stop()` is terminal.
+ * lock check that throws means locked; `stop()` is terminal, and every flow's lock check answers "locked" from then on.
  */
 export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   const { db, files, http, tokens, origin, clock, network, appState } = deps;
@@ -197,16 +213,24 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   let stopped = false;
   let started = false;
   let launched = false;
+  /** Set right after `reconcile.start()`. Before it no trigger may reach the reconciler: its first flow must follow the first replay. */
+  let reconcileStarted = false;
+  let mediaStarted = false;
   let chain: Promise<void> = Promise.resolve();
   let latestPlan: ReconcilePlan | null = null;
   let stopping: Promise<void> | null = null;
   const teardown: (() => void)[] = [];
+  const timerPort = deps.timers ?? realTimers;
+  /** The waits of the start sequence: `stop()` ends every one of them. */
+  const releases = new Set<() => void>();
+  const diagnosticRing = createDiagnosticRing<StackDiagnostic>();
   const handles = new Set<{ destroy(): void }>();
   const editorListeners = new Set<(event: EditorEvent) => void>();
-  const status = createStore<StackStatus>({ auth: false, upgrade: false, editsNotSaved: false, reconcile: 'never' });
+  const status = createStore<StackStatus>({ auth: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never' });
 
   function report(code: StackDiagnostic): () => void {
     return () => {
+      diagnosticRing.push(code);
       try {
         deps.onDiagnostic?.(code);
       } catch {
@@ -225,6 +249,10 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     }
   }
 
+  // What every flow is handed as its lock check: the real one, and "locked" for good once the stack has stopped, so nothing that
+  // was waiting for an answer (a ticket, a destination url) can start work after the session ended.
+  const stackLocked = async (): Promise<boolean> => stopped || (await isLocked()) !== false;
+
   // The account: the stored identity, and only while it is the one this stack was built for.
   async function account(): Promise<Account | null> {
     if (stopped) return null;
@@ -242,19 +270,25 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     network,
     origin,
     ...insecure,
-    isLocked,
+    isLocked: stackLocked,
     openSocket: deps.openSocket,
     ...timers,
     ...random,
     clock,
     isBlocked,
-    onError: () => {
-      status.patch({ editsNotSaved: true });
+    // Only a failure to store the document means "your edits are not being saved". The collaboration failing (a socket, a
+    // frame, a callback) is a separate, non-sticky signal: the document on the device is intact.
+    onError: (error) => {
+      if (error instanceof CollabIssue) status.patch({ collabIssue: true });
+      else status.patch({ editsNotSaved: true });
       report('collab_error')();
     },
     onProofError: report('proof_error'),
     onStatus: (inspectionId, collabStatus) => {
       if (collabStatus === 'storage_failed') status.patch({ editsNotSaved: true });
+      else if (collabStatus === 'synced') status.patch({ collabIssue: false });
+      else if (collabStatus === 'signed_out' || collabStatus === 'auth_rejected') status.patch({ auth: true });
+      else if (collabStatus === 'upgrade_required') status.patch({ upgrade: true });
       deps.onCollabStatus?.(inspectionId, collabStatus);
     },
   });
@@ -277,7 +311,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     plugin: deps.uploaderPlugin,
     origin,
     ...insecure,
-    isLocked,
+    isLocked: stackLocked,
     clientHeaders,
     clock,
     ...timers,
@@ -301,7 +335,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     uploader,
     resolvePending: createPendingResolver({ withDoc }),
     resolveVideo: deps.resolveVideo ?? placeholderResolveVideo,
-    isLocked,
+    isLocked: stackLocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -310,6 +344,10 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     ...timers,
     ...random,
     onError: report('media_error'),
+    onHalt: (code) => {
+      if (code === 'AUTH') status.patch({ auth: true });
+      else if (code === 'UPGRADE') status.patch({ upgrade: true });
+    },
   });
   mediaReconciler = media;
 
@@ -322,7 +360,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     clientHeaders,
     ...insecure,
     account,
-    isLocked,
+    isLocked: stackLocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -331,7 +369,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     ...random,
     ...lease,
     onNeedsReconcile: (inspectionId) => {
-      reconcilerCore?.onNeedsReconcile(inspectionId);
+      // Before the reconciler has started, its first flow (which follows the first replay) covers this write.
+      if (reconcileStarted) reconcilerCore?.onNeedsReconcile(inspectionId);
     },
     isBlocked,
     onHalt: (reason) => {
@@ -349,7 +388,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     clientHeaders,
     ...insecure,
     account,
-    isLocked,
+    isLocked: stackLocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -363,7 +402,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     },
     onSummary: (summary) => {
       // A run that did its work (not halted, not turned away by another flow) may have changed what the server shows.
-      if (summary.halted === null && !summary.leaseBusy) reconcilerCore?.trigger('refresh');
+      if (summary.halted === null && !summary.leaseBusy) triggerReconcile('refresh');
     },
     onError: report('refresh_error'),
   });
@@ -392,7 +431,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     ...purgeDeps,
     clock,
     account,
-    isLocked,
+    isLocked: stackLocked,
     onQuarantined: (inspectionId: string): void => emitEditor({ kind: 'quarantined', inspectionId }),
     onUnquarantined: (inspectionId: string): void => {
       emitEditor({ kind: 'unquarantined', inspectionId });
@@ -406,14 +445,14 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
 
   const reconcile = createReconciler({
     decide: async () => {
-      const result = await decideReconcile({ db, clock, account, isLocked, visible, session, ...registry, ...lease });
-      // Only the newest decision's plan is kept: an older plan must not outlive the answer that replaced it.
-      latestPlan = result.kind === 'plan' ? result : null;
+      const result = await decideReconcile({ db, clock, account, isLocked: stackLocked, visible, session, ...registry, ...lease });
+      // Only the newest decision's plan is kept: an older plan must not outlive the answer that replaced it, nor the stack.
+      latestPlan = result.kind === 'plan' && !stopped ? result : null;
       return result;
     },
     execute: (plan) => executeReconcilePlan(executeDeps, plan),
-    resumePurges: () => resumePurges({ ...purgeDeps, clock, account, isLocked, ...lease }),
-    isLocked,
+    resumePurges: () => resumePurges({ ...purgeDeps, clock, account, isLocked: stackLocked, ...lease }),
+    isLocked: stackLocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -421,14 +460,18 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     ...timers,
     ...random,
     onOutcome: (outcome) => {
-      status.patch({ reconcile: outcome.status });
+      status.patch({
+        reconcile: outcome.status,
+        ...(outcome.status === 'auth' ? { auth: true } : {}),
+        ...(outcome.status === 'halt' && outcome.reason === 'upgrade_required' ? { upgrade: true } : {}),
+      });
     },
     onError: report('reconcile_error'),
   });
   reconcilerCore = reconcile;
 
   // User actions refuse once the stack has stopped, in addition to the real lock.
-  const actionDeps: UserActionDeps = { ...purgeDeps, clock, account, isLocked: async () => stopped || (await isLocked()), ...lease };
+  const actionDeps: UserActionDeps = { ...purgeDeps, clock, account, isLocked: stackLocked, ...lease };
   const userActions: BoundUserActions = {
     removeFromDevice: (inspectionId, options) => removeFromDevice(actionDeps, inspectionId, options),
     discardMedia: (pendingId, options) => discardMedia(actionDeps, pendingId, options),
@@ -444,63 +487,164 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     connect: (inspectionId, opts) => {
       if (stopped) throw new Error('The offline stack has stopped');
       const handle = connector.connect(inspectionId, opts);
-      handles.add(handle);
-      return handle;
+      // The caller's own destroy() ends the tracking: the set holds only what stop() still has to close.
+      const tracked: typeof handle = {
+        get doc() {
+          return handle.doc;
+        },
+        persistenceSynced: handle.persistenceSynced,
+        synced: () => handle.synced(),
+        destroy: () => {
+          handles.delete(tracked);
+          handle.destroy();
+        },
+      };
+      handles.add(tracked);
+      return tracked;
     },
   };
 
-  /** The sweeps run before the uploader starts, at most once per `SWEEP_MIN_INTERVAL_MS` however often a stack is built. */
-  async function sweepOnce(): Promise<void> {
-    const now = clock.now();
+  /** Every reconcile trigger of the stack goes through here: none reaches the reconciler before its first flow has been started. */
+  function triggerReconcile(reason: ReconcileReason): void {
+    if (reconcileStarted) reconcile.trigger(reason);
+  }
+
+  /** A pause that `stop()` ends early. */
+  function pause(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let handle: unknown = null;
+      const release = (): void => {
+        timerPort.clearTimeout(handle);
+        releases.delete(release);
+        resolve();
+      };
+      try {
+        handle = timerPort.setTimeout(release, ms);
+      } catch {
+        resolve();
+        return;
+      }
+      releases.add(release);
+    });
+  }
+
+  async function stampDue(key: string, now: number): Promise<boolean> {
     let last: number | null = null;
     try {
-      last = parseSweepAt((await db.query<{ value: string }>('SELECT value FROM device_state WHERE key = ?', [SWEEP_KEY]))[0]?.value);
+      last = parseSweepAt((await db.query<{ value: string }>('SELECT value FROM device_state WHERE key = ?', [key]))[0]?.value);
     } catch {
       report('sweep_failed')();
     }
     // A stamp in the future is a clock that was set back: it proves nothing, so the sweep runs.
-    if (last !== null && last <= now && now - last < SWEEP_MIN_INTERVAL_MS) return;
-    let complete = true;
+    return !(last !== null && last <= now && now - last < SWEEP_MIN_INTERVAL_MS);
+  }
+
+  async function writeStamp(key: string, now: number): Promise<void> {
     try {
-      await sweepOrphanFiles({ db, files, clock });
-    } catch {
-      complete = false;
-      report('sweep_failed')();
-    }
-    try {
-      const temp = await sweepUploaderTempFiles({
-        files,
-        clock,
-        db,
-        // Nothing of this stack has started yet; an upload an earlier session left running shows as an `uploading` row.
-        isUploading: async () => (await store.listRows({ states: ['uploading'], limit: 1 })).length > 0,
-      });
-      if (temp.skipped !== undefined) complete = false;
-    } catch {
-      complete = false;
-      report('sweep_failed')();
-    }
-    if (!complete || stopped) return;
-    try {
-      await writeDeviceState(db, SWEEP_KEY, String(Math.trunc(now)));
+      await writeDeviceState(db, key, String(Math.trunc(now)));
     } catch {
       report('sweep_failed')();
     }
   }
 
+  /**
+   * The sweeps, each at most once per `SWEEP_MIN_INTERVAL_MS` however often a stack is built. Each has its own stamp: the temp
+   * sweep is skipped while a row says `uploading` (after a crash one does), which must not make the orphan sweep repeat.
+   * `live()` turns false when the stack stops or the sweep is abandoned; a sweep that is no longer live writes nothing.
+   */
+  async function sweepOnce(live: () => boolean): Promise<void> {
+    const now = clock.now();
+    if (await stampDue(SWEEP_KEY, now)) {
+      let complete = true;
+      try {
+        await sweepOrphanFiles({ db, files, clock });
+      } catch {
+        complete = false;
+        report('sweep_failed')();
+      }
+      if (complete && live()) await writeStamp(SWEEP_KEY, now);
+    }
+    if (!live()) return;
+    if (await stampDue(TEMP_SWEEP_KEY, now)) {
+      let complete = true;
+      try {
+        const temp = await sweepUploaderTempFiles({
+          files,
+          clock,
+          db,
+          // The uploader of this stack has not started; an upload an earlier session left running shows as an `uploading` row.
+          isUploading: async () => (await store.listRows({ states: ['uploading'], limit: 1 })).length > 0,
+        });
+        if (temp.skipped !== undefined) complete = false;
+      } catch {
+        complete = false;
+        report('sweep_failed')();
+      }
+      if (complete && live()) await writeStamp(TEMP_SWEEP_KEY, now);
+    }
+  }
+
+  /** Runs the sweeps and settles when they are done, abandoned (`SWEEP_TIMEOUT_MS`) or the stack stopped. Never rejects. */
+  async function runSweeps(): Promise<void> {
+    let abandoned = false;
+    let cancelTimeout: () => void = () => undefined;
+    const work = sweepOnce(() => !stopped && !abandoned).catch(report('sweep_failed'));
+    const timeout = new Promise<void>((resolve) => {
+      let handle: unknown = null;
+      const release = (): void => {
+        timerPort.clearTimeout(handle);
+        releases.delete(release);
+        resolve();
+      };
+      try {
+        handle = timerPort.setTimeout(() => {
+          abandoned = true;
+          report('sweep_timeout')();
+          release();
+        }, SWEEP_TIMEOUT_MS);
+      } catch {
+        // No timer could be set: the sweeps are waited for on their own.
+        return;
+      }
+      releases.add(release);
+      cancelTimeout = release;
+    });
+    await Promise.race([work, timeout]);
+    cancelTimeout();
+  }
+
+  /**
+   * Starts the replayer and waits for its first run. A run turned away by the lease (another holder) is asked again after a
+   * short wait, a bounded number of times, so the reconciler's first flow never gets ahead of the first replay.
+   */
+  async function firstReplay(): Promise<void> {
+    replay.start();
+    let result = await replay.replay();
+    for (let waits = 0; result.leaseBusy && waits < LAUNCH_LEASE_MAX_WAITS && !stopped; waits += 1) {
+      await pause(LAUNCH_LEASE_WAIT_MS);
+      if (stopped) return;
+      result = await replay.replay();
+    }
+    await replay.idle();
+  }
+
   async function launch(): Promise<void> {
     if (launched || stopped) return;
     launched = true;
-    await sweepOnce();
-    if (stopped) return;
-    media.start();
-    replay.start();
-    await replay.idle();
+    // The sweeps hold nothing up but the uploader, which must not start while the temp sweep looks for copies of finished uploads.
+    const mediaUp = runSweeps().then(() => {
+      if (stopped) return;
+      media.start();
+      mediaStarted = true;
+    });
+    await firstReplay();
     if (stopped) return;
     reconcile.start();
+    reconcileStarted = true;
     await reconcile.idle();
     if (stopped) return;
     refresher.start();
+    await mediaUp;
   }
 
   function enqueueLaunch(): void {
@@ -508,6 +652,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   }
 
   async function begin(): Promise<void> {
+    // `start(); stop();` in one tick: nothing is subscribed that nobody would ever unsubscribe.
+    if (stopped) return;
     teardown.push(
       subscribeUnlocked(() => {
         if (stopped) return;
@@ -521,7 +667,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
           if (stopped) return;
           status.patch({ auth: false });
           // Before the start sequence has reached the reconciler, its own first flow covers this.
-          if (launched) reconcile.trigger('token');
+          triggerReconcile('token');
+          // A run of uploads halted for the sign-in resumes at once instead of waiting for its slow timer.
+          if (mediaStarted) media.trigger();
         }),
       );
     }
@@ -541,7 +689,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   function stop(): Promise<void> {
     if (stopping !== null) return stopping;
     stopped = true;
+    latestPlan = null;
     for (const off of teardown.splice(0)) off();
+    for (const release of [...releases]) release();
     replay.stop();
     refresher.stop();
     reconcile.stop();
@@ -566,11 +716,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     replayer: replay,
     refresher,
     reconciler: {
-      trigger: (reason) => {
-        reconcile.trigger(reason);
-      },
+      trigger: triggerReconcile,
       onNeedsReconcile: (inspectionId) => {
-        reconcile.onNeedsReconcile(inspectionId);
+        if (reconcileStarted) reconcile.onNeedsReconcile(inspectionId);
       },
       get last() {
         return reconcile.last;
@@ -582,7 +730,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     connector: trackedConnector,
     userActions,
     enqueue: enqueueAndTrigger,
-    lastPlan: () => latestPlan,
+    lastPlan: () => (stopped ? null : latestPlan),
+    recentDiagnostics: () => diagnosticRing.recent(),
     onEditorEvent: (listener) => {
       editorListeners.add(listener);
       return () => {

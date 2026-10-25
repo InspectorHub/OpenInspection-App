@@ -9,7 +9,7 @@ import { accountKey } from '../offline/outbox';
 import { ALICE, BOB, deferred } from '../offline/test-support/replay-world';
 import { jsonReply, NOW } from '../offline/test-support/package-world';
 import { neverBlocked } from '../test-support/never-blocked';
-import { SWEEP_KEY, SWEEP_MIN_INTERVAL_MS, placeholderResolveVideo, type OfflineStack } from './offline-stack';
+import { SWEEP_KEY, SWEEP_MIN_INTERVAL_MS, TEMP_SWEEP_KEY, placeholderResolveVideo, type OfflineStack } from './offline-stack';
 import { createStackWorld, dbThatFails, type StackWorld } from './test-support/stack-world';
 
 const CREATE = { id: 'insp-1', propertyAddress: '12 Test Street', templateId: 'template-1' };
@@ -242,9 +242,10 @@ describe('the shared lease', () => {
     await inFlight.promise;
 
     const turnedAway = await stack.refresher.refresh({ reason: 'manual' });
+    // A reconcile asked for before the first replay has finished is not started at all: its first flow follows the replay.
     stack.reconciler.trigger('manual');
-    await nextStatus(stack, (status) => status.reconcile === 'busy');
     expect(turnedAway.leaseBusy).toBe(true);
+    expect(stack.reconciler.last.status).toBe('never');
     expect(w.pkg.requests.map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/inspections']);
 
     gate.resolve();
@@ -474,7 +475,7 @@ describe('the sweeps at cold start', () => {
     expect(w.files.paths()).not.toContain('media/orphan-1.jpg');
   });
 
-  it('do not record a completed sweep when an upload may be running, and leave the temp copies alone', async () => {
+  it('do not record a completed temp sweep when an upload may be running, and leave the temp copies alone (the orphan sweep is recorded)', async () => {
     const w = await createStackWorld();
     await seedOldFiles(w);
     const seeding = createMediaStore({ db: w.replay.db, files: w.files, isBlocked: neverBlocked });
@@ -484,7 +485,8 @@ describe('the sweeps at cold start', () => {
     stack.start();
     await stack.settled();
     expect(w.files.cacheNames()).toEqual(['upload-1234567.tmp']);
-    expect((await w.replay.db.query('SELECT 1 FROM device_state WHERE key = ?', [SWEEP_KEY])).length).toBe(0);
+    expect((await w.replay.db.query('SELECT 1 FROM device_state WHERE key = ?', [TEMP_SWEEP_KEY])).length).toBe(0);
+    expect((await w.replay.db.query('SELECT 1 FROM device_state WHERE key = ?', [SWEEP_KEY])).length).toBe(1);
     await stack.stop();
   });
 });

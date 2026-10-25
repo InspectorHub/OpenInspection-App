@@ -265,6 +265,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   /** Inspections a `cancelFor` is working on: an upload that registers meanwhile is cancelled at once. */
   const cancelling = new Map<string, number>();
   let starting = 0;
+  /** Set by `dispose()` for good: nothing registers, starts or sends after it. */
+  let disposed = false;
   let listener: Promise<{ remove(): Promise<void> }> | null = null;
 
   function report(error: unknown): void {
@@ -311,6 +313,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
   }
 
   function attach(): Promise<void> {
+    if (disposed) return Promise.resolve();
     if (listener === null) {
       const registered = deps.plugin.addListener('events', onEvent);
       listener = registered;
@@ -442,8 +445,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       timer = arm(silenceMs);
     };
     waiters.set(id, { settle, pendingId: row.pendingId, onProgress: options.onProgress, touch });
-    if (cancelling.has(row.inspectionId)) {
-      // A cancel was asked for while this start was in flight: it could not see the upload yet.
+    if (disposed || cancelling.has(row.inspectionId)) {
+      // A cancel (or the end of the session) was asked for while this start was in flight: it could not see the upload yet.
       waiters.delete(id);
       void deps.plugin.removeUpload({ id }).catch(() => undefined);
       settle({ kind: 'cancelled' });
@@ -619,6 +622,8 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       }
       const terminal = await runUpload(row, { url: minted.url, sendClientHeaders: minted.sendClientHeaders, title: strategy?.notificationTitle ?? NOTIFICATION_TITLE, silenceTimeout: strategy !== undefined }, options);
       if (terminal === 'start-failed') return settleFailure(row, failure('FILE', { retryable: true }), marked);
+      // The session ended while the file was on its way: nothing is lost, the row goes back to what it was.
+      if (terminal.kind === 'cancelled' && disposed) return settleFailure(row, failure('DISPOSED', { retryable: true, halt: true }), marked);
       if (terminal.kind === 'cancelled') return blockedOutcome();
       if (terminal.kind === 'timeout') return settleFailure(row, failure('TIMEOUT', { retryable: true }), marked);
       if (terminal.statusCode === null) {
@@ -659,6 +664,7 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
 
   function uploadDetailed(ref: UploadRef, options: UploadOptions = {}): Promise<UploadOutcome> {
     if (!isValidMediaId(ref.pendingId) || !isValidMediaId(ref.inspectionId)) return Promise.resolve(toOutcome(failure('INVALID', { retryable: false })));
+    if (disposed) return Promise.resolve(toOutcome(failure('DISPOSED', { retryable: true, halt: true })));
     const running = active.get(ref.pendingId);
     if (running) return running;
     inspectionOf.set(ref.pendingId, ref.inspectionId);
@@ -730,6 +736,16 @@ export function createNativeUploader(deps: NativeUploaderDeps): NativeUploader {
       }
     },
     dispose: async () => {
+      disposed = true;
+      // Uploads the plugin is running are cancelled and their callers released: a completion event could no longer be heard.
+      const removals: Promise<void>[] = [];
+      for (const [id, waiter] of [...waiters]) {
+        waiters.delete(id);
+        removals.push(deps.plugin.removeUpload({ id }).catch(() => undefined));
+        waiter.settle({ kind: 'cancelled' });
+      }
+      await Promise.all(removals);
+      early.clear();
       const registered = listener;
       listener = null;
       if (registered === null) return;
