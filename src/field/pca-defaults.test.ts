@@ -3,8 +3,8 @@ import { ENGINE_PCA_VALUES as fixture } from './test-fixtures/engine-pca-values'
 import { commercialPresets, resolvePcaNarrative, resolveRelianceText } from './pca-defaults';
 
 /**
- * The expected values are the engine's own, extracted from its source into the fixture. They are not retyped here, so
- * a local copy that drifts from the engine fails against the fixture.
+ * The expected values are the engine's own, extracted from its source by script into `test-fixtures/engine-pca-values.ts`.
+ * They are not retyped here, so a local copy that drifts from the engine fails against the fixture.
  */
 describe('pca defaults against the engine values', () => {
   it('an inspection with no stored narrative resolves to the engine seed, block for block', () => {
@@ -28,13 +28,27 @@ describe('pca defaults against the engine values', () => {
     expect(mixed).toEqual({ ...fixture.relianceTemplates, pointInTime: 'Own wording.' });
   });
 
-  it('the commercial presets carry exactly the engine subtypes and field ids, in order', () => {
+  it('the commercial presets equal the engine ones, field by field: id, label, type, group, required, unit and options, in order', () => {
     const presets = commercialPresets();
-    expect(Object.keys(presets)).toEqual(Object.keys(fixture.commercialPresetFieldIds));
-    for (const [key, ids] of Object.entries(fixture.commercialPresetFieldIds)) {
-      expect(presets[key]?.map((f) => f.id)).toEqual(ids);
-    }
+    expect(Object.keys(presets)).toEqual(Object.keys(fixture.commercialPresets));
+    expect(presets).toEqual(fixture.commercialPresets);
     expect(Object.keys(presets).every((key) => key.startsWith('commercial:'))).toBe(true);
+  });
+
+  it('control: the comparison sees a changed label, a changed option and a changed flag', () => {
+    const changed = commercialPresets();
+    const first = changed['commercial:office']?.[0];
+    if (first === undefined) throw new Error('no office preset');
+    first.label = 'Year built (edited)';
+    expect(changed).not.toEqual(fixture.commercialPresets);
+    const options = commercialPresets();
+    options['commercial:office']?.[3]?.options?.splice(0, 1, 'Z');
+    expect(options).not.toEqual(fixture.commercialPresets);
+    const flag = commercialPresets();
+    const target = flag['commercial:retail']?.[1];
+    if (target === undefined) throw new Error('no retail field');
+    target.required = false;
+    expect(flag).not.toEqual(fixture.commercialPresets);
   });
 
   it('returns a fresh copy: changing one answer does not change the next', () => {
@@ -44,7 +58,7 @@ describe('pca defaults against the engine values', () => {
     office?.pop();
     office?.[3]?.options?.pop();
     const second = commercialPresets()['commercial:office'];
-    expect(second?.length).toBe(fixture.commercialPresetFieldIds['commercial:office'].length);
+    expect(second?.length).toBe(fixture.commercialPresets['commercial:office'].length);
     expect(second?.[3]?.options).toHaveLength(4);
   });
 });

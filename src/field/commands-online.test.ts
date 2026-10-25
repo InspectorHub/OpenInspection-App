@@ -6,11 +6,11 @@ import { MESSAGES } from './messages';
 import { COMMANDS_BY_TYPE } from './test-support/all-commands';
 import { formFields, reply, scriptedApi } from './test-support/scripted-api';
 
-const problem = (p: 'offline' | 'timeout' | 'auth' | 'upgrade'): ApiOutcome => ({ kind: 'problem', problem: p });
+const problem = (p: 'offline' | 'unknown' | 'auth' | 'upgrade' | 'locked'): ApiOutcome => ({ kind: 'problem', problem: p });
 
 async function send(cmd: FieldCommand, answers: ApiOutcome[] = [], key?: string) {
   const api = scriptedApi(...answers);
-  const result = await executeOnline({ api, now: () => 777 }, 'i1', cmd as OnlineCommand, key);
+  const result = await executeOnline({ api, signedAtMs: () => 777 }, 'i1', cmd as OnlineCommand, key);
   return { api, result };
 }
 
@@ -96,7 +96,7 @@ describe('online: one request commands', () => {
     expect((await send(only('compliance', 0))).result).toEqual({ ok: true, data: { role: 'field_observer' } });
     expect((await send(only('compliance', 3))).result).toEqual({ ok: true, data: { documentKey: 'deed' } });
     expect((await send(only('compliance', 5))).result).toEqual({ ok: true, data: { status: 'declined' } });
-    expect((await send(only('compliance', 0), [reply(403)])).result).toEqual({ ok: false });
+    expect((await send(only('compliance', 0), [reply(422)])).result).toEqual({ ok: false });
   });
 
   it('refuses what the web action refuses, without a request', async () => {
@@ -115,6 +115,14 @@ describe('online: one request commands', () => {
       const { api, result } = await send(cmd);
       expect(result.ok, JSON.stringify(cmd.type)).toBe(false);
       expect(api.calls).toHaveLength(0);
+    }
+  });
+
+  it('the signature time comes from the injected clock and from nowhere else', async () => {
+    for (const at of [1, 1_800_000_000_000]) {
+      const api = scriptedApi();
+      await executeOnline({ api, signedAtMs: () => at }, 'i1', { type: 'sign-inspector', signatureBase64: 'c2ln' }, undefined);
+      expect(api.calls[0]?.json).toEqual({ signatureBase64: 'c2ln', signedAt: at });
     }
   });
 
@@ -150,6 +158,8 @@ describe('online: autofill', () => {
     expect(refused.result).toEqual({ ok: false, data: { facts: null, reason: 'REQUEST_FAILED' } });
     const offline = await send(only('autofill-property-facts'), [problem('offline')]);
     expect(offline.result).toEqual({ ok: false, error: MESSAGES.needsConnection, data: { facts: null, reason: 'REQUEST_FAILED' } });
+    const lost = await send(only('autofill-property-facts'), [problem('unknown')]);
+    expect(lost.result).toEqual({ ok: false, error: MESSAGES.needsConnection, data: { facts: null, reason: 'REQUEST_FAILED' } });
   });
 
   it('a found-nothing answer keeps its reason', async () => {
@@ -171,7 +181,7 @@ describe('online: covers and annotations', () => {
 
   it('upload-cover without a key in the answer stops there; one that fails to set the cover is not ok', async () => {
     const noKey = await send(only('upload-cover'), [reply(200, { data: {} })]);
-    expect(noKey.result).toEqual({ ok: false });
+    expect(noKey.result).toEqual({ ok: false, error: MESSAGES.unreadableAnswer });
     expect(noKey.api.calls).toHaveLength(1);
     const notSet = await send(only('upload-cover'), [reply(200, { data: { key: 'k-1' } }), reply(500)]);
     expect(notSet.result).toEqual({ ok: false });
@@ -198,8 +208,11 @@ describe('online: covers and annotations', () => {
   });
 
   it('an item id with a slash cannot change the path', async () => {
-    const { api } = await send({ type: 'annotate', itemId: '../../x', photoIndex: 0, nodes: '[]', image: new Blob(['x']) });
-    expect(api.calls[0]?.path).toBe('/api/inspections/i1/items/..%2F..%2Fx/photos/0/annotation');
+    const { api, result } = await send({ type: 'annotate', itemId: '../../x', photoIndex: 0, nodes: '[]', image: new Blob(['x']) });
+    expect(result).toEqual({ ok: false, error: MESSAGES.invalidValue });
+    expect(api.calls).toHaveLength(0);
+    const fine = await send({ type: 'annotate', itemId: 'item.v2', photoIndex: 0, nodes: '[]', image: new Blob(['x']) });
+    expect(fine.api.calls[0]?.path).toBe('/api/inspections/i1/items/item.v2/photos/0/annotation');
   });
 });
 
@@ -215,10 +228,16 @@ describe('online: structure', () => {
     expect(api.calls).toHaveLength(1);
   });
 
-  it('a refused convergence is told; collab switched off (501) and a lost connection are tolerated', async () => {
+  it('a refused convergence is told; collab switched off (501) is tolerated', async () => {
     expect((await send(only('restructure'), [reply(200), reply(403)])).result).toEqual({ ok: false, error: MESSAGES.syncNotConverged });
     expect((await send(only('restructure'), [reply(200), reply(501)])).result).toEqual({ ok: true });
-    expect((await send(only('restructure'), [reply(200), problem('offline')])).result).toEqual({ ok: true });
+  });
+
+  it('a convergence step that could not be completed at all says so, whatever stopped it', async () => {
+    for (const kind of ['offline', 'unknown', 'auth', 'upgrade', 'locked'] as const) {
+      expect((await send(only('restructure'), [reply(200), problem(kind)])).result, kind).toEqual({ ok: false, error: MESSAGES.syncNotConverged });
+    }
+    expect((await send(only('restructure'), [reply(200), reply(200)])).result).toEqual({ ok: true });
   });
 
   it('a snapshot the server refused is a failure, not a silent success', async () => {
@@ -239,6 +258,15 @@ describe('online: structure', () => {
     expect(result.ok).toBe(true);
     expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/inspections/templates/tpl-1', 'PUT /api/inspections/templates/tpl-1']);
     expect(api.calls[1]?.json).toMatchObject({ name: 'Source' });
+  });
+
+  it('save-structure-template back refuses a template id the URL parser would resolve away, without a request', async () => {
+    const snapshot = { schemaVersion: 2 as const, sections: [] };
+    for (const templateId of ['..', '%2e%2e', 'a/b']) {
+      const { api, result } = await send({ type: 'save-structure-template', mode: 'back', snapshot, templateId });
+      expect(result, templateId).toEqual({ ok: false, error: MESSAGES.invalidValue });
+      expect(api.calls).toHaveLength(0);
+    }
   });
 
   it('save-structure-template back never renames the source: no id, unreadable source and a nameless one all fail before the PUT', async () => {
@@ -292,15 +320,35 @@ describe('online: statutory instance and follow-up', () => {
 describe('online: problems are told in fixed sentences', () => {
   it.each([
     ['offline', MESSAGES.needsConnection],
-    ['timeout', MESSAGES.timedOut],
+    ['unknown', MESSAGES.outcomeUnknown],
     ['auth', MESSAGES.sessionExpired],
     ['upgrade', MESSAGES.upgradeRequired],
+    ['locked', MESSAGES.deviceLocked],
   ] as const)('%s', async (kind, sentence) => {
     const { result } = await send(only('set-cover'), [problem(kind)]);
     expect(result).toEqual({ ok: false, error: sentence });
   });
 
-  it('a plain HTTP refusal is ok: false without a made-up sentence', async () => {
-    expect((await send(only('set-cover'), [reply(403, { error: { message: 'secret detail' } })])).result).toEqual({ ok: false });
+  it('an unknown outcome never says the device needs a connection, and says the change may have been saved', () => {
+    expect(MESSAGES.outcomeUnknown).not.toBe(MESSAGES.needsConnection);
+    expect(MESSAGES.outcomeUnknown).toMatch(/may/);
+  });
+
+  it('an unknown outcome of a publish warns that publishing again can create a second revision; no other command says that', async () => {
+    const publish = await send(only('publish', 1), [problem('unknown')]);
+    expect(publish.result).toEqual({ ok: false, error: MESSAGES.publishOutcomeUnknown });
+    expect(MESSAGES.publishOutcomeUnknown).toMatch(/second revision/);
+    expect(MESSAGES.outcomeUnknown).not.toMatch(/revision/);
+    const cover = await send(only('set-cover'), [problem('unknown')]);
+    expect(cover.result.error).not.toMatch(/revision/);
+  });
+
+  it('control: a publish that was refused before it was applied is not an unknown outcome', async () => {
+    expect((await send(only('publish', 1), [problem('offline')])).result.error).toBe(MESSAGES.needsConnection);
+  });
+
+  it('a 403 says the account is not allowed; any other plain refusal stays a bare ok: false', async () => {
+    expect((await send(only('set-cover'), [reply(403, { error: { message: 'secret detail' } })])).result).toEqual({ ok: false, error: MESSAGES.forbidden });
+    expect((await send(only('set-cover'), [reply(422, { error: { message: 'secret detail' } })])).result).toEqual({ ok: false });
   });
 });

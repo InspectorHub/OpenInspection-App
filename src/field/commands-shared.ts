@@ -11,12 +11,18 @@ export const isSuccess = (status: number): boolean => status >= 200 && status < 
 /** The error code the API's idempotency middleware answers with (HTTP 409) for a repeat that arrives while the first is still running. */
 const IN_FLIGHT_CODE = 'IDEMPOTENCY_IN_FLIGHT';
 
-export function problemResult(problem: ApiProblem): CommandResult<unknown> {
+/**
+ * `unknownOutcome` is the sentence for a write that went out and lost its answer. The publish has its own: it carries
+ * no idempotency key, so doing it again can create a second revision.
+ */
+export function problemResult(problem: ApiProblem, unknownOutcome: string = MESSAGES.outcomeUnknown): CommandResult<unknown> {
   switch (problem) {
     case 'offline':
       return needsConnectionResult();
-    case 'timeout':
-      return failure(MESSAGES.timedOut);
+    case 'unknown':
+      return failure(unknownOutcome);
+    case 'locked':
+      return failure(MESSAGES.deviceLocked);
     case 'upgrade':
       return failure(MESSAGES.upgradeRequired);
     case 'auth':
@@ -57,5 +63,6 @@ export function plain(outcome: ApiOutcome, withMessage = false): CommandResult<u
   if (isSuccess(outcome.status)) return { ok: true };
   if (isInFlight(outcome)) return stillSavingResult();
   const message = withMessage ? serverMessage(outcome.json) : undefined;
-  return message === undefined ? { ok: false } : { ok: false, error: message };
+  if (message !== undefined) return { ok: false, error: message };
+  return outcome.status === 403 ? failure(MESSAGES.forbidden) : { ok: false };
 }

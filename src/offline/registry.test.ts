@@ -7,6 +7,7 @@ import {
   INSPECTION_CREATE,
   INSPECTION_UPDATE,
   MAX_PAYLOAD_BYTES,
+  UPDATE_FIELD_NAMES,
   RESERVED_INSPECTION_IDS,
   RegistryError,
   findCommand,
@@ -301,6 +302,16 @@ describe('inspection.update and inspection.complete payloads', () => {
     expect(codeOf(() => INSPECTION_UPDATE.parse({ inspectionId: 'a', changes: {} }))).toBe('invalid_payload');
     expect(codeOf(() => INSPECTION_UPDATE.parse({ inspectionId: 'a', changes: { status: 'cancelled', price: 1 } }))).toBe('invalid_payload');
     expect(INSPECTION_UPDATE.parse({ inspectionId: 'a', changes: { sqft: 10, status: 'cancelled', price: 1 }, extra: true })).toEqual({ inspectionId: 'a', changes: { sqft: 10 } });
+  });
+
+  it('reads only own keys: a value inherited through __proto__ is never a change', () => {
+    const hostile = JSON.parse('{"__proto__":{"yearBuilt":1999},"sqft":10}') as Record<string, unknown>;
+    expect(INSPECTION_UPDATE.parse({ inspectionId: 'a', changes: hostile })).toEqual({ inspectionId: 'a', changes: { sqft: 10 } });
+    const inherited = Object.create({ yearBuilt: 1999 }) as Record<string, unknown>;
+    inherited.sqft = 10;
+    expect(INSPECTION_UPDATE.parse({ inspectionId: 'a', changes: inherited })).toEqual({ inspectionId: 'a', changes: { sqft: 10 } });
+    expect(UPDATE_FIELD_NAMES).toContain('sqft');
+    expect(UPDATE_FIELD_NAMES).not.toContain('templateId');
   });
 
   it('the update body is the changes only and complete has no body', () => {

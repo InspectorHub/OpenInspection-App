@@ -13,10 +13,15 @@ import { sanitizeSettingsPatch } from './settings-patch';
  *  - `complete` is queued as `inspection.complete`, online or not: the replayer sends it when it can, and the editor
  *    data shows it as done meanwhile.
  *  - `load-scope` is answered from the downloaded results; it is a read of the device, not a request.
- *  - `save-settings` is queued as `inspection.update` ONLY while offline and ONLY when every key of the change is one
- *    the registry keeps. The registry drops every other key without a word, so a change with a key outside its list
- *    (a template, for one) must never reach it: that change needs a connection. Online it is sent whole.
+ *  - `save-settings` is queued as `inspection.update` when every key of the change is one the registry keeps. The
+ *    registry drops every other key without a word, so a change with a key outside its list (a template, for one) must
+ *    never reach it. Offline that change needs a connection. Online it is sent whole, unless an earlier write of the
+ *    same inspection is still queued: sending past it would apply the writes out of order, so an eligible change is
+ *    queued behind it and any other asks the person to try again.
  *  - Everything else needs a connection offline, and online goes straight to the `/api/*` route.
+ *  - After an online write that succeeded, the cached copy the editor reloads from is refreshed (`afterWrite`), bounded
+ *    in time. A refresh that cannot be done does not fail the write; it is reported through `onCacheStale`, because
+ *    `CommandResult` is the package's fixed contract and has no place for it.
  *
  * A blocked inspection answers the blocked sentence and no request is made for it.
  */
@@ -27,7 +32,14 @@ export interface CommandDeps {
   /** Queues one write for the signed-in account (`OfflineStack.enqueue`). */
   enqueue(op: string, input: unknown): Promise<unknown>;
   api: Api;
-  now(): number;
+  /** The time stamped on an inspector signature. The assembler must pass a clock anchored to the server's. */
+  signedAtMs(): number;
+  /** True while this inspection has a write queued or stopped for a person (`hasQueuedWrites`). */
+  hasQueuedWrites(inspectionId: string): Promise<boolean>;
+  /** Refreshes the cached copy of this inspection (`createAfterWrite`). True when the cache now holds the server's state. */
+  afterWrite(inspectionId: string): Promise<boolean>;
+  /** The write succeeded but the cache could not be brought up to date: a reload will show the old state. */
+  onCacheStale?(inspectionId: string): void;
   /** The downloaded results of one scope (`load(id, scope)` of the editor data). */
   loadScope(inspectionId: string, scope: string): Promise<ResultMap>;
 }
@@ -52,9 +64,32 @@ async function saveSettings(deps: CommandDeps, inspectionId: string, payload: Re
   const patch = sanitizeSettingsPatch(payload);
   const keys = Object.keys(patch);
   if (keys.length === 0) return { ok: true };
-  if (deps.isOnline()) return saveSettingsOnline(deps.api, inspectionId, patch);
-  if (!keys.every((key) => UPDATE_FIELD_NAMES.includes(key))) return needsConnectionResult();
+  const eligible = keys.every((key) => UPDATE_FIELD_NAMES.includes(key));
+  if (deps.isOnline()) {
+    if (!(await deps.hasQueuedWrites(inspectionId))) return refreshed(deps, inspectionId, await saveSettingsOnline(deps.api, inspectionId, patch));
+    return eligible ? queued(deps, 'inspection.update', { inspectionId, changes: patch }) : failure(MESSAGES.pendingChanges);
+  }
+  if (!eligible) return needsConnectionResult();
   return queued(deps, 'inspection.update', { inspectionId, changes: patch });
+}
+
+/** After a write that succeeded: bring the cache up to date, bounded, and never let that fail the write. */
+async function refreshed(deps: CommandDeps, inspectionId: string, result: CommandResult<unknown>): Promise<CommandResult<unknown>> {
+  if (!result.ok) return result;
+  let fresh = false;
+  try {
+    fresh = await deps.afterWrite(inspectionId);
+  } catch {
+    fresh = false;
+  }
+  if (!fresh) {
+    try {
+      deps.onCacheStale?.(inspectionId);
+    } catch {
+      // A failing listener changes nothing about the write.
+    }
+  }
+  return result;
 }
 
 async function loadScope(deps: CommandDeps, inspectionId: string, scope: string): Promise<CommandResult<unknown>> {
@@ -76,7 +111,9 @@ async function route(deps: CommandDeps, inspectionId: string, cmd: FieldCommand,
       return saveSettings(deps, inspectionId, cmd.payload);
     default: {
       if (!deps.isOnline()) return offlineAnswer(cmd);
-      return executeOnline({ api: deps.api, now: () => deps.now() }, inspectionId, cmd, opts?.idempotencyKey);
+      const sent = await executeOnline({ api: deps.api, signedAtMs: () => deps.signedAtMs() }, inspectionId, cmd, opts?.idempotencyKey);
+      // A lookup writes nothing, so there is nothing for the cache to catch up with.
+      return cmd.type === 'autofill-property-facts' ? sent : refreshed(deps, inspectionId, sent);
     }
   }
 }

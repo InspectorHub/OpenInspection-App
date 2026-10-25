@@ -132,7 +132,8 @@ function shape(fields: Readonly<Record<string, Field>>, required: readonly strin
     if (!isRecord(input)) return invalid();
     const out: Record<string, unknown> = {};
     for (const [key, check] of Object.entries(fields)) {
-      const value = input[key];
+      // Own keys only: a value inherited through the prototype chain was never part of what the person sent.
+      const value = Object.hasOwn(input, key) ? input[key] : undefined;
       if (value === undefined) continue;
       out[key] = check(value);
     }

@@ -10,6 +10,7 @@ export function wrapCollab(inner: CollabConnector, registry: Pick<EditorRegistry
   return {
     connect: (inspectionId, opts) => {
       const real = inner.connect(inspectionId, opts);
+      let destroyed = false;
       const handle: ResultsDocHandle = {
         get doc() {
           return real.doc;
@@ -19,6 +20,8 @@ export function wrapCollab(inner: CollabConnector, registry: Pick<EditorRegistry
         },
         synced: () => real.synced(),
         destroy: () => {
+          if (destroyed) return;
+          destroyed = true;
           registry.clearHandle(inspectionId, handle);
           real.destroy();
         },

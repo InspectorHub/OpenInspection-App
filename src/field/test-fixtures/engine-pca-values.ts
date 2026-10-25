@@ -1,4 +1,4 @@
-/** Values extracted from the engine's own source (pca-narrative, pca-reliance-text, commercial-subtypes). Not authored here. */
+/** Values extracted from the engine's own source (pca-narrative, pca-reliance-text, commercial-subtypes) by script. Not authored here. */
 export const ENGINE_PCA_VALUES = {
   "pcaNarrativeSeed": {
     "transmittalLetter": "This Property Condition Report has been prepared at your request and in accordance with the agreed scope of work. The accompanying report presents our observations, opinions of cost, and recommendations based on a walk-through survey of the subject property.",
@@ -16,47 +16,246 @@ export const ENGINE_PCA_VALUES = {
     "pointInTime": "The observations and opinions in this report describe the condition of the subject property as of the date of the site visit. Property conditions may change after that date; the Consultant assumes no obligation to update the report to reflect events or conditions arising after the site visit.",
     "siteSpecific": "This report is specific to the subject property and the scope of work agreed with the User. It is not a comprehensive engineering study, code-compliance survey, or warranty of the property, and it should be read together with the Limitations & Exceptions stated herein."
   },
-  "commercialPresetFieldIds": {
+  "commercialPresets": {
     "commercial:office": [
-      "yearBuilt",
-      "nra",
-      "floorCount",
-      "occupancyClass",
-      "sprinklered",
-      "lastRenovation"
+      {
+        "id": "yearBuilt",
+        "label": "Year built",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "nra",
+        "label": "Net rentable area",
+        "type": "number",
+        "unit": "sqft",
+        "group": "physical",
+        "required": true
+      },
+      {
+        "id": "floorCount",
+        "label": "Number of floors",
+        "type": "number",
+        "group": "physical"
+      },
+      {
+        "id": "occupancyClass",
+        "label": "Occupancy classification",
+        "type": "select",
+        "group": "compliance",
+        "options": [
+          "B (Business)",
+          "A-3 (Assembly)",
+          "M (Mercantile)",
+          "Other"
+        ]
+      },
+      {
+        "id": "sprinklered",
+        "label": "Sprinklered",
+        "type": "select",
+        "group": "compliance",
+        "options": [
+          "Full",
+          "Partial",
+          "None"
+        ]
+      },
+      {
+        "id": "lastRenovation",
+        "label": "Last major renovation",
+        "type": "date",
+        "group": "maintenance"
+      }
     ],
     "commercial:retail": [
-      "yearBuilt",
-      "gla",
-      "storefrontCount",
-      "anchorTenant",
-      "parkingSpaces"
+      {
+        "id": "yearBuilt",
+        "label": "Year built",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "gla",
+        "label": "Gross leasable area",
+        "type": "number",
+        "unit": "sqft",
+        "group": "physical",
+        "required": true
+      },
+      {
+        "id": "storefrontCount",
+        "label": "Storefronts",
+        "type": "number",
+        "group": "physical"
+      },
+      {
+        "id": "anchorTenant",
+        "label": "Anchor tenant",
+        "type": "text",
+        "group": "occupancy"
+      },
+      {
+        "id": "parkingSpaces",
+        "label": "Parking spaces",
+        "type": "number",
+        "group": "physical"
+      }
     ],
     "commercial:hospitality": [
-      "yearBuilt",
-      "roomCount",
-      "brandAffiliation",
-      "aaaRating",
-      "lastRenovation"
+      {
+        "id": "yearBuilt",
+        "label": "Year built",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "roomCount",
+        "label": "Guest rooms",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "brandAffiliation",
+        "label": "Brand affiliation",
+        "type": "text",
+        "group": "identity"
+      },
+      {
+        "id": "aaaRating",
+        "label": "AAA / Forbes rating",
+        "type": "select",
+        "group": "compliance",
+        "options": [
+          "Unrated",
+          "1 Diamond",
+          "2 Diamond",
+          "3 Diamond",
+          "4 Diamond",
+          "5 Diamond"
+        ]
+      },
+      {
+        "id": "lastRenovation",
+        "label": "Last major renovation",
+        "type": "date",
+        "group": "maintenance"
+      }
     ],
     "commercial:industrial": [
-      "yearBuilt",
-      "sqft",
-      "clearHeight",
-      "dockCount",
-      "powerCapacity",
-      "railSpur"
+      {
+        "id": "yearBuilt",
+        "label": "Year built",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "sqft",
+        "label": "Building area",
+        "type": "number",
+        "unit": "sqft",
+        "group": "physical",
+        "required": true
+      },
+      {
+        "id": "clearHeight",
+        "label": "Clear height",
+        "type": "number",
+        "unit": "ft",
+        "group": "physical"
+      },
+      {
+        "id": "dockCount",
+        "label": "Loading docks",
+        "type": "number",
+        "group": "physical"
+      },
+      {
+        "id": "powerCapacity",
+        "label": "Power capacity",
+        "type": "number",
+        "unit": "amps",
+        "group": "utilities"
+      },
+      {
+        "id": "railSpur",
+        "label": "Rail spur",
+        "type": "select",
+        "group": "utilities",
+        "options": [
+          "None",
+          "Active",
+          "Removed"
+        ]
+      }
     ],
     "commercial:institutional": [
-      "yearBuilt",
-      "sqft",
-      "occupancyType",
-      "sprinklered"
+      {
+        "id": "yearBuilt",
+        "label": "Year built",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "sqft",
+        "label": "Building area",
+        "type": "number",
+        "unit": "sqft",
+        "group": "physical",
+        "required": true
+      },
+      {
+        "id": "occupancyType",
+        "label": "Occupancy type",
+        "type": "select",
+        "group": "compliance",
+        "options": [
+          "E (Educational)",
+          "I-1 (Custodial care)",
+          "I-2 (Medical)",
+          "I-3 (Detention)",
+          "I-4 (Day care)"
+        ]
+      },
+      {
+        "id": "sprinklered",
+        "label": "Sprinklered",
+        "type": "select",
+        "group": "compliance",
+        "options": [
+          "Full",
+          "Partial",
+          "None"
+        ]
+      }
     ],
     "commercial:mixed-use": [
-      "yearBuilt",
-      "residentialUnits",
-      "commercialSqft"
+      {
+        "id": "yearBuilt",
+        "label": "Year built",
+        "type": "number",
+        "group": "identity",
+        "required": true
+      },
+      {
+        "id": "residentialUnits",
+        "label": "Residential units",
+        "type": "number",
+        "group": "identity"
+      },
+      {
+        "id": "commercialSqft",
+        "label": "Commercial sq ft",
+        "type": "number",
+        "unit": "sqft",
+        "group": "identity"
+      }
     ]
   }
 } as const;

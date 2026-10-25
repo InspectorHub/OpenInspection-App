@@ -3,7 +3,7 @@ import { AuthError } from '../auth/errors';
 import { createHttp, type Http, type HttpRequest, type HttpResponse } from '../auth/http';
 import type { TokenManager } from '../auth/tokens';
 import { installStrictGlobals, restoreGlobals } from '../test-support/strict-globals';
-import { apiPath, createApiClient, type ApiClientDeps } from './api-client';
+import { apiPath, createApiClient, templatePath, type ApiClientDeps } from './api-client';
 
 const ORIGIN = 'https://app.example.com';
 
@@ -53,7 +53,21 @@ afterEach(() => {
 describe('api path', () => {
   it('builds an inspection path from a checked id and encoded segments', () => {
     expect(apiPath('insp-1')).toBe('/api/inspections/insp-1');
-    expect(apiPath('insp-1', 'units', 'a/b c')).toBe('/api/inspections/insp-1/units/a%2Fb%20c');
+    expect(apiPath('insp-1', 'units', 'a b')).toBe('/api/inspections/insp-1/units/a%20b');
+    expect(apiPath('insp-1', 'units', 'u.1', '..x', 'x..')).toBe('/api/inspections/insp-1/units/u.1/..x/x..');
+  });
+
+  it('refuses a segment the URL parser would resolve away: dot segments, empty ones, slashes, and encoded dots', () => {
+    for (const bad of ['..', '.', '', '%2e%2e', '%2E', '.%2e', 'units/../duplicate', 'a/b', String.raw`a\b`, '%2e%2e%2f', '%252e%252e']) {
+      expect(() => apiPath('insp-1', bad), JSON.stringify(bad)).toThrow(RangeError);
+    }
+    expect(() => apiPath('insp-1', 'units', '..', 'duplicate')).toThrow(RangeError);
+  });
+
+  it('templatePath checks its id the same way', () => {
+    expect(templatePath()).toBe('/api/inspections/templates');
+    expect(templatePath('tpl-1')).toBe('/api/inspections/templates/tpl-1');
+    for (const bad of ['..', '', '%2e%2e', 'a/b']) expect(() => templatePath(bad)).toThrow(RangeError);
   });
 
   it('refuses an id that is not an inspection id', () => {
@@ -101,6 +115,9 @@ describe('api client', () => {
     const r = rig([response(200)]);
     await expect(createApiClient(r.deps).send({ method: 'GET', path: 'https://evil.example/api/x' })).rejects.toThrow(RangeError);
     await expect(createApiClient(r.deps).send({ method: 'GET', path: '/other' })).rejects.toThrow(RangeError);
+    for (const path of ['/api/inspections/../admin', '/api/inspections/%2e%2e/admin', '/api/inspections//x', '/api/x?y=1', '/api/x#y']) {
+      await expect(createApiClient(r.deps).send({ method: 'GET', path }), path).rejects.toThrow(RangeError);
+    }
     expect(r.requests).toHaveLength(0);
     expect(r.tokenReads()).toBe(0);
   });
@@ -132,21 +149,71 @@ describe('api client', () => {
     expect(await createApiClient(r.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'upgrade' });
   });
 
-  it('a timeout and an unreachable server are told apart', async () => {
-    const slow = rig([new AuthError('server_timeout')]);
-    expect(await createApiClient(slow.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'timeout' });
-    const down = rig([new AuthError('server_unreachable')]);
-    expect(await createApiClient(down.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'offline' });
-    const odd = rig([new Error('anything')]);
-    expect(await createApiClient(odd.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'offline' });
+  it('a transport failure of a write after it was sent is an unknown outcome, whatever the failure was', async () => {
+    for (const failure of [new AuthError('server_timeout'), new AuthError('server_unreachable'), new AuthError('server_redirected'), new AuthError('server_response_invalid'), new Error('anything')]) {
+      for (const method of ['POST', 'PATCH', 'PUT', 'DELETE'] as const) {
+        const r = rig([failure]);
+        expect(await createApiClient(r.deps).send({ method, path: '/api/x', json: {} })).toEqual({ kind: 'problem', problem: 'unknown' });
+        expect(r.requests).toHaveLength(1);
+      }
+    }
   });
 
-  it('a closed gate sends nothing; an open gate sends', async () => {
+  it('control: the same failure of a read is simply offline, and nothing was at stake', async () => {
+    for (const failure of [new AuthError('server_timeout'), new AuthError('server_unreachable'), new Error('anything')]) {
+      const r = rig([failure]);
+      expect(await createApiClient(r.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'offline' });
+    }
+  });
+
+  it('a closed gate sends nothing and says the device is locked; an open gate sends', async () => {
     const closed = rig([response(200)], { gate: () => false });
-    expect(await createApiClient(closed.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'auth' });
+    expect(await createApiClient(closed.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'locked' });
     expect(closed.requests).toHaveLength(0);
     const open = rig([response(200)], { gate: () => true });
     expect(await createApiClient(open.deps).send({ method: 'GET', path: '/api/x' })).toMatchObject({ kind: 'response' });
+  });
+
+  it('a gate that throws fails closed: nothing is sent', async () => {
+    const throws = rig([response(200)], {
+      gate: () => {
+        throw new Error('lock state unreadable');
+      },
+    });
+    expect(await createApiClient(throws.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'locked' });
+    expect(throws.requests).toHaveLength(0);
+  });
+
+  it('a gate that closes between the first attempt and the retry stops the retry', async () => {
+    let calls = 0;
+    const r = rig([response(401), response(200)], { gate: () => (calls += 1) < 2 });
+    expect(await createApiClient(r.deps).send({ method: 'GET', path: '/api/x' })).toEqual({ kind: 'problem', problem: 'locked' });
+    expect(r.requests).toHaveLength(1);
+  });
+
+  it('bounds the answer it will read, and the time it waits (longer for an upload)', async () => {
+    const r = rig([response(200), response(200)]);
+    const api = createApiClient(r.deps);
+    await api.send({ method: 'GET', path: '/api/x' });
+    const form = new FormData();
+    form.append('a', 'b');
+    await api.send({ method: 'POST', path: '/api/x', form });
+    expect(r.requests[0]?.maxBytes).toBe(1_048_576);
+    expect(r.requests[0]?.timeoutMs).toBe(20_000);
+    expect(r.requests[1]?.timeoutMs).toBe(90_000);
+    await api.send({ method: 'GET', path: '/api/x', timeoutMs: 5 });
+  });
+
+  it('a session check that says retry, or throws, or a token read that throws, are all offline (the request was not applied)', async () => {
+    const retry = rig([response(401)], { session: { kind: 'retry', reason: 'network', retryAfterMs: 1 } });
+    expect(await createApiClient(retry.deps).send({ method: 'POST', path: '/api/x', json: {} })).toEqual({ kind: 'problem', problem: 'offline' });
+    const throwingSession = rig([response(401)]);
+    throwingSession.deps.tokens.checkSession = () => Promise.reject(new Error('x'));
+    expect(await createApiClient(throwingSession.deps).send({ method: 'POST', path: '/api/x', json: {} })).toEqual({ kind: 'problem', problem: 'offline' });
+    const throwingToken = rig([response(200)]);
+    throwingToken.deps.tokens.getAccessToken = () => Promise.reject(new Error('store down'));
+    expect(await createApiClient(throwingToken.deps).send({ method: 'POST', path: '/api/x', json: {} })).toEqual({ kind: 'problem', problem: 'offline' });
+    expect(throwingToken.requests).toHaveLength(0);
   });
 
   it('works through the real http wrapper with the strict browser globals, a form body included', async () => {

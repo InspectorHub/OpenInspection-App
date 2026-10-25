@@ -22,28 +22,45 @@ describe('editor registry', () => {
   it('counts an inspection as open from register, before any connection exists', () => {
     const registry = createEditorRegistry();
     expect(registry.isOpenInEditor('insp-1')).toBe(false);
-    registry.register('insp-1');
+    const release = registry.register('insp-1');
     expect(registry.isOpenInEditor('insp-1')).toBe(true);
     expect(registry.isOpenInEditor('insp-2')).toBe(false);
-    registry.unregister('insp-1');
+    release();
     expect(registry.isOpenInEditor('insp-1')).toBe(false);
   });
 
-  it('survives a double mount: two registers need two unregisters', () => {
+  it('survives a double mount: two registrations need two releases', () => {
     const registry = createEditorRegistry();
-    registry.register('insp-1');
-    registry.register('insp-1');
-    registry.unregister('insp-1');
+    const first = registry.register('insp-1');
+    const second = registry.register('insp-1');
+    first();
     expect(registry.isOpenInEditor('insp-1')).toBe(true);
-    registry.unregister('insp-1');
+    second();
     expect(registry.isOpenInEditor('insp-1')).toBe(false);
   });
 
-  it('an unregister without a register does not go negative', () => {
+  it('a release called more than once cannot clear another component registration', () => {
     const registry = createEditorRegistry();
-    registry.unregister('insp-1');
-    registry.register('insp-1');
+    const first = registry.register('insp-1');
+    const second = registry.register('insp-1');
+    first();
+    first();
+    first();
     expect(registry.isOpenInEditor('insp-1')).toBe(true);
+    second();
+    second();
+    expect(registry.isOpenInEditor('insp-1')).toBe(false);
+  });
+
+  it('a late release does not close a newer registration of the same inspection', () => {
+    const registry = createEditorRegistry();
+    const old = registry.register('insp-1');
+    old();
+    const fresh = registry.register('insp-1');
+    old();
+    expect(registry.isOpenInEditor('insp-1')).toBe(true);
+    fresh();
+    expect(registry.isOpenInEditor('insp-1')).toBe(false);
   });
 
   it('liveDoc reads the handle live: a replaced document is seen at once', () => {

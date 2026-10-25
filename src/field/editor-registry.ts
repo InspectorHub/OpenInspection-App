@@ -10,8 +10,12 @@ import type { ResultsDocHandle } from '@inspectorhub/field-ui';
 export interface EditorRegistry {
   isOpenInEditor(inspectionId: string): boolean;
   liveDoc(inspectionId: string): Doc | null;
-  register(inspectionId: string): void;
-  unregister(inspectionId: string): void;
+  /**
+   * Counts the inspection as open until the returned function is called. Each call of the function releases only the
+   * registration it came from, and a second call does nothing, so a cleanup that runs twice cannot close the
+   * registration of another mount.
+   */
+  register(inspectionId: string): () => void;
   setHandle(inspectionId: string, handle: ResultsDocHandle): void;
   /** Removes the handle only if it is still the registered one, so a late destroy cannot drop a newer connection. */
   clearHandle(inspectionId: string, handle: ResultsDocHandle): void;
@@ -24,11 +28,14 @@ export function createEditorRegistry(): EditorRegistry {
   return {
     register: (id) => {
       open.set(id, (open.get(id) ?? 0) + 1);
-    },
-    unregister: (id) => {
-      const count = (open.get(id) ?? 0) - 1;
-      if (count > 0) open.set(id, count);
-      else open.delete(id);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const count = (open.get(id) ?? 0) - 1;
+        if (count > 0) open.set(id, count);
+        else open.delete(id);
+      };
     },
     isOpenInEditor: (id) => (open.get(id) ?? 0) > 0,
     setHandle: (id, handle) => {

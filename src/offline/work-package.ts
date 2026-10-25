@@ -7,6 +7,7 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import type { Network } from '../platform/network';
+import { isLocalId } from './registry';
 import { DEFAULT_LEASE_TTL_MS, SYNC_LEASE, withLease, type LeaseHandle } from './lease';
 import type { AppStatePort } from './lock-monitor';
 import { accountKey as accountKeyOf, sameAccount, type Account } from './outbox';
@@ -197,7 +198,23 @@ export interface WorkPackageRefresher {
   /** Terminal: no further request, no timer, no subscription. */
   stop(): void;
   idle(): Promise<void>;
+  /**
+   * Re-downloads the reads of ONE inspection, through the same guards as a full run (lock, network, account, lease, the
+   * package's own refreshable/visible/blocked checks). For after a write: the cache then shows what the write changed.
+   * Never rejects. It does not list, does not touch other inspections and does not run the globals.
+   */
+  refreshInspection(inspectionId: string): Promise<InspectionRefresh>;
 }
+
+export type InspectionRefresh =
+  | { kind: 'refreshed' }
+  /** Nothing was replaced: not refreshable (blocked, quarantined, another account, unconfirmed), a stale generation, or an invalid id. */
+  | { kind: 'skipped' }
+  /** The inspection is no longer visible or its download failed; the cache was not changed. */
+  | { kind: 'failed' }
+  /** Another flow holds the lease; nothing was requested. */
+  | { kind: 'busy' }
+  | { kind: 'halted'; reason: RefreshHalt };
 
 type Fetched =
   | { kind: 'ok'; text: string; json: unknown; etag: string | null }
@@ -756,6 +773,33 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     return summary;
   }
 
+  async function refreshInspection(inspectionId: string): Promise<InspectionRefresh> {
+    if (!isLocalId(inspectionId)) return { kind: 'skipped' };
+    const blocked = await mayContactServer(true);
+    if (blocked !== null) return { kind: 'halted', reason: blocked };
+    const account = await currentAccount();
+    if (account === null) return { kind: 'halted', reason: 'no_account' };
+    const summary = emptySummary();
+    const base: Omit<Run, 'lease'> = { account, key: accountKeyOf(account), reason: 'manual', summary, consecutive: 0, halted: null, cooling: null, hidden: new Set<string>(), replaceOnly: false, granted: 0 };
+    try {
+      const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease) => {
+        const live: Run = { ...base, lease };
+        try {
+          await refreshOne(live, { id: inspectionId, scheduledAt: null, completed: false, pinned: false, today: false, listed: false });
+        } finally {
+          summary.halted = live.halted;
+        }
+      });
+      if (!outcome.acquired) return { kind: 'busy' };
+    } catch (error) {
+      report(error);
+      return { kind: 'failed' };
+    }
+    if (summary.halted !== null) return { kind: 'halted', reason: summary.halted };
+    if (summary.refreshed > 0) return { kind: 'refreshed' };
+    return summary.failed > 0 || summary.notVisible > 0 ? { kind: 'failed' } : { kind: 'skipped' };
+  }
+
   function fallbackDelay(): number {
     return Math.round(fallbackInterval * (0.75 + 0.5 * random()));
   }
@@ -836,6 +880,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
   return {
     refresh,
     trigger,
+    refreshInspection,
     start: () => {
       if (started || stopped) return;
       started = true;

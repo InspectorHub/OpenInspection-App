@@ -116,6 +116,11 @@ export interface ReplayDeps {
   /** A run stopped early for a reason the person may need to act on (sign in again, update the app). */
   onHalt?: (reason: HaltReason) => void;
   onProgress?: (progress: ReplayProgress) => void;
+  /**
+   * A run sent at least one row: the inspections they belonged to, each once per run, called after the run released the
+   * lease. For refreshing what the server now holds. It changes nothing about what the replayer does.
+   */
+  onInspectionsSent?: (inspectionIds: readonly string[]) => void;
   /** Receives storage failures. Never receives a token, a url, a payload or any server text. */
   onError?: (error: unknown) => void;
 }
@@ -155,6 +160,8 @@ interface RunReport {
   /** The earliest future instant at which a waiting row becomes due. */
   wake: number | null;
   error: boolean;
+  /** The inspections that had a row sent in this run, in the order they were first sent. */
+  sent: Set<string>;
 }
 
 function errorCodeOf(json: unknown): string | null {
@@ -416,6 +423,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
           const def = findCommand(registry, row.op);
           await completeRow(deps.db, row, def?.createsInspection === true);
           result.sent += 1;
+          if (row.inspectionId !== null) run.sent.add(row.inspectionId);
         } else if (decision.kind === 'failed') {
           await markFailed(deps.db, row.idempotencyKey, decision.code);
           result.failed += 1;
@@ -438,7 +446,7 @@ export function createReplayer(deps: ReplayDeps): Replayer {
   }
 
   async function runOnce(): Promise<RunReport> {
-    const run: RunReport = { result: { sent: 0, failed: 0, waiting: 0, halted: null, leaseBusy: false }, wake: null, error: false };
+    const run: RunReport = { result: { sent: 0, failed: 0, waiting: 0, halted: null, leaseBusy: false }, wake: null, error: false, sent: new Set<string>() };
     const blocked = await mayContactServer();
     if (blocked !== null) {
       run.result.halted = blocked;
@@ -450,6 +458,11 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     } catch (error) {
       report(error);
       run.error = true;
+    }
+    // After the lease is released, so a flow that wants it (the single-inspection refresh) can take it.
+    if (run.sent.size > 0) {
+      const sent = [...run.sent];
+      notify(() => deps.onInspectionsSent?.(sent));
     }
     return run;
   }

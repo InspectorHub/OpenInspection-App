@@ -32,6 +32,7 @@ import type { Files } from '../platform/files';
 import type { Network } from '../platform/network';
 import type { UploaderPluginLike } from '../platform/uploader';
 import { createDiagnosticRing } from './diagnostics';
+import { createRefreshAfterReplay } from './refresh-after-replay';
 import { createStore, type ReadableStore } from './stack-store';
 import type { TimingCode } from './timings';
 
@@ -393,6 +394,14 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       // Before the reconciler has started, its first flow (which follows the first replay) covers this write.
       if (reconcileStarted) reconcilerCore?.onNeedsReconcile(inspectionId);
     },
+    // What the server holds changed: the cached copy the editor reads is refreshed, for those inspections only.
+    onInspectionsSent: (inspectionIds) => {
+      // Until the start sequence has launched the refresher, its own full refresh follows the first replay and covers these.
+      if (!refresherLaunched) return;
+      const pending = refreshAfterReplay(inspectionIds);
+      afterReplay.add(pending);
+      void pending.finally(() => afterReplay.delete(pending));
+    },
     isBlocked,
     onHalt: (reason) => {
       if (reason === 'auth') status.patch({ auth: true });
@@ -400,6 +409,13 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     },
     onError: report('replay_error'),
   });
+
+  let refresherLaunched = false;
+  const afterReplay = new Set<Promise<void>>();
+  const refreshAfterReplay = createRefreshAfterReplay({ refresher: { refreshInspection: (id) => refresher.refreshInspection(id) }, settle: async () => {
+      await refresher.idle();
+      await reconcile.idle();
+    }, isStopped: () => stopped });
 
   const refresher = createWorkPackageRefresher({
     db,
@@ -699,6 +715,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     await reconcile.idle();
     if (stopped) return;
     refresher.start();
+    refresherLaunched = true;
     await mediaUp;
   }
 
@@ -812,6 +829,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     // In the order the work hands over: a finished refresh wakes the reconciler, a refused write wakes it too.
     idle: async () => {
       await replay.idle();
+      await Promise.all([...afterReplay]);
       await refresher.idle();
       await reconcile.idle();
       await media.idle();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSchema, nextPublishIsAmendment, normalizeTemplateSnapshot, pickRawSnapshot, sliceResults, unwrapResultsResponse } from './loader-schema';
+import { SnapshotUnreadableError, buildSchema, nextPublishIsAmendment, normalizeTemplateSnapshot, pickRawSnapshot, sliceResults, unwrapResultsResponse } from './loader-schema';
 
 /*
  * The inputs and expected outputs below are the engine loader's own fixtures
@@ -98,9 +98,15 @@ describe('report-data overlay (engine loader fixtures)', () => {
     expect(JSON.stringify(SNAPSHOT)).toBe(before);
   });
 
-  it('an unreadable snapshot string is refused rather than shown as an empty template', () => {
-    expect(() => buildSchema('{not json', REPORT_SECTIONS)).toThrow();
-    expect(() => normalizeTemplateSnapshot('{not json')).toThrow();
+  it('an unreadable snapshot string is refused rather than shown as an empty template, with a sentence that carries no parser text', () => {
+    for (const run of [() => buildSchema('{not json', REPORT_SECTIONS), () => normalizeTemplateSnapshot('{not json')]) {
+      expect(run).toThrow(SnapshotUnreadableError);
+      try {
+        run();
+      } catch (error) {
+        expect((error as Error).message).not.toMatch(/JSON|Unexpected|position|token/i);
+      }
+    }
   });
 });
 
@@ -150,6 +156,9 @@ describe('results map', () => {
     '_default:sec:item2': { rating: 'b' },
     'unit-1:sec:item1': { rating: 'c' },
     _inspector_signature: { data: 'sig' },
+    // Contain a scope as text without starting with it: a prefix test must tell these from the real keys.
+    'legacy_default:sec:item1': { rating: 'x' },
+    'zunit-1:sec:item1': { rating: 'y' },
   };
 
   it('unwraps the three historical envelope shapes like the engine', () => {
@@ -166,6 +175,12 @@ describe('results map', () => {
     const slice = sliceResults(MAP);
     expect(Object.keys(slice)).toEqual(['_default:sec:item1', '_default:sec:item2']);
     expect(slice).not.toHaveProperty('_inspector_signature');
+  });
+
+  it('an empty scope is the common scope, the same as none', () => {
+    expect(sliceResults(MAP, '')).toEqual(sliceResults(MAP));
+    expect(Object.keys(sliceResults(MAP, ''))).toEqual(['_default:sec:item1', '_default:sec:item2']);
+    expect(Object.keys(sliceResults(MAP, undefined))).toEqual(['_default:sec:item1', '_default:sec:item2']);
   });
 
   it('a scope keeps only its own prefix', () => {

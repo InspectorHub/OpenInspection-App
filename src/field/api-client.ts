@@ -1,5 +1,4 @@
 import { safeClientHeaders } from '../auth/client-headers';
-import { AuthError } from '../auth/errors';
 import type { Http, HttpResponse } from '../auth/http';
 import type { TokenManager } from '../auth/tokens';
 import { isLocalId } from '../offline/registry';
@@ -25,7 +24,15 @@ export interface ApiCall {
   timeoutMs?: number;
 }
 
-export type ApiProblem = 'offline' | 'timeout' | 'auth' | 'upgrade';
+/**
+ * Why no answer came:
+ *  - `offline`: the request was not applied (nothing was sent, or the server refused to look at it: no token, a failed
+ *    session check) or it was a read, which changes nothing.
+ *  - `unknown`: a WRITE that went out and then lost its answer (timeout, unreachable, redirect, unreadable or oversize
+ *    body). The server may have applied it.
+ *  - `auth`: the session is over. `locked`: the offline lock holds. `upgrade`: the server refuses this app version.
+ */
+export type ApiProblem = 'offline' | 'unknown' | 'auth' | 'locked' | 'upgrade';
 
 export type ApiOutcome = { kind: 'response'; status: number; json: unknown } | { kind: 'problem'; problem: ApiProblem };
 
@@ -49,10 +56,48 @@ const RESPONSE_MAX_BYTES = 1_048_576;
 const JSON_TIMEOUT_MS = 20_000;
 const FORM_TIMEOUT_MS = 90_000;
 
-/** `/api/inspections/<id>/<segments...>`. The id is checked and every segment encoded, so no text becomes part of the path unescaped. */
+function decodedOrSelf(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * A path segment is one name. The URL parser resolves `.` and `..` (also written `%2e`) and treats an empty segment as
+ * a different route, so none of those can be sent as a name; nor can anything that carries a separator.
+ */
+const SEPARATOR = /[/\\]/;
+const isDot = (text: string): boolean => text === '.' || text === '..';
+
+function checkedSegment(segment: string): string {
+  const once = decodedOrSelf(segment);
+  const twice = decodedOrSelf(once);
+  if (segment === '' || once === '' || isDot(once) || isDot(twice) || SEPARATOR.test(segment) || SEPARATOR.test(once) || SEPARATOR.test(twice)) {
+    throw new RangeError('invalid path segment');
+  }
+  return encodeURIComponent(segment);
+}
+
+/** `/api/inspections/<id>/<segments...>`. The id is checked and every segment checked and encoded, so no text becomes part of the path unescaped. */
 export function apiPath(inspectionId: string, ...segments: string[]): string {
   if (!isLocalId(inspectionId)) throw new RangeError('invalid inspection id');
-  return ['/api/inspections', encodeURIComponent(inspectionId), ...segments.map((segment) => encodeURIComponent(segment))].join('/');
+  return ['/api/inspections', encodeURIComponent(inspectionId), ...segments.map(checkedSegment)].join('/');
+}
+
+/** `/api/inspections/templates` or one template under it. */
+export function templatePath(templateId?: string): string {
+  return templateId === undefined ? '/api/inspections/templates' : `/api/inspections/templates/${checkedSegment(templateId)}`;
+}
+
+/** The last line of defence: a path that reaches `send` is under /api/, has no query, no fragment and no segment that resolves away. */
+function assertSendable(path: string): void {
+  if (!path.startsWith('/api/') || /[?#]/.test(path)) throw new RangeError('api paths start with /api/ and carry no query');
+  for (const segment of path.slice(1).split('/')) {
+    const plain = decodedOrSelf(segment);
+    if (segment === '' || plain === '.' || plain === '..' || decodedOrSelf(plain) === '..') throw new RangeError('invalid path segment');
+  }
 }
 
 async function open(gate: ApiClientDeps['gate']): Promise<boolean> {
@@ -68,7 +113,7 @@ export function createApiClient(deps: ApiClientDeps): Api {
   const clientHeaders = safeClientHeaders(deps.clientHeaders ?? {}, ['content-type', 'idempotency-key']);
 
   async function send(call: ApiCall): Promise<ApiOutcome> {
-    if (!call.path.startsWith('/api/')) throw new RangeError('api paths start with /api/');
+    assertSendable(call.path);
     let refreshed = false;
     for (;;) {
       let token: string | null;
@@ -79,7 +124,7 @@ export function createApiClient(deps: ApiClientDeps): Api {
       }
       if (token === null) return { kind: 'problem', problem: 'auth' };
       // The lock can arrive while the token is being read, so it is asked after.
-      if (!(await open(deps.gate))) return { kind: 'problem', problem: 'auth' };
+      if (!(await open(deps.gate))) return { kind: 'problem', problem: 'locked' };
 
       const headers: Record<string, string> = { ...clientHeaders, Authorization: `Bearer ${token}` };
       if (call.json !== undefined) headers['content-type'] = 'application/json';
@@ -96,7 +141,8 @@ export function createApiClient(deps: ApiClientDeps): Api {
           maxBytes: RESPONSE_MAX_BYTES,
         });
       } catch (error) {
-        return { kind: 'problem', problem: error instanceof AuthError && error.code === 'server_timeout' ? 'timeout' : 'offline' };
+        // A read changes nothing, so losing its answer is just being offline. A write that went out may have been applied.
+        return { kind: 'problem', problem: call.method === 'GET' ? 'offline' : 'unknown' };
       }
 
       if (res.status === 426) return { kind: 'problem', problem: 'upgrade' };

@@ -1,5 +1,5 @@
 import type { CommandResult, FieldCommand } from '@inspectorhub/field-ui';
-import { apiPath, type Api } from './api-client';
+import { apiPath, templatePath, type Api } from './api-client';
 import { executeCompliance, executeUnit } from './commands-online-units';
 import { bodyData, isRec, isSuccess, plain, problemResult, serverMessage } from './commands-shared';
 import { MESSAGES, failure, needsConnectionResult } from './messages';
@@ -16,8 +16,12 @@ export type OnlineCommand = Exclude<FieldCommand, { type: 'complete' | 'load-sco
 
 export interface OnlineDeps {
   api: Api;
-  /** Milliseconds since the epoch: stamps an inspector signature. */
-  now(): number;
+  /**
+   * Milliseconds since the epoch, stamped on an inspector signature as the time it was signed. The assembler must pass
+   * a clock anchored to the server's (the device clock can be set to any time); until it does, this is only as honest as
+   * the device.
+   */
+  signedAtMs(): number;
 }
 
 function never(value: never): never {
@@ -36,21 +40,22 @@ async function publish(deps: OnlineDeps, id: string, cmd: Extract<FieldCommand, 
   // so publishing past a failed write would send the report out signed or unsigned against what the person chose.
   if (cmd.autoSignOnPublish !== undefined) {
     const flag = await deps.api.send({ method: 'PATCH', path: apiPath(id), json: { autoSignOnPublish: cmd.autoSignOnPublish } });
-    if (flag.kind === 'problem' || !isSuccess(flag.status)) return flag.kind === 'problem' ? problemResult(flag.problem) : failure(MESSAGES.requestFailed);
+    if (flag.kind === 'problem' || !isSuccess(flag.status)) return flag.kind === 'problem' ? problemResult(flag.problem, MESSAGES.publishOutcomeUnknown) : failure(MESSAGES.requestFailed);
   }
   const summary = (cmd.summary ?? '').trim();
   const res = await deps.api.send({ method: 'POST', path: apiPath(id, 'publish'), json: summary === '' ? {} : { summary } });
-  if (res.kind === 'problem') return problemResult(res.problem);
+  if (res.kind === 'problem') return problemResult(res.problem, MESSAGES.publishOutcomeUnknown);
   if (isSuccess(res.status)) return { ok: true };
   // A precondition failure ("must be completed before publishing") is something the inspector has to read.
-  return failure(serverMessage(res.json) ?? MESSAGES.publishFailed);
+  return failure(serverMessage(res.json) ?? (res.status === 403 ? MESSAGES.forbidden : MESSAGES.publishFailed));
 }
 
 async function autofill(deps: OnlineDeps, id: string, addressString: string): Promise<CommandResult<unknown>> {
   const address = addressString.trim();
   if (address.length < 5) return { ok: false, data: { facts: null, reason: 'BAD_ADDRESS' } };
   const res = await deps.api.send({ method: 'POST', path: apiPath(id, 'property-facts', 'autofill'), json: { addressString: address } });
-  if (res.kind === 'problem') return res.problem === 'offline' ? needsConnectionResult({ facts: null, reason: 'REQUEST_FAILED' }) : { ...problemResult(res.problem), data: { facts: null, reason: 'REQUEST_FAILED' } };
+  // The lookup persists nothing, so a lost answer costs nothing: it reads as needing a connection.
+  if (res.kind === 'problem') return res.problem === 'offline' || res.problem === 'unknown' ? needsConnectionResult({ facts: null, reason: 'REQUEST_FAILED' }) : { ...problemResult(res.problem), data: { facts: null, reason: 'REQUEST_FAILED' } };
   if (!isSuccess(res.status)) return { ok: false, data: { facts: null, reason: 'REQUEST_FAILED' } };
   const data = bodyData(res.json);
   return { ok: true, data: { facts: isRec(data?.facts) ? data.facts : null, reason: typeof data?.reason === 'string' ? data.reason : null } };
@@ -63,7 +68,7 @@ async function uploadCover(deps: OnlineDeps, id: string, file: Blob, key: string
   if (up.kind === 'problem' || !isSuccess(up.status)) return plain(up);
   const uploaded = bodyData(up.json);
   const coverKey = typeof uploaded?.key === 'string' && uploaded.key !== '' ? uploaded.key : undefined;
-  if (coverKey === undefined) return { ok: false };
+  if (coverKey === undefined) return failure(MESSAGES.unreadableAnswer);
   const patched = plain(await deps.api.send({ method: 'PATCH', path: apiPath(id), json: { coverPhotoId: coverKey } }));
   return patched.ok ? { ok: true, data: { coverKey, coverUrl: typeof uploaded?.url === 'string' ? uploaded.url : null } } : patched;
 }
@@ -96,17 +101,19 @@ async function restructure(deps: OnlineDeps, id: string, cmd: Extract<FieldComma
   if (saved.kind === 'problem' || !isSuccess(saved.status)) return saved.kind === 'problem' ? problemResult(saved.problem) : failure(MESSAGES.structureNotSaved);
   if (!cmd.collab) return { ok: true };
   const sync = await deps.api.send({ method: 'POST', path: apiPath(id, 'collab', 'restructure') });
-  // 501 is collaboration switched off (a single client). A transport problem is tolerated: the snapshot is saved and the editor refreshes.
-  if (sync.kind === 'response' && !isSuccess(sync.status) && sync.status !== 501) return failure(MESSAGES.syncNotConverged);
+  // 501 is collaboration switched off (a single client): nothing to converge. Anything else that is not a success,
+  // including a step that could not be completed at all, leaves live sessions on the old structure.
+  if (sync.kind === 'problem') return failure(MESSAGES.syncNotConverged);
+  if (!isSuccess(sync.status) && sync.status !== 501) return failure(MESSAGES.syncNotConverged);
   return { ok: true };
 }
 
 async function saveStructureTemplate(deps: OnlineDeps, cmd: Extract<FieldCommand, { type: 'save-structure-template' }>): Promise<CommandResult<unknown>> {
   if (cmd.mode === 'new') {
-    return plain(await deps.api.send({ method: 'POST', path: '/api/inspections/templates', json: { name: cmd.name?.trim() || 'Custom Template', schema: cmd.snapshot } }));
+    return plain(await deps.api.send({ method: 'POST', path: templatePath(), json: { name: cmd.name?.trim() || 'Custom Template', schema: cmd.snapshot } }));
   }
   if (cmd.templateId === '') return failure(MESSAGES.noSourceTemplate);
-  const path = ['/api/inspections/templates', encodeURIComponent(cmd.templateId)].join('/');
+  const path = templatePath(cmd.templateId);
   const found = await deps.api.send({ method: 'GET', path });
   if (found.kind === 'problem') return problemResult(found.problem);
   if (!isSuccess(found.status)) return failure(MESSAGES.sourceTemplateUnreadable);
@@ -145,7 +152,7 @@ export async function saveSettingsOnline(api: Api, id: string, patch: Record<str
   return plain(await api.send({ method: 'PATCH', path: apiPath(id), json: patch }));
 }
 
-export async function executeOnline(deps: OnlineDeps, id: string, cmd: OnlineCommand, idempotencyKey: string | undefined): Promise<CommandResult<unknown>> {
+async function route(deps: OnlineDeps, id: string, cmd: OnlineCommand, idempotencyKey: string | undefined): Promise<CommandResult<unknown>> {
   const { api } = deps;
   switch (cmd.type) {
     case 'publish':
@@ -160,7 +167,7 @@ export async function executeOnline(deps: OnlineDeps, id: string, cmd: OnlineCom
     case 'sign-inspector':
       // An empty signature is a no-op that still answers ok (the contract says so).
       if (cmd.signatureBase64 === '') return { ok: true };
-      return plain(await api.send({ method: 'POST', path: apiPath(id, 'inspector-signature'), json: { signatureBase64: cmd.signatureBase64, signedAt: deps.now() } }));
+      return plain(await api.send({ method: 'POST', path: apiPath(id, 'inspector-signature'), json: { signatureBase64: cmd.signatureBase64, signedAt: deps.signedAtMs() } }));
     case 'set-cover':
       return plain(await api.send({ method: 'PATCH', path: apiPath(id), json: { coverPhotoId: cmd.coverPhotoId === '' ? null : cmd.coverPhotoId } }));
     case 'upload-cover':
@@ -185,5 +192,15 @@ export async function executeOnline(deps: OnlineDeps, id: string, cmd: OnlineCom
       return executeCompliance(api, id, cmd);
     default:
       return never(cmd);
+  }
+}
+
+export async function executeOnline(deps: OnlineDeps, id: string, cmd: OnlineCommand, idempotencyKey: string | undefined): Promise<CommandResult<unknown>> {
+  try {
+    return await route(deps, id, cmd, idempotencyKey);
+  } catch (error) {
+    // A name that cannot be a path segment (an item or template id that resolves away): refused before any request.
+    if (error instanceof RangeError) return failure(MESSAGES.invalidValue);
+    throw error;
   }
 }

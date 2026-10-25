@@ -59,6 +59,20 @@ describe('session info from the session context', () => {
     }
   });
 
+  it('presence never takes an identity from the context, whatever it carries', () => {
+    const info = sessionInfoFrom({ ...CONTEXT, userId: 'u-9', user: { ...CONTEXT.user, userId: 'u-1', id: 'u-2', sessionMarker: 'marker-7' } });
+    expect(info.userId).toBeNull();
+  });
+
+  it('a viewer needs both halves of the context: without branding the user is no viewer, without user the tenant slug still reads', () => {
+    const noBranding = sessionInfoFrom({ user: { role: 'owner', timezone: 'Asia/Tokyo', locale: 'ja-JP', dateFormat: 'iso', timeFormat: '24h' } });
+    expect(noBranding).toMatchObject({ role: '', timeZone: 'UTC', locale: 'en-US', dateFormat: 'us', timeFormat: '12h' });
+    const noUser = sessionInfoFrom({ branding: CONTEXT.branding });
+    expect(noUser).toMatchObject({ tenantSlug: 'acme', role: '', timeZone: 'UTC', locale: 'en-US', dateFormat: 'eu', tenantDateFormat: 'eu' });
+    const both = sessionInfoFrom({ user: { role: 'owner', timezone: 'Asia/Tokyo' }, branding: CONTEXT.branding });
+    expect(both).toMatchObject({ role: 'owner', timeZone: 'Asia/Tokyo' });
+  });
+
   it('an unknown video provider is the default one', () => {
     expect(sessionInfoFrom({ ...CONTEXT, videoProvider: 'vimeo' }).videoProvider).toBe('r2');
   });

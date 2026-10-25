@@ -5,11 +5,11 @@ import { readCachedBodies, type CachedResource } from '../offline/resource-cache
 import { EDITOR_READ_KEY_MAP, GLOBAL_RESOURCE_PATHS } from '../offline/resources';
 import { isLocalId } from '../offline/registry';
 import type { Db } from '../platform/db';
-import { buildSchema, nextPublishIsAmendment, normalizeTemplateSnapshot, pickRawSnapshot, sliceResults, unwrapResultsResponse } from './loader-schema';
+import { SnapshotUnreadableError, buildSchema, nextPublishIsAmendment, normalizeTemplateSnapshot, pickRawSnapshot, sliceResults, unwrapResultsResponse } from './loader-schema';
 import { MESSAGES } from './messages';
 import { commercialPresets, resolvePcaNarrative, resolveRelianceText } from './pca-defaults';
 
-export type EditorLoadFailure = 'invalid_id' | 'blocked' | 'unavailable' | 'not_downloaded';
+export type EditorLoadFailure = 'invalid_id' | 'blocked' | 'unavailable' | 'not_downloaded' | 'unreadable';
 
 /** Carries a sentence the inspector may read; the code is for tests and logs. */
 export class EditorLoadError extends Error {
@@ -129,10 +129,20 @@ export function createEditorLoader(deps: EditorDataDeps): LoadEditorData {
     const narrative = row.pcaNarrative;
     const cooling = isRec(session) && isRec(session.outboundCoolingWindow) ? session.outboundCoolingWindow : null;
 
+    let schema: EditorData['schema'];
+    let templateSnapshot: EditorData['templateSnapshot'];
+    try {
+      schema = buildSchema(rawSnapshot, reportData.sections);
+      templateSnapshot = normalizeTemplateSnapshot(rawSnapshot);
+    } catch (error) {
+      if (error instanceof SnapshotUnreadableError) throw new EditorLoadError('unreadable', MESSAGES.cacheUnreadable);
+      throw error;
+    }
+
     // The shapes below are the server's; the editor reads them defensively. The casts are the loader's own boundary.
     return {
       inspection: inspectionRow as EditorInspection,
-      schema: buildSchema(rawSnapshot, reportData.sections),
+      schema,
       results: sliceResults(unwrapResultsResponse(resultsBody), scope),
       ratingLevels: asList(reportData.ratingLevels),
       tagLibrary: asList(dataOf(bodies, '/api/tags')),
@@ -140,7 +150,7 @@ export function createEditorLoader(deps: EditorDataDeps): LoadEditorData {
       units: asList(isRec(unitsData) ? unitsData.units : undefined),
       unitProgress: isRec(progressData) ? (progressData as unknown as UnitProgress) : { units: [], commonRated: 0, total: 0 },
       unitInspectionMode: row.unitInspectionMode === 'per_unit' ? 'per_unit' : 'tagged',
-      templateSnapshot: normalizeTemplateSnapshot(rawSnapshot),
+      templateSnapshot,
       // Nothing cached says which revision of a statutory form governs the inspection, and a second implementation of
       // that date comparison here would disagree with the server's at some boundary. Null is "no panel", as for
       // every ordinary inspection.

@@ -8,9 +8,13 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 export function sanitizeSettingsPatch(form: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(form)) {
+    // An own `__proto__` (JSON.parse makes one) would become the prototype of `out` and lend it values its keys never listed.
+    if (key === '__proto__') continue;
     if (value === '') continue;
     if (key === 'date' && typeof value === 'string' && DATE_ONLY.test(value)) {
-      out[key] = new Date(`${value}T09:00:00`).toISOString();
+      const at = new Date(`${value}T09:00:00`);
+      // An impossible date is passed on as it is, for the registry or the server to refuse by name.
+      out[key] = Number.isNaN(at.getTime()) ? value : at.toISOString();
       continue;
     }
     if (key === 'price') {

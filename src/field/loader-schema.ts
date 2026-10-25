@@ -8,13 +8,27 @@ import type { ResultMap, TemplateSchema, TemplateSnapshot } from '@inspectorhub/
 
 type Rec = Record<string, unknown>;
 
+/** The cached snapshot is not JSON. A fixed message: the text of the parser would tell the person nothing useful. */
+export class SnapshotUnreadableError extends Error {
+  constructor() {
+    super('The cached template snapshot is not readable.');
+    this.name = 'SnapshotUnreadableError';
+  }
+}
+
 function isRec(value: unknown): value is Rec {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** The cached snapshot is parsed afresh for each use, so the overlay can never write into the one the editor keeps raw. */
 function parseSnapshotValue(raw: unknown): unknown {
-  if (typeof raw === 'string') return JSON.parse(raw) as unknown;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      throw new SnapshotUnreadableError();
+    }
+  }
   if (raw === undefined || raw === null) return raw;
   return JSON.parse(JSON.stringify(raw)) as unknown;
 }

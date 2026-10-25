@@ -29,6 +29,12 @@ describe('field messages', () => {
     expect(isNeedsConnection(result)).toBe(true);
   });
 
+  it('the lines that must differ do differ', () => {
+    const all = Object.values(MESSAGES);
+    expect(new Set(all).size).toBe(all.length);
+    expect(MESSAGES.deviceLocked).not.toBe(MESSAGES.sessionExpired);
+  });
+
   it('blocked result uses the blocked sentence', () => {
     expect(blockedResult().error).toBe(MESSAGES.blocked);
   });

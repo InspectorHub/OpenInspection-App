@@ -9,6 +9,9 @@ interface InnerHandle extends ResultsDocHandle {
   destroyed(): number;
 }
 
+const persisted = Promise.resolve();
+let syncedNow = true;
+
 function innerHandle(): InnerHandle {
   let doc = new Y.Doc();
   let destroyed = 0;
@@ -16,8 +19,8 @@ function innerHandle(): InnerHandle {
     get doc() {
       return doc;
     },
-    persistenceSynced: Promise.resolve(),
-    synced: () => true,
+    persistenceSynced: persisted,
+    synced: () => syncedNow,
     destroy: () => {
       destroyed += 1;
     },
@@ -96,10 +99,29 @@ describe('collab wrapper', () => {
     expect(purged).toEqual(['insp-1']);
   });
 
-  it('forwards the sync flags of the real handle', async () => {
+  it('forwards the sync flags of the real handle, live', () => {
     const { wrapped } = setup();
     const handle = wrapped.connect('insp-1', {});
+    expect(handle.persistenceSynced).toBe(persisted);
+    syncedNow = false;
+    expect(handle.synced()).toBe(false);
+    syncedNow = true;
     expect(handle.synced()).toBe(true);
-    await expect(handle.persistenceSynced).resolves.toBeUndefined();
+  });
+
+  it('destroy is idempotent: the real handle is destroyed once', () => {
+    const { handles, wrapped } = setup();
+    const handle = wrapped.connect('insp-1', {});
+    handle.destroy();
+    handle.destroy();
+    handle.destroy();
+    expect(handles[0]?.destroyed()).toBe(1);
+  });
+
+  it('control: a second connection after destroy is a new real handle that is destroyed on its own', () => {
+    const { handles, wrapped } = setup();
+    wrapped.connect('insp-1', {}).destroy();
+    wrapped.connect('insp-1', {}).destroy();
+    expect(handles.map((h) => h.destroyed())).toEqual([1, 1]);
   });
 });

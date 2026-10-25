@@ -5,9 +5,9 @@ import { createManualClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
-import { createEditorLoader } from './editor-data';
+import { EditorLoadError, createEditorLoader } from './editor-data';
 import { MESSAGES } from './messages';
-import { ALICE, BOB, envelope, seedPackage } from './test-support/seed-package';
+import { ALICE, BOB, SNAPSHOT, envelope, seedPackage } from './test-support/seed-package';
 
 let db: Db;
 const clock = createManualClock(1000);
@@ -146,12 +146,41 @@ describe('editor data: what it refuses', () => {
   });
 });
 
+describe('editor data: what is present but not usable', () => {
+  it('a results answer that is an empty map loads with no results; a results read that is not on the device does not load', async () => {
+    await seedPackage(db, 'i1', { bodies: { '/api/inspections/i1/results': envelope({ results: {}, resultId: 'res-1' }) } });
+    expect((await loaderFor(ALICE)('i1')).results).toEqual({});
+    await seedPackage(db, 'i2', { skipGlobals: true, bodies: { '/api/inspections/i2/results': envelope({}) } });
+    expect((await loaderFor(ALICE)('i2')).results).toEqual({});
+    await seedPackage(db, 'i3', { skipGlobals: true, bodies: { '/api/inspections/i3/results': null } });
+    await expect(loaderFor(ALICE)('i3')).rejects.toThrow(MESSAGES.notDownloaded);
+  });
+
+  it('a snapshot that is not JSON is told with a fixed sentence, never the parser text; control: the same snapshot as valid JSON text loads', async () => {
+    await seedPackage(db, 'i1', { inspection: { templateSnapshot: '{not json' } });
+    const failure = await loaderFor(ALICE)('i1').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(EditorLoadError);
+    expect((failure as EditorLoadError).message).toBe(MESSAGES.cacheUnreadable);
+    expect((failure as Error).message).not.toMatch(/JSON|Unexpected/);
+    await seedPackage(db, 'i2', { skipGlobals: true, inspection: { templateSnapshot: JSON.stringify(SNAPSHOT) } });
+    expect((await loaderFor(ALICE)('i2')).templateSnapshot.sections).toHaveLength(1);
+  });
+});
+
 describe('editor data: queued writes are shown, so a reload does not undo them', () => {
   it('a pending complete reads as completed; without one the cached status is kept', async () => {
     await seedPackage(db, 'i1');
     expect((await loaderFor(ALICE)('i1')).inspection.status).toBe('draft');
     await queue('inspection.complete', { inspectionId: 'i1' });
     expect((await loaderFor(ALICE)('i1')).inspection.status).toBe('completed');
+  });
+
+  it('a complete overlays the inspection it was queued for and no other', async () => {
+    await seedPackage(db, 'i1');
+    await seedPackage(db, 'i2', { skipGlobals: true });
+    await queue('inspection.complete', { inspectionId: 'i2' });
+    expect((await loaderFor(ALICE)('i2')).inspection.status).toBe('completed');
+    expect((await loaderFor(ALICE)('i1')).inspection.status).toBe('draft');
   });
 
   it('a complete queued for another inspection or by another account does not touch this one', async () => {
