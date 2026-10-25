@@ -106,7 +106,7 @@ describe('http wrapper: timeout, size, errors', () => {
     expect(sent.get('x-client-version')).toBe('1.2.3');
     expect(sent.get('authorization')).toBe('Bearer t');
     expect(res.upgrade).toBe('required');
-    expect(onUpgrade).toHaveBeenCalledWith('required');
+    expect(onUpgrade).toHaveBeenCalledWith('required', ORIGIN);
   });
 });
 

@@ -3,14 +3,17 @@ import { createCapacitorAuthSession, type AuthSession } from '../auth/auth-sessi
 import { createHttp, type FetchLike, type Http } from '../auth/http';
 import { createLoginFlow, type LoginFlow } from '../auth/pkce-login';
 import { createRegistrar, type Registrar } from '../auth/registration';
-import { loadClientId } from '../auth/server-config';
+import { fetchCompat, loadClientId } from '../auth/server-config';
 import { createTokenManager, type TokenManager } from '../auth/tokens';
 import { systemClock, type Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { closeRealCapacitorDb, openRealCapacitorDb } from '../platform/db-capacitor';
 import { createRealFiles, type Files } from '../platform/files';
+import { createMemoryKeyValue, createPreferencesKeyValue, type KeyValue } from '../platform/kv';
 import { createRealSecureStore, type SecureStore } from '../platform/secure-store';
 import { recordRefreshed, recordVerified, setRevoked } from '../offline/lock-state';
+import { Browser } from '@capacitor/browser';
+import { createClientState, type ClientStateController } from './client-state';
 
 export type ClientPlatform = 'android' | 'ios';
 
@@ -27,6 +30,17 @@ export interface AppServices {
   clock: Clock;
   platform: ClientPlatform;
   appVersion: string;
+  /** The UTC ISO instant this build was made, or null when unknown. What the iOS test-build expiry warning counts from. */
+  builtAt: string | null;
+  /** What the server has asked of this app version and whether the server is too old; fed by every response and by `refreshCompat`. */
+  clientState: ClientStateController;
+  /**
+   * Reads `/api/client/compat` of `origin` into `clientState`. Never rejects: an answer that does not come (offline, a timeout, a page
+   * that is not the server's) changes no fact. A call made while one is in flight shares it.
+   */
+  refreshCompat(origin: string, options?: { timeoutMs?: number }): Promise<void>;
+  /** Hands an https address to the system browser. Callers check the address first (`httpsHref`); rejects when it cannot be opened. */
+  openExternal(url: string): Promise<void>;
   /**
    * Calls the listener after the server accepted this device (a token refresh or a session check) and the verification was
    * recorded. For flows that should look again once the grant is known to be good. Returns the unsubscribe function.
@@ -45,16 +59,34 @@ export interface ComposeParts {
   clock: Clock;
   platform: ClientPlatform;
   appVersion: string;
+  /** Non-secret app state (the dismissed update banner). Defaults to an in-memory store. */
+  kv?: KeyValue;
+  builtAt?: string;
+  openExternal?: (url: string) => Promise<void>;
   closeDb?: () => Promise<void>;
 }
 
 /** The wiring, with every adapter supplied. Tests pass fakes; `composeReal` passes the device's. */
 export function composeWith(parts: ComposeParts): AppServices {
   const { db, files, store, clock, platform, appVersion } = parts;
+  const clientState = createClientState({ kv: parts.kv ?? createMemoryKeyValue(), appVersion });
   const http = createHttp({
     fetch: parts.fetch,
     defaultHeaders: { 'X-Client-Platform': platform, 'X-Client-Version': appVersion },
+    onUpgrade: (value, origin) => clientState.noteUpgrade(origin, value),
   });
+  const compatInFlight = new Map<string, Promise<void>>();
+  const refreshCompat = (origin: string, options: { timeoutMs?: number } = {}): Promise<void> => {
+    const held = compatInFlight.get(origin);
+    if (held) return held;
+    const run = fetchCompat(http, origin, platform, options).then(
+      (compat) => clientState.applyCompat(origin, compat),
+      () => clientState.noteCompatAttempt(origin),
+    );
+    const done = run.finally(() => compatInFlight.delete(origin));
+    compatInFlight.set(origin, done);
+    return done;
+  };
   const registrar = createRegistrar({ http, db });
   const verifiedListeners = new Set<() => void>();
   const tokens = createTokenManager({
@@ -81,7 +113,23 @@ export function composeWith(parts: ComposeParts): AppServices {
       verifiedListeners.delete(listener);
     };
   };
-  return { db, files, http, registrar, tokens, flow, clock, platform, appVersion, onTokenVerified, close: parts.closeDb ?? (() => Promise.resolve()) };
+  return {
+    db,
+    files,
+    http,
+    registrar,
+    tokens,
+    flow,
+    clock,
+    platform,
+    appVersion,
+    builtAt: parts.builtAt ?? null,
+    clientState,
+    refreshCompat,
+    openExternal: parts.openExternal ?? (() => Promise.reject(new Error('This build cannot open links'))),
+    onTokenVerified,
+    close: parts.closeDb ?? (() => Promise.resolve()),
+  };
 }
 
 /** Anything that is not iOS reports as Android, which includes the browser used for development. */
@@ -130,6 +178,9 @@ export async function composeReal(adapters: RealAdapters = realAdapters): Promis
     clock: systemClock,
     platform: toClientPlatform(Capacitor.getPlatform()),
     appVersion: __APP_VERSION__,
+    builtAt: __APP_BUILT_AT__,
+    kv: createPreferencesKeyValue(),
+    openExternal: (url) => Browser.open({ url }),
     closeDb: adapters.closeDb,
   });
 }

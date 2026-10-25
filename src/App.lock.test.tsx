@@ -107,7 +107,8 @@ describe('the lock is decided again while the app is open', () => {
     world.clock.advance(DAY_MS);
     await evaluateAndPersist(world.db, world.clock.now());
     world.clock.set(START);
-    await waitFor(() => expect(appState.listeners()).toBe(1));
+    // Two subscribers: the lock monitor, and the server version policy that is read again on every return to the foreground.
+    await waitFor(() => expect(appState.listeners()).toBe(2));
     act(() => appState.emit(true));
     expect(await screen.findByRole('heading', { name: 'Check your date and time' })).toBeInTheDocument();
   });

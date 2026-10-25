@@ -45,8 +45,11 @@ export interface HttpDeps {
   defaultHeaders?: Record<string, string>;
   defaultTimeoutMs?: number;
   defaultMaxBytes?: number;
-  /** Called with the `X-Client-Upgrade` value of every response that carries one. */
-  onUpgrade?: (status: string) => void;
+  /**
+   * Called with the `X-Client-Upgrade` value of every response that carries one, and with `required` for every 426 (once, whatever
+   * the header says), together with the origin the request went to. It only reports: a 426 never changes what this wrapper returns.
+   */
+  onUpgrade?: (status: string, origin: string) => void;
   /** Receives one redacted line per request. */
   log?: (line: string) => void;
 }
@@ -190,7 +193,14 @@ export function createHttp(deps: HttpDeps): Http {
           throw new AuthError(timedOut ? 'server_timeout' : 'server_unreachable');
         }
         const upgrade = response.headers.get('x-client-upgrade');
-        if (upgrade !== null) deps.onUpgrade?.(upgrade);
+        const signal = response.status === 426 ? 'required' : upgrade;
+        if (signal !== null) {
+          try {
+            deps.onUpgrade?.(signal, expectedOrigin);
+          } catch {
+            // A failing listener must not change the answer.
+          }
+        }
         deps.log?.(`${req.method} ${safeUrlForLog(req.url)} ${String(response.status)}`);
         return {
           status: response.status,

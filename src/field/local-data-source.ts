@@ -8,6 +8,7 @@ import type { WorkPackageRefresher } from '../offline/work-package';
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
+import { httpsHref } from '../platform/https-href';
 import type { TimerPort } from '../collab/timers';
 import type { Api } from './api-client';
 import { createAfterWrite } from './after-write';
@@ -184,13 +185,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     ...(deps.onRestart === undefined ? {} : { restartSession: () => deps.onRestart?.() }),
     openUrl: (url) => {
       // The normalised address is what is opened, so what was checked is what is sent.
-      let href: string | null = null;
-      try {
-        const parsed = new URL(url);
-        if (parsed.protocol === 'https:') href = parsed.href;
-      } catch {
-        href = null;
-      }
+      const href = httpsHref(url);
       if (href === null) {
         say(MESSAGES.linkBlocked, 'warning');
         return;

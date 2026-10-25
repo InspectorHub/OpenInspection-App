@@ -56,6 +56,16 @@ export function whenLabel(scheduledAt: number | null, group: GroupKey, locale?: 
   }
 }
 
+/** A calendar date in the device's own time zone ("January 3, 2027"), or "Date unavailable" when the value cannot be shown. */
+export function dateLabel(at: number, locale?: string): string {
+  if (!validDate(at)) return DATE_UNAVAILABLE;
+  try {
+    return formatter(locale, { year: 'numeric', month: 'long', day: 'numeric' }).format(at);
+  } catch {
+    return DATE_UNAVAILABLE;
+  }
+}
+
 function relative(at: number, now: number, locale: string | undefined): string {
   let rtf: Intl.RelativeTimeFormat;
   try {

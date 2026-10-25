@@ -12,6 +12,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["src", "capacitor.config.ts", "vite.config.ts"]

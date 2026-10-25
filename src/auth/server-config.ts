@@ -3,6 +3,14 @@ import { assertDeviceStateKey } from '../platform/schema';
 import { AuthError } from './errors';
 import type { Http } from './http';
 
+/**
+ * The lowest `serverContractVersion` (from `GET /api/client/compat`) this app can sync with, and the one place it is written.
+ * A server below it is "too old": the app keeps local reads, edits and capture working and starts no sync flow
+ * (see `serverTooOld` in `ClientState`). Raise it, in the same change, when the app starts to depend on a server route or
+ * field that an earlier contract version does not have; never raise it for a feature that can degrade by itself
+ * (the engine's version history is in its native client guide). A server that does not answer is not "too old":
+ * the answer is unknown and nothing is blocked.
+ */
 export const MIN_SERVER_CONTRACT_VERSION = 1;
 const COMPAT_TIMEOUT_MS = 10_000;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);

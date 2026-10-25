@@ -125,6 +125,18 @@ export interface OfflineStackDeps {
    * on the single database connection. Only the moment the sequence begins moves; its order and what it does are unchanged.
    */
   deferLaunchUntilPainted?: boolean;
+  /**
+   * True while the server speaks an older contract than this app needs. Every flow that talks to the server (replay, refresh,
+   * reconcile, uploads, collaboration) then behaves as if the device were locked, and resumes by itself when this turns false;
+   * everything that only touches the device (the outbox, the media store, the documents, the user actions) is unaffected.
+   * Omitted: never too old. An unknown answer must be reported as false.
+   */
+  serverTooOld?: ReadableStore<boolean>;
+  /**
+   * Asked once, before the first flow starts, and only while the device is online (a request to find out is never made offline).
+   * It is how the contract state is learned before the first replay. Anything it throws or rejects is ignored.
+   */
+  beforeLaunch?: () => Promise<void>;
   /** Test knobs for the shared lease and the jitter. */
   tuning?: { random?: () => number; leaseTtlMs?: number; newToken?: () => string };
 }
@@ -222,7 +234,16 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   const random = deps.tuning?.random === undefined ? {} : { random: deps.tuning.random };
   const timers = deps.timers === undefined ? {} : { timers: deps.timers };
   const registry = deps.registry === undefined ? {} : { registry: deps.registry };
-  const subscribeUnlocked = (listener: () => void): (() => void) => deps.onUnlocked?.(listener) ?? (() => undefined);
+  // Flows resume on an unlock, and also when a server that was too old stops being so.
+  const resumeListeners = new Set<() => void>();
+  const subscribeUnlocked = (listener: () => void): (() => void) => {
+    const off = deps.onUnlocked?.(listener) ?? (() => undefined);
+    resumeListeners.add(listener);
+    return () => {
+      off();
+      resumeListeners.delete(listener);
+    };
+  };
 
   let stopped = false;
   let started = false;
@@ -274,6 +295,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   // What every flow is handed as its lock check: the real one, and "locked" for good once the stack has stopped, so nothing that
   // was waiting for an answer (a ticket, a destination url) can start work after the session ended.
   const stackLocked = async (): Promise<boolean> => stopped || (await isLocked()) !== false;
+  // What the flows that talk to the server are handed: the same answer, and also "locked" while the server is too old.
+  // Local work (the user actions, the purge, the documents) keeps `stackLocked`: it needs no server.
+  const syncBlocked = async (): Promise<boolean> => (await stackLocked()) || deps.serverTooOld?.get() === true;
 
   // The account: the stored identity, and only while it is the one this stack was built for.
   async function account(): Promise<Account | null> {
@@ -292,7 +316,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     network,
     origin,
     ...insecure,
-    isLocked: stackLocked,
+    isLocked: syncBlocked,
     openSocket: deps.openSocket,
     ...timers,
     ...random,
@@ -333,7 +357,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     plugin: deps.uploaderPlugin,
     origin,
     ...insecure,
-    isLocked: stackLocked,
+    isLocked: syncBlocked,
     clientHeaders,
     clock,
     ...timers,
@@ -357,7 +381,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     uploader,
     resolvePending: createPendingResolver({ withDoc }),
     resolveVideo: deps.resolveVideo ?? placeholderResolveVideo,
-    isLocked: stackLocked,
+    isLocked: syncBlocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -382,7 +406,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     clientHeaders,
     ...insecure,
     account,
-    isLocked: stackLocked,
+    isLocked: syncBlocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -425,7 +449,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     clientHeaders,
     ...insecure,
     account,
-    isLocked: stackLocked,
+    isLocked: syncBlocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -482,14 +506,14 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
 
   const reconcile = createReconciler({
     decide: async () => {
-      const result = await decideReconcile({ db, clock, account, isLocked: stackLocked, visible, session, ...registry, ...lease });
+      const result = await decideReconcile({ db, clock, account, isLocked: syncBlocked, visible, session, ...registry, ...lease });
       // Only the newest decision's plan is kept: an older plan must not outlive the answer that replaced it, nor the stack.
       latestPlan = result.kind === 'plan' && !stopped ? result : null;
       return result;
     },
     execute: (plan) => executeReconcilePlan(executeDeps, plan),
     resumePurges: () => resumePurges({ ...purgeDeps, clock, account, isLocked: stackLocked, ...lease }),
-    isLocked: stackLocked,
+    isLocked: syncBlocked,
     onUnlocked: subscribeUnlocked,
     network,
     ...(appState === undefined ? {} : { appState }),
@@ -702,6 +726,12 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
         // A failing reporter must not change what the stack does.
       }
     }
+    if (deps.beforeLaunch && (await network.online().catch(() => false))) {
+      await Promise.resolve()
+        .then(deps.beforeLaunch)
+        .catch(() => undefined);
+      if (stopped) return;
+    }
     // The sweeps hold nothing up but the uploader, which must not start while the temp sweep looks for copies of finished uploads.
     const mediaUp = runSweeps().then(() => {
       if (stopped) return;
@@ -733,6 +763,17 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
         if (!launched) enqueueLaunch();
       }),
     );
+    if (deps.serverTooOld) {
+      const contract = deps.serverTooOld;
+      teardown.push(
+        contract.subscribe(() => {
+          if (stopped) return;
+          // Too old: a connection that is open ends at once. No longer too old: every flow that waited for it asks again.
+          if (contract.get()) connector.onLockChange();
+          else for (const resume of [...resumeListeners]) resume();
+        }),
+      );
+    }
     if (deps.onTokenVerified) {
       teardown.push(
         deps.onTokenVerified(() => {

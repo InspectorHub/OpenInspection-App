@@ -40,7 +40,28 @@ export function Notice({ tone, children }: { tone: Tone; children: ReactNode }) 
   );
 }
 
-type Variant = 'primary' | 'secondary' | 'quiet' | 'danger';
+/**
+ * A titled block that asks something of the person: a tone, a heading and the controls that answer it. `alert` is for what is
+ * wrong (announced when it appears), `status` for everything else. The heading and the text take the tone's own colours.
+ */
+export function Panel({ tone, role, titleId, children }: { tone: Tone; role: 'alert' | 'status'; titleId: string; children: ReactNode }) {
+  return (
+    <section role={role} aria-labelledby={titleId} className={`flex flex-col gap-3 rounded-ih-card p-4 ${TONE_CLASSES[tone]}`}>
+      {children}
+    </section>
+  );
+}
+
+/** The heading of a `Panel`: a real second-level heading, below the screen's own. */
+export function PanelHeading({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <h2 id={id} className="font-ih-display text-lg font-bold tracking-tight">
+      {children}
+    </h2>
+  );
+}
+
+type Variant ='primary' | 'secondary' | 'quiet' | 'danger';
 
 const BUTTON_BASE = 'min-h-11 w-full rounded-ih-button px-4 text-base font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus';
 

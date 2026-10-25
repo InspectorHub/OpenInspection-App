@@ -117,6 +117,16 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
     return () => monitor.stop();
   }, [services, lockWatched, scheduler, appState, unlocks]);
 
+  // The server's version policy is read again each time the app returns to the foreground (and once when a session's stack starts):
+  // no timer, and a read that gets no answer changes nothing.
+  const sessionOrigin = screen.kind === 'signed_in' ? screen.origin : null;
+  useEffect(() => {
+    if (!services || !appState || sessionOrigin === null) return undefined;
+    return appState.onChange((active) => {
+      if (active) void services.refreshCompat(sessionOrigin);
+    });
+  }, [services, appState, sessionOrigin]);
+
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
     if (screen.kind === 'schema_drift') return <SchemaDrift />;

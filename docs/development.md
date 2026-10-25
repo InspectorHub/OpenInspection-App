@@ -75,3 +75,15 @@ The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt 
 ## Memory
 
 Gradle, the Android emulator and the engine's type-checks are all memory hungry. On a 16 GB machine, do not run a Gradle build and a full type-check of the engine at the same time.
+
+## Trying the version states on a device
+
+The app reads the server's version policy (`GET /api/client/compat`) when a signed-in session starts and each time it returns to the
+foreground. To see each state, point the app at a local engine and change that engine's settings:
+
+| State | How to trigger it |
+|---|---|
+| Update available (dismissible banner, shown once per app version) | Set `NATIVE_RECOMMENDED_VERSION_ANDROID` (or `_IOS`) above the app version, restart the engine, bring the app to the foreground. |
+| Update required (editing off, uploads continue) | Set `NATIVE_MIN_VERSION_ANDROID` above the app version. Set `NATIVE_DOWNLOAD_URL_ANDROID` to an https address to get the button. |
+| Server version too old (nothing syncs, local work continues) | Build the app with a higher `MIN_SERVER_CONTRACT_VERSION` in `src/auth/server-config.ts` than the engine's `SERVER_CONTRACT_VERSION`. |
+| Test build expiry (iOS only) | Build with `APP_BUILT_AT` set to a UTC ISO instant 76 or more days ago, for example `APP_BUILT_AT=2026-07-01T00:00:00.000Z npm run build`. The warning only ever shows on iOS builds. |

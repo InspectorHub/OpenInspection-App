@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import { useOfflineStack } from '../app/stack-context';
 import type { StoredIdentity } from '../auth/server-config';
+import { ClientNotices } from './ClientNotices';
 import { ConfirmDialog } from './ConfirmDialog';
 import { DevDiagnostics } from './dev-diagnostics';
 import { Body, Button, Heading, Screen } from './kit';
@@ -58,6 +59,7 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
 
   return (
     <Screen wide={stack !== null}>
+      <ClientNotices services={services} origin={origin} />
       {stack === null ? <Heading>Work list</Heading> : <WorkList stack={stack} />}
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>
