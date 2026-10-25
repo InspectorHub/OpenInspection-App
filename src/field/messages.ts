@@ -49,6 +49,8 @@ export const MESSAGES = {
   prefsNotSaved: 'The preferences were not saved.',
   commentNotSaved: 'The comment was not saved.',
   aiUnavailable: 'AI writing assistance is unavailable right now.',
+  waitForSync: 'Wait for your changes to finish syncing, then try again.',
+  linkNotOpened: 'The link could not be opened.',
   linkBlocked:'Only secure links can be opened from the app.',
 } as const;
 

@@ -106,6 +106,16 @@ describe('indexUploadedRows', () => {
     expect(await indexUploadedRows(index, world.store, INSPECTION)).toBe(0);
   });
 
+  it('indexes only uploaded rows that name a server key, whatever the store hands back', async () => {
+    const row = (pendingId: string, state: 'pending' | 'uploaded', uploadedKey: string | null) => ({ pendingId, inspectionId: INSPECTION, kind: 'photo' as const, path: `media/${pendingId}.jpg`, contentType: 'image/jpeg' as const, meta: '{}', state, attempts: 0, uploadedKey, createdAt: 1 });
+    const rows = [row('pend', 'pending', KEY), row('nokey', 'uploaded', null), row('good', 'uploaded', `${TENANT}/inspections/${INSPECTION}/photos/good.jpg`)];
+    const index = createMemoryPhotoIndex();
+    const indexed = await indexUploadedRows(index, { listRows: () => Promise.resolve(rows), objectUrl: (id) => Promise.resolve(`http://localhost/${id}.jpg`) }, INSPECTION);
+    expect(indexed).toBe(1);
+    expect(index.lookup(INSPECTION, KEY)).toBeNull();
+    expect(index.lookup(INSPECTION, `${TENANT}/inspections/${INSPECTION}/photos/good.jpg`)).toBe('http://localhost/good.jpg');
+  });
+
   it('a store that cannot be read leaves the index as it was and does not throw', async () => {
     const files = createMemoryFiles();
     const world = await createMediaWorld();

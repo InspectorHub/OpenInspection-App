@@ -49,6 +49,7 @@ function docWith(...keys: string[]): Y.Doc {
 }
 
 function setup(answers: Parameters<typeof scriptedApi>, stored: Blob | null = null) {
+  const sync = { value: true };
   const api = scriptedApi(...answers);
   const reads: string[] = [];
   const fg = createForegroundUploads({
@@ -57,8 +58,9 @@ function setup(answers: Parameters<typeof scriptedApi>, stored: Blob | null = nu
       reads.push(id);
       return Promise.resolve(stored);
     },
+    isSynced: () => sync.value,
   });
-  return { api, fg, reads };
+  return { api, fg, reads, sync };
 }
 
 describe('defect photo', () => {
@@ -148,6 +150,44 @@ describe('crop', () => {
   it('a crop answer without its key is not a success', async () => {
     const { fg } = setup([reply(200, { data: {} })]);
     expect(await fg.crop(cropRec(), docWith('photo-b'))).toEqual({ ok: false, error: MESSAGES.unreadableAnswer });
+  });
+});
+
+describe('a position is only sent when the server counts the same photos', () => {
+  it('synced, with nothing pending before the photo: the request goes out with the position counted in the document', async () => {
+    const doc = docWith('photo-a', 'photo-b');
+    const { api, fg } = setup([reply(200, { data: { croppedKey: 'k' } })]);
+    expect((await fg.crop(cropRec(), doc)).ok).toBe(true);
+    expect(api.calls[0]?.path).toBe('/api/inspections/insp-1/items/i1/photos/1/crop');
+  });
+
+  it('a document that has not caught up with the server is refused for crop and annotate, with no request', async () => {
+    const doc = docWith('photo-a', 'photo-b');
+    const crop = setup([reply(200, { data: { croppedKey: 'k' } })]);
+    crop.sync.value = false;
+    expect(await crop.fg.crop(cropRec(), doc)).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    const annotate = setup([reply(200, { data: { annotatedKey: 'k' } })]);
+    annotate.sync.value = false;
+    expect(await annotate.fg.annotate(annotateRec(), doc)).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect([crop, annotate].map((s) => s.api.calls.length)).toEqual([0, 0]);
+  });
+
+  it('a photo that is still only on this device before the target shifts the server count: refused, with no request', async () => {
+    const doc = new Y.Doc();
+    seedPhotos(doc, FINDING, [{ key: '', pendingUpload: true, pendingId: 'p0', pendingKind: 'photo' }, { key: 'photo-b' }]);
+    const crop = setup([reply(200, { data: { croppedKey: 'k' } })]);
+    expect(await crop.fg.crop(cropRec(), doc)).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    const annotate = setup([]);
+    expect(await annotate.fg.annotate(annotateRec(), doc)).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect([crop, annotate].map((s) => s.api.calls.length)).toEqual([0, 0]);
+  });
+
+  it('control: a pending photo AFTER the target does not matter', async () => {
+    const doc = new Y.Doc();
+    seedPhotos(doc, FINDING, [{ key: 'photo-b' }, { key: '', pendingUpload: true, pendingId: 'p0', pendingKind: 'photo' }]);
+    const { api, fg } = setup([reply(200, { data: { croppedKey: 'k' } })]);
+    expect((await fg.crop(cropRec(), doc)).ok).toBe(true);
+    expect(api.calls[0]?.path).toContain('/photos/0/crop');
   });
 });
 

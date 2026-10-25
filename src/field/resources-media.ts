@@ -87,6 +87,8 @@ export function createSettingsSheet(deps: ResourceDeps): NonNullable<FieldResour
         const data = row === null ? undefined : bodyData(row.json);
         if (data === undefined) return null;
         const inspection = isRec(data.inspection) ? data.inspection : data;
+        // A body that names no inspection is not one: the sheet would offer a form that saves blanks.
+        if (typeof inspection.id !== 'string') return null;
         const photos: CoverPhotoOption[] = media === null ? [] : flattenMedia(deps, inspectionId, media.json).map((p) => ({ key: p.key, url: p.url, label: p.label }));
         return {
           inspection,

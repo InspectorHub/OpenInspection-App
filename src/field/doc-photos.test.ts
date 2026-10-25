@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
-import { findPhotoIndex, pendingIdsInDoc } from './doc-photos';
+import { findPhotoIndex, hasPendingBefore, pendingIdsInDoc } from './doc-photos';
 import { seedPhotos } from './test-support/doc-seed';
 
 describe('findPhotoIndex', () => {
@@ -39,5 +39,22 @@ describe('pendingIdsInDoc', () => {
     expect(pendingIdsInDoc(doc).size).toBe(0);
     seedPhotos(doc, 'k1', [{ key: 'a', pendingId: '' }]);
     expect(pendingIdsInDoc(doc).size).toBe(0);
+  });
+});
+
+describe('hasPendingBefore', () => {
+  it('is true only for a pending-upload entry before the position', () => {
+    const doc = new Y.Doc();
+    seedPhotos(doc, 'k', [{ key: 'a' }, { key: '', pendingUpload: true, pendingId: 'p' }, { key: 'c' }]);
+    expect(hasPendingBefore(doc, 'k', 2)).toBe(true);
+    expect(hasPendingBefore(doc, 'k', 1)).toBe(false);
+    expect(hasPendingBefore(doc, 'k', 0)).toBe(false);
+    expect(hasPendingBefore(doc, 'other', 2)).toBe(false);
+  });
+
+  it('a crop entry that keeps its base key (pending kind, no pendingUpload) does not count', () => {
+    const doc = new Y.Doc();
+    seedPhotos(doc, 'k', [{ key: 'a', pendingId: 'c1', pendingKind: 'crop' }, { key: 'b' }]);
+    expect(hasPendingBefore(doc, 'k', 1)).toBe(false);
   });
 });

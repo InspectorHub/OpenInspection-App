@@ -56,6 +56,15 @@ describe('version history', () => {
     expect(w.api.calls[3]).toMatchObject({ method: 'POST', path: '/api/inspections/i1/collab/snapshots' });
   });
 
+  it('restore and capture check what they are given before any request', async () => {
+    const w = await resourceWorld();
+    const history = createVersionHistory(w.deps);
+    for (const seq of [-1, 1.5, Number.NaN]) expect(await history.restore('i1', seq), String(seq)).toEqual({ ok: false, error: MESSAGES.invalidValue });
+    expect(await history.restore('../x', 1)).toEqual({ ok: false, error: MESSAGES.invalidValue });
+    expect(await history.capture('..')).toEqual({ ok: false, error: MESSAGES.invalidValue });
+    expect(w.api.calls).toHaveLength(0);
+  });
+
   it('offline and blocked: every member answers a sentence and sends nothing', async () => {
     const w = await resourceWorld({ online: false });
     const history = createVersionHistory(w.deps);

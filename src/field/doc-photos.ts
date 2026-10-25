@@ -45,3 +45,18 @@ export function pendingIdsInDoc(doc: Y.Doc): Set<string> {
   }
   return ids;
 }
+
+/**
+ * True when an entry before position `index` of the item is still only on this device. The server numbers the photos
+ * of the item from its own stored copy, which does not have such an entry yet, so a position counted here would be
+ * off by one there.
+ */
+export function hasPendingBefore(doc: Y.Doc, findingKey: string, index: number): boolean {
+  for (const photos of itemPhotos(doc, findingKey)) {
+    for (let i = 0; i < index && i < photos.length; i += 1) {
+      const entry = photos.get(i);
+      if (entry instanceof Y.Map && entry.get('pendingUpload') === true) return true;
+    }
+  }
+  return false;
+}

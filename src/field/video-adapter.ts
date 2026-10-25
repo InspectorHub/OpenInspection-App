@@ -193,6 +193,8 @@ export function createVideoAdapter(deps: VideoAdapterDeps): VideoAdapter {
 
     setPoster: (inspectionId, input) =>
       guarded(async () => {
+        // A clip on the device has no Stream video yet, so there is no frame to pick.
+        if (local.has(input.streamUid)) return failureOf(MESSAGES.posterNotSaved);
         if (!deps.isOnline()) return needsConnectionResult();
         const outcome = await deps.api.send({ method: 'POST', path: apiPath(inspectionId, 'media', 'video', 'poster'), json: { streamUid: input.streamUid, posterPct: input.posterPct } });
         if (outcome.kind === 'problem') return failureOf(problemResult(outcome.problem).error ?? MESSAGES.requestFailed);
@@ -206,6 +208,7 @@ export function createVideoAdapter(deps: VideoAdapterDeps): VideoAdapter {
           // The clip is kept on the device and the reconciler finalizes it. Say so only for a clip that is really stored.
           const row = await deps.store.getRow(id);
           if (row === null || row.inspectionId !== inspectionId || row.kind !== 'video') return failureOf(MESSAGES.videoNotPrepared);
+          local.delete(id);
           return { ok: true, data: { poolId: '' } };
         }
         const outcome = await deps.api.send({ method: 'POST', path: apiPath(inspectionId, 'media', 'video', 'finalize'), json: input });
@@ -226,7 +229,8 @@ export function createVideoAdapter(deps: VideoAdapterDeps): VideoAdapter {
     if (await deps.isBlocked(inspectionId)) throw new MediaError('BLOCKED');
     const row = await deps.store.getRow(pendingId);
     if (row === null || row.kind !== 'video' || row.inspectionId !== inspectionId) return 'missing';
-    if (row.state !== 'uploaded' && row.state !== 'uploading') return 'missing';
+    // Only `uploaded`: the uploader writes `uploading` together with the key BEFORE it finalizes, so that state does not yet mean the server holds the clip.
+    if (row.state !== 'uploaded') return 'missing';
     const expected = ref.provider === 'r2' ? ref.r2Key : `stream/${ref.streamUid}`;
     return row.uploadedKey === expected ? 'resolved' : 'missing';
   };

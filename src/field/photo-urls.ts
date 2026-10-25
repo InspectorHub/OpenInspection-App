@@ -108,7 +108,8 @@ export async function indexUploadedRows(index: PhotoIndex, store: Pick<MediaStor
     const rows = await store.listRows({ inspectionId, states: ['uploaded'], kinds: ['photo'] });
     const entries: [string, string][] = [];
     for (const row of rows) {
-      if (row.uploadedKey === null) continue;
+      // Only a photo the server holds, whose file is still here: a pending row has no server key to show it under.
+      if (row.state !== 'uploaded' || row.uploadedKey === null) continue;
       const url = await store.objectUrl(row.pendingId);
       if (url !== null) entries.push([row.uploadedKey, url]);
     }

@@ -15,6 +15,8 @@ export interface UploaderWorld {
   api: ScriptedApi;
   /** Inspections the guard reports as blocked. */
   blocked: Set<string>;
+  /** What the document handle reports: false while the editor's document is ahead of the server. */
+  sync: { value: boolean };
   errors: unknown[];
   deps: UploaderDeps;
   factory: ReturnType<typeof createUploaderFactory>;
@@ -41,6 +43,7 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
     random: () => 1,
   });
   const api = options.api ?? scriptedApi();
+  const sync = { value: true };
   const blocked = new Set<string>();
   const errors: unknown[] = [];
   const nativeCalls: string[] = [];
@@ -54,8 +57,8 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
     isBlocked: (id) => Promise.resolve(blocked.has(id)),
     store: world.store,
     native: counted,
-    foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(world.store, world.files) }),
+    foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(world.store, world.files), isSynced: () => sync.value }),
     onError: (error) => errors.push(error),
   };
-  return { world, plugin, native, api, blocked, errors, deps, factory: createUploaderFactory(deps), nativeCalls };
+  return { world, plugin, native, api, blocked, sync, errors, deps, factory: createUploaderFactory(deps), nativeCalls };
 }

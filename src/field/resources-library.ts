@@ -24,26 +24,54 @@ const PREFS_ROUTE = '/api/tenant/inspection-prefs';
 const COMMENTS_ROUTE = '/api/admin/comments';
 const SEVERITIES: readonly string[] = ['good', 'marginal', 'significant', 'minor'];
 
+const CLONE_DEFAULTS: readonly string[] = ['rating', 'rating_notes', 'all'];
+const AUTO_ADVANCE: readonly string[] = ['always', 'keyboard', 'off'];
+const REQUIRE_FIELDS: readonly string[] = ['none', 'location', 'trade', 'both'];
+const AGENT_ACCESS: readonly string[] = ['off', 'read', 'readwrite'];
+const TTL_UNITS: readonly string[] = ['days', 'months', 'years'];
+
+/** A copy nobody else holds: the shared defaults are never handed out. */
+function copyPrefs(prefs: InspectionPrefs): InspectionPrefs {
+  return { ...prefs, pinnedTagIds: [...prefs.pinnedTagIds], reportLinkTtl: prefs.reportLinkTtl === 'never' ? 'never' : { ...prefs.reportLinkTtl } };
+}
+
+/** The server's preferences over the defaults, field by field: a field of the wrong type or an unknown value is ignored. */
+function prefsFrom(json: unknown): InspectionPrefs | null {
+  if (!isRec(json)) return null;
+  const prefs = copyPrefs(DEFAULT_INSPECTION_PREFS);
+  if (typeof json.cloneDefault === 'string' && CLONE_DEFAULTS.includes(json.cloneDefault)) prefs.cloneDefault = json.cloneDefault as InspectionPrefs['cloneDefault'];
+  if (typeof json.autoAdvance === 'string' && AUTO_ADVANCE.includes(json.autoAdvance)) prefs.autoAdvance = json.autoAdvance as InspectionPrefs['autoAdvance'];
+  if (typeof json.autoAdvanceDelayMs === 'number' && Number.isFinite(json.autoAdvanceDelayMs) && json.autoAdvanceDelayMs >= 0) prefs.autoAdvanceDelayMs = json.autoAdvanceDelayMs;
+  if (Array.isArray(json.pinnedTagIds) && json.pinnedTagIds.every((id) => typeof id === 'string')) prefs.pinnedTagIds = [...(json.pinnedTagIds as string[])];
+  if (typeof json.requireDefectFields === 'string' && REQUIRE_FIELDS.includes(json.requireDefectFields)) prefs.requireDefectFields = json.requireDefectFields as InspectionPrefs['requireDefectFields'];
+  if (typeof json.agentRepairAccess === 'string' && AGENT_ACCESS.includes(json.agentRepairAccess)) prefs.agentRepairAccess = json.agentRepairAccess as InspectionPrefs['agentRepairAccess'];
+  const ttl = json.reportLinkTtl;
+  if (ttl === 'never') prefs.reportLinkTtl = 'never';
+  else if (isRec(ttl) && typeof ttl.count === 'number' && Number.isInteger(ttl.count) && ttl.count > 0 && typeof ttl.unit === 'string' && TTL_UNITS.includes(ttl.unit)) {
+    prefs.reportLinkTtl = { count: ttl.count, unit: ttl.unit as 'days' | 'months' | 'years' };
+  }
+  return prefs;
+}
+
 export function createPrefs(deps: ResourceDeps): NonNullable<FieldResources['prefs']> {
   /** The last answer the server gave, so the editor keeps the tenant's choices while the connection is down. */
-  let last: InspectionPrefs = DEFAULT_INSPECTION_PREFS;
-  const merged = (json: unknown): InspectionPrefs | null => (isRec(json) ? { ...DEFAULT_INSPECTION_PREFS, ...(json as Partial<InspectionPrefs>) } : null);
+  let last: InspectionPrefs = copyPrefs(DEFAULT_INSPECTION_PREFS);
   return {
     load: async () => {
-      if (!deps.isOnline()) return last;
+      if (!deps.isOnline()) return copyPrefs(last);
       const body = await readBody(deps.api, { method: 'GET', path: PREFS_ROUTE });
-      const prefs = body === null ? null : merged(body.json);
+      const prefs = body === null ? null : prefsFrom(body.json);
       if (prefs !== null) last = prefs;
-      return last;
+      return copyPrefs(last);
     },
     patch: async (delta): Promise<CommandResult<InspectionPrefs>> => {
       if (!deps.isOnline()) return needsConnectionResult();
       const outcome = await deps.api.send({ method: 'PATCH', path: PREFS_ROUTE, json: delta });
       if (outcome.kind === 'problem' || !isSuccess(outcome.status)) return writeFailure(outcome, MESSAGES.prefsNotSaved);
-      const prefs = merged(outcome.json);
+      const prefs = prefsFrom(outcome.json);
       if (prefs === null) return { ok: true };
       last = prefs;
-      return { ok: true, data: prefs };
+      return { ok: true, data: copyPrefs(prefs) };
     },
   };
 }
@@ -159,6 +187,8 @@ function dataOf(json: unknown): unknown {
   return isRec(json) ? json.data : undefined;
 }
 
+// The reserve switch is not in the work package, so a list read from the device never shows the reserve fields: they
+// stay hidden until a read from the server says otherwise.
 const EMPTY_COSTS: CostItemsListing = { items: [], reserveEnabled: false };
 
 function costListing(json: unknown): CostItemsListing | null {

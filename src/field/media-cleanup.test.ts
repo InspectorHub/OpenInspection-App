@@ -49,7 +49,7 @@ beforeEach(async () => {
 });
 
 const rowIds = async (): Promise<string[]> => (await store.listRows()).map((row) => row.pendingId);
-const watch = (doc: Y.Doc) => watchRemovedPhotos(doc, { store, onError: (error) => errors.push(error) });
+const watch = (doc: Y.Doc) => watchRemovedPhotos(doc, { inspectionId: INSPECTION, store, onError: (error) => errors.push(error) });
 
 describe('a photo removed from the document', () => {
   it('deletes the row and the file of a pending photo that was in the document and is now gone', async () => {
@@ -179,7 +179,8 @@ describe('the key swap', () => {
     // Whether the swap's update had already been issued to the database at the moment the row delete was called.
     const deleteSawSwap: boolean[] = [];
     const watcher = watchRemovedPhotos(doc, {
-      store: { getRow: (id) => store.getRow(id), delete: (id) => (deleteSawSwap.push(log.some((sql) => sql.startsWith('INSERT INTO ydoc_updates'))), store.delete(id)) },
+      inspectionId: INSPECTION,
+      store: { deleteIfUnsent: (id, inspectionId) => (deleteSawSwap.push(log.some((sql) => sql.startsWith('INSERT INTO ydoc_updates'))), store.deleteIfUnsent(id, inspectionId)) },
       onError: (error) => errors.push(error),
     });
 
@@ -188,7 +189,7 @@ describe('the key swap', () => {
       isBlocked: neverBlocked,
       store,
       native: { uploadDetailed: () => Promise.reject(new Error('the background uploader must not be asked')) },
-      foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(store, files) }),
+      foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(store, files), isSynced: () => true }),
     })(INSPECTION, doc);
 
     // The editor's drain, step by step: list, upload, swap the document, delete the record.
@@ -261,21 +262,56 @@ describe('the collab wrapper', () => {
     expect(await rowIds()).toEqual(['p2']);
   });
 
-  it('follows a document that a version restore replaced: what was in the old one and is not in the new one is removed', async () => {
-    await store.put(photoRecord('gone'));
-    await store.put(photoRecord('kept'));
+  it('a replaced document deletes nothing by itself, even when it is still empty (the restored state has not arrived)', async () => {
+    await store.put(photoRecord('p1'));
     const { connector, handle } = inner();
     const wrapped = withMediaCleanup(connector, { store, onError: (error) => errors.push(error) });
     const opened = wrapped.connect(INSPECTION, {});
-    seedPhotos(handle.doc, FINDING, [pendingEntry('gone'), pendingEntry('kept')]);
+    seedPhotos(handle.doc, FINDING, [pendingEntry('p1')]);
+    handle.replace(new Y.Doc());
     expect(opened.doc).toBe(handle.doc);
+    await settle();
+    expect(await rowIds()).toEqual(['p1']);
+    expect(files.paths()).toEqual(['media/p1.jpg']);
+    // The restored state arrives into the new document: the entry is back, and the row was never touched.
+    seedPhotos(handle.doc, FINDING, [pendingEntry('p1')]);
+    await settle();
+    expect(await rowIds()).toEqual(['p1']);
+  });
 
+  it('after a replacement, an entry really removed from the NEW document is cleaned; one removed from the old one is not', async () => {
+    await store.put(photoRecord('p1'));
+    await store.put(photoRecord('p2'));
+    const { connector, handle } = inner();
+    const wrapped = withMediaCleanup(connector, { store, onError: (error) => errors.push(error) });
+    const opened = wrapped.connect(INSPECTION, {});
+    const old = handle.doc;
+    seedPhotos(old, FINDING, [pendingEntry('p1'), pendingEntry('p2')]);
     const restored = new Y.Doc();
-    seedPhotos(restored, FINDING, [pendingEntry('kept')]);
     handle.replace(restored);
     expect(opened.doc).toBe(restored);
+    seedPhotos(restored, FINDING, [pendingEntry('p1'), pendingEntry('p2')]);
+    removePhotos(old, FINDING, () => true);
     await settle();
-    expect(await rowIds()).toEqual(['kept']);
+    expect(await rowIds()).toEqual(['p1', 'p2']);
+    removePhotos(restored, FINDING, (entry) => entry.pendingId === 'p1');
+    await settle();
+    expect(await rowIds()).toEqual(['p2']);
+  });
+
+  it('a document replaced after the handle was destroyed is not followed', async () => {
+    await store.put(photoRecord('p1'));
+    const { connector, handle } = inner();
+    const opened = withMediaCleanup(connector, { store }).connect(INSPECTION, {});
+    seedPhotos(handle.doc, FINDING, [pendingEntry('p1')]);
+    opened.destroy();
+    const next = new Y.Doc();
+    handle.replace(next);
+    expect(opened.doc).toBe(next);
+    seedPhotos(next, FINDING, [pendingEntry('p1')]);
+    removePhotos(next, FINDING, () => true);
+    await settle();
+    expect(await rowIds()).toEqual(['p1']);
   });
 
   it('passes purge through', async () => {

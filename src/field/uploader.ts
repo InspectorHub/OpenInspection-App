@@ -126,6 +126,9 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
         return deps.foreground.crop(rec, doc);
       case 'annotate':
         return deps.foreground.annotate(rec, doc);
+      default:
+        // A kind this build does not know (a record from a newer editor): nothing is sent for it.
+        return fail(MESSAGES.invalidValue);
     }
   }
 

@@ -68,6 +68,11 @@ describe('settings sheet', () => {
     expect(await createSettingsSheet(w.deps).load('i1')).toBeNull();
   });
 
+  it('an answer that names no inspection is not a form', async () => {
+    const w = await resourceWorld({ answers: [reply(200, { data: {} }), reply(200, templates), reply(200, media)] });
+    expect(await createSettingsSheet(w.deps).load('i1')).toBeNull();
+  });
+
   it('templates or photos that cannot be read leave the rest of the sheet usable', async () => {
     const w = await resourceWorld({ answers: [reply(200, inspection), reply(500), reply(500)] });
     const sheet = await createSettingsSheet(w.deps).load('i1');

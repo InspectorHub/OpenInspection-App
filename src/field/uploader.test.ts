@@ -7,7 +7,7 @@ import { MESSAGES } from './messages';
 import { seedPhotos } from './test-support/doc-seed';
 import { reply, scriptedApi } from './test-support/scripted-api';
 import { createUploaderWorld } from './test-support/uploader-world';
-import { createUploaderFactory, type UploaderDeps } from './uploader';
+import { createStoredBlobReader, createUploaderFactory, type UploaderDeps } from './uploader';
 
 const keyFor = (pendingId: string): string => `tenant-1/inspections/${INSPECTION}/photos/${pendingId}.jpg`;
 type Photo = Extract<PendingMediaRecord, { kind: 'photo' }>;
@@ -206,6 +206,86 @@ describe('crop and annotate never reach the background uploader', () => {
     expect((await w.factory(INSPECTION, null).upload(annotateRecord('p2'))).ok).toBe(false);
     expect(w.api.calls).toHaveLength(0);
     expect(w.nativeCalls).toEqual([]);
+  });
+});
+
+describe('crop and annotate wait for the document to catch up with the server', () => {
+  it('refused with no request while the document is ahead; sent once it has caught up', async () => {
+    const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { croppedKey: 'cropped-key' } })) });
+    w.sync.value = false;
+    const uploader = w.factory(INSPECTION, docWithPhoto());
+    expect(await uploader.upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect(await uploader.upload(annotateRecord('p2'))).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect(w.api.calls).toHaveLength(0);
+    w.sync.value = true;
+    expect((await uploader.upload(cropRecord('p1'))).ok).toBe(true);
+    expect(w.api.calls).toHaveLength(1);
+  });
+});
+
+describe('a record under an id that already has a row', () => {
+  it('a row of another inspection, or of another kind, is never uploaded or removed under this record', async () => {
+    const other = await createUploaderWorld();
+    await other.world.store.put({ ...photoRecord('p1'), inspectionId: 'insp-other' });
+    expect(await other.factory(INSPECTION, null).upload(itemPhoto('p1'))).toEqual({ ok: false, error: MESSAGES.photoNotPrepared });
+    const kind = await createUploaderWorld();
+    await kind.world.store.put(cropRecord('p1'));
+    expect(await kind.factory(INSPECTION, null).upload(itemPhoto('p1'))).toEqual({ ok: false, error: MESSAGES.photoNotPrepared });
+    expect(other.nativeCalls).toEqual([]);
+    expect(kind.nativeCalls).toEqual([]);
+    expect((await other.world.store.listRows()).map((row) => row.pendingId)).toEqual(['p1']);
+    expect((await kind.world.store.listRows()).map((row) => row.kind)).toEqual(['crop']);
+  });
+});
+
+type Code = 'AUTH' | 'LOCKED' | 'UPGRADE' | 'TOO_LARGE' | 'TIMEOUT' | 'NETWORK' | 'REJECTED' | 'FILE';
+const failedWith = (code: Code) => ({ ok: false as const, code, retryable: true, retryAfterMs: null, halt: false });
+
+describe('what the person is told for each way the background upload can end', () => {
+  const codes: [Code, string][] = [
+    ['AUTH', MESSAGES.sessionExpired],
+    ['LOCKED', MESSAGES.deviceLocked],
+    ['UPGRADE', MESSAGES.upgradeRequired],
+    ['TOO_LARGE', MESSAGES.photoTooLarge],
+    ['TIMEOUT', MESSAGES.unreachable],
+    ['NETWORK', MESSAGES.unreachable],
+    ['REJECTED', MESSAGES.photoUploadFailed],
+    ['FILE', MESSAGES.photoUploadFailed],
+  ];
+  it.each(codes)('%s', async (code, sentence) => {
+    const w = await createUploaderWorld();
+    const factory = createUploaderFactory({ ...w.deps, native: { uploadDetailed: () => Promise.resolve(failedWith(code)) } });
+    expect(await factory(INSPECTION, null).upload(itemPhoto('p1'))).toEqual({ ok: false, error: sentence });
+  });
+
+  it('a record of a kind this build does not know is refused without anything being sent', async () => {
+    const w = await createUploaderWorld();
+    const odd = { ...itemPhoto('p1'), kind: 'sketch' } as unknown as PendingMediaRecord;
+    expect(await w.factory(INSPECTION, null).upload(odd)).toEqual({ ok: false, error: MESSAGES.invalidValue });
+    expect(w.nativeCalls).toEqual([]);
+    expect(w.api.calls).toEqual([]);
+  });
+});
+
+describe('the stored blob reader', () => {
+  it('hands back the bytes with the type the row was stored under', async () => {
+    const w = await createUploaderWorld();
+    await w.world.store.put(photoRecord('p1', { type: 'image/png' }));
+    const blob = await createStoredBlobReader(w.world.store, w.world.files)('p1');
+    expect(blob?.type).toBe('image/png');
+    expect(blob?.size).toBe(64);
+  });
+
+  it('a missing row or a file that cannot be read is null, and a crop that needs it sends nothing', async () => {
+    const w = await createUploaderWorld();
+    const reader = createStoredBlobReader(w.world.store, w.world.files);
+    expect(await reader('absent')).toBeNull();
+    await w.world.store.put(cropRecord('p1'));
+    w.world.files.failReadFor('media/p1.jpg');
+    expect(await reader('p1')).toBeNull();
+    const [listed] = await w.world.store.list(INSPECTION);
+    expect(await w.factory(INSPECTION, docWithPhoto()).upload(listed as PendingMediaRecord)).toEqual({ ok: false, error: MESSAGES.photoNotPrepared });
+    expect(w.api.calls).toEqual([]);
   });
 });
 

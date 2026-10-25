@@ -17,26 +17,27 @@ import { pendingIdsInDoc } from './doc-photos';
  *    when that transaction ends, and the database runs statements in call order, so the swap that made an entry leave
  *    the document is queued before this row delete.
  *
- * A removal that is undone later (a version restore bringing an old entry back) finds no row to send; the person adds
- * the photo again.
+ * A document that is REPLACED (a version restore swaps in a new, still empty one) is never a reason to delete anything:
+ * what the old one held has not "disappeared", the new one is just not populated yet. The seen set is rebuilt from the
+ * new document and only removals seen on it from then on delete. The safe direction is to keep a row; the reconciler
+ * treats an entry that is not in the document as "missing" and keeps the file.
  */
 
 export interface CleanupDeps {
-  store: Pick<MediaStore, 'getRow' | 'delete'>;
+  /** The inspection this document belongs to: a row of any other inspection is never deleted. */
+  inspectionId: string;
+  store: Pick<MediaStore, 'deleteIfUnsent'>;
   /** A removal that failed. The row stays and the next removal of the same id is not retried; the file sweep finds it. */
   onError?(error: unknown): void;
 }
 
 export interface RemovedPhotoWatcher {
-  /** Looks at `doc` from now on. A version restore replaces the document, and what the old one held is compared with the new one. */
+  /** Looks at `doc` from now on. Nothing is deleted because of the swap itself: see the note above. */
   follow(doc: Y.Doc): void;
   /** Resolves when every removal started so far has finished. */
   settled(): Promise<void>;
   stop(): void;
 }
-
-/** The states in which a row is still only a local copy nobody is sending. */
-const REMOVABLE_STATES: readonly string[] = ['pending', 'failed'];
 
 export function watchRemovedPhotos(initial: Y.Doc, deps: CleanupDeps): RemovedPhotoWatcher {
   let doc = initial;
@@ -45,11 +46,12 @@ export function watchRemovedPhotos(initial: Y.Doc, deps: CleanupDeps): RemovedPh
   const jobs = new Set<Promise<void>>();
 
   async function remove(pendingId: string): Promise<void> {
-    // Past the end of the transaction that removed the entry: see the note above.
+    // Past the end of the transaction that removed the entry: the document's own storage writes its update when that
+    // transaction ends, and the database runs statements in call order, so a swap is queued before this delete.
     await Promise.resolve();
     try {
-      const row = await deps.store.getRow(pendingId);
-      if (row !== null && REMOVABLE_STATES.includes(row.state)) await deps.store.delete(pendingId);
+      // One guarded statement: only a row still unsent, of this inspection, is removed.
+      await deps.store.deleteIfUnsent(pendingId, deps.inspectionId);
     } catch (error) {
       deps.onError?.(error);
     }
@@ -67,24 +69,28 @@ export function watchRemovedPhotos(initial: Y.Doc, deps: CleanupDeps): RemovedPh
     }
   }
 
+  const relevant = (event: Y.YEvent<Y.AbstractType<unknown>>): boolean =>
+    event.target instanceof Y.Array || event.path.length <= 1 || (event instanceof Y.YMapEvent && event.keysChanged.has('pendingId'));
+
+  // A photo list changing, an item being added, replaced or removed, or an entry losing its pending id in place (a crop
+  // or an annotation is resolved by editing its entry, not by replacing it). A keystroke in a note is none of these.
   const onChange = (events: Y.YEvent<Y.AbstractType<unknown>>[]): void => {
-    // A photo list changing, an item being added, replaced or removed, or an entry losing its pending id in place (a crop
-    // or an annotation is resolved by editing its entry, not by replacing it). A keystroke in a note is none of these.
-    const relevant = (event: Y.YEvent<Y.AbstractType<unknown>>): boolean =>
-      event.target instanceof Y.Array || event.path.length <= 1 || (event instanceof Y.YMapEvent && event.keysChanged.has('pendingId'));
-    if (!stopped && events.some(relevant)) reconcile();
+    if (events.some(relevant)) reconcile();
   };
 
-  doc.getMap('results').observeDeep(onChange);
-  reconcile();
+  function attach(): void {
+    seen.clear();
+    for (const id of pendingIdsInDoc(doc)) seen.add(id);
+    doc.getMap('results').observeDeep(onChange);
+  }
+  attach();
 
   return {
     follow: (next) => {
-      if (stopped || next === doc) return;
+      if (next === doc) return;
       doc.getMap('results').unobserveDeep(onChange);
       doc = next;
-      doc.getMap('results').observeDeep(onChange);
-      reconcile();
+      attach();
     },
     settled: async () => {
       while (jobs.size > 0) await Promise.allSettled([...jobs]);
@@ -98,11 +104,11 @@ export function watchRemovedPhotos(initial: Y.Doc, deps: CleanupDeps): RemovedPh
 }
 
 /** Wraps a connector so every document it opens is watched for removed photos until its handle is destroyed. */
-export function withMediaCleanup(inner: CollabConnector, deps: CleanupDeps): CollabConnector {
+export function withMediaCleanup(inner: CollabConnector, deps: Omit<CleanupDeps, 'inspectionId'>): CollabConnector {
   return {
     connect: (inspectionId, opts) => {
       const real = inner.connect(inspectionId, opts);
-      const watcher = watchRemovedPhotos(real.doc, deps);
+      const watcher = watchRemovedPhotos(real.doc, { ...deps, inspectionId });
       let destroyed = false;
       const handle: ResultsDocHandle = {
         get doc() {

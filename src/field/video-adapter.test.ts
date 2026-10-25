@@ -1,54 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { VideoUploadTicket } from '@inspectorhub/field-ui';
-import { createManualTimers } from '../collab/test-support/manual-timers';
 import { isMediaError } from '../media/errors';
-import { createNativeUploader } from '../media/native-uploader';
-import { createMediaReconciler } from '../media/reconcile';
 import { MAX_VIDEO_BYTES } from '../media/store';
-import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, TENANT, type MediaWorld } from '../media/test-support/fakes';
-import { combinedEngine, createFakeVideoEngine } from '../media/test-support/video-fakes';
-import { createVideoStrategy } from '../media/video';
-import { createManualClock } from '../platform/clock';
-import { neverBlocked } from '../test-support/never-blocked';
+import { INSPECTION, ORIGIN } from '../media/test-support/fakes';
 import type { ApiOutcome } from './api-client';
 import { MESSAGES } from './messages';
-import { formFields, reply, scriptedApi } from './test-support/scripted-api';
-import { createVideoAdapter, type VideoAdapterDeps } from './video-adapter';
-
-const SESSION_OK = { kind: 'ok', session: { userId: 'u', tenantId: 't', role: 'inspector', offlineMaxDays: 7 } } as const;
-const TOKEN = 'vtoken0001.vsignature0001';
-const R2_KEY = `${TENANT}/inspections/${INSPECTION}/videos/m1.mp4`;
-const clip = (type = 'video/mp4', bytes = 96): File => new File([new Uint8Array(bytes).fill(5)], 'clip.mp4', { type });
-
-function ticketAnswer(over: Record<string, unknown> = {}): ApiOutcome {
-  return reply(200, {
-    success: true,
-    data: { uploadURL: `https://public.example.com/api/public/uploads/video?token=${TOKEN}`, provider: 'r2', ref: { provider: 'r2', mediaId: 'm1', r2Key: R2_KEY }, ...over },
-  });
-}
-
-async function setup(options: { online?: boolean; provider?: 'r2' | 'stream'; answers?: ApiOutcome[]; world?: MediaWorld } = {}) {
-  const world = options.world ?? (await createMediaWorld());
-  const api = scriptedApi(...(options.answers ?? []));
-  const state = { online: options.online ?? true, provider: options.provider ?? ('r2' as 'r2' | 'stream'), blocked: false };
-  let ids = 0;
-  const deps: VideoAdapterDeps = {
-    api,
-    store: world.store,
-    isBlocked: () => Promise.resolve(state.blocked),
-    isOnline: () => state.online,
-    videoProvider: () => state.provider,
-    origin: ORIGIN,
-    clock: { now: () => 5000 },
-    newId: () => `id${String((ids += 1))}`,
-  };
-  return { world, api, state, adapter: createVideoAdapter(deps), deps };
-}
-
-const need = <T>(value: T | undefined): T => {
-  if (value === undefined) throw new Error('missing');
-  return value;
-};
+import { formFields, reply } from './test-support/scripted-api';
+import { clip, need, R2_KEY, setup, ticketAnswer, TOKEN } from './test-support/video-world';
 
 describe('recording without a connection', () => {
   it('answers a local ticket, keeps the clip on the device, answers a synthetic reference and an empty pool id, and sends nothing', async () => {
@@ -218,6 +176,55 @@ describe('recording with a connection (R2)', () => {
   });
 });
 
+describe('details that were found by mutation', () => {
+  it('an online answer whose provider and reference disagree is refused (control: the consistent one is taken)', async () => {
+    const mixed1 = await setup({ answers: [ticketAnswer({ provider: 'stream' })] });
+    expect((await mixed1.adapter.video.createUpload(INSPECTION, {})).ok).toBe(false);
+    const mixed2 = await setup({ answers: [ticketAnswer({ ref: { provider: 'stream', streamUid: 'abcdefgh1234' } })] });
+    expect((await mixed2.adapter.video.createUpload(INSPECTION, {})).ok).toBe(false);
+    const good = await setup({ answers: [ticketAnswer()] });
+    expect((await good.adapter.video.createUpload(INSPECTION, {})).ok).toBe(true);
+  });
+
+  it('a clip on the device never sends a poster, even when the connection has come back; control: an engine ticket does', async () => {
+    const s = await setup({ online: false, answers: [reply(200, { data: { posterKey: 'p' } })] });
+    const ticket = need((await s.adapter.video.createUpload(INSPECTION, {})).data);
+    s.state.online = true;
+    expect((await s.adapter.video.uploadPoster(INSPECTION, ticket, new Blob(['p']))).ok).toBe(false);
+    expect(s.api.calls).toEqual([]);
+    const engine = await setup({ answers: [ticketAnswer(), reply(200, { data: { posterKey: 'p' } })] });
+    const real = need((await engine.adapter.video.createUpload(INSPECTION, {})).data);
+    expect((await engine.adapter.video.uploadPoster(INSPECTION, real, new Blob(['p']))).ok).toBe(true);
+  });
+
+  it('the clip upload has a long timeout: it is not a photo', async () => {
+    const s = await setup({ answers: [ticketAnswer(), reply(200, { data: { mediaId: 'm1', r2Key: R2_KEY } })] });
+    const ticket = need((await s.adapter.video.createUpload(INSPECTION, {})).data);
+    await s.adapter.video.uploadFile(ticket, clip(), () => undefined);
+    expect(s.api.calls[1]?.timeoutMs).toBe(600_000);
+  });
+
+  it('a Stream poster pick for a clip that is still on the device sends nothing and says so', async () => {
+    const s = await setup({ online: true, provider: 'stream' });
+    const ticket = need((await s.adapter.video.createUpload(INSPECTION, {})).data);
+    const uid = ticket.ref.provider === 'stream' ? ticket.ref.streamUid : '';
+    expect(await s.adapter.video.setPoster(INSPECTION, { streamUid: uid, posterPct: 0.5 })).toEqual({ ok: false, error: MESSAGES.posterNotSaved });
+    expect(s.api.calls).toEqual([]);
+  });
+
+  it('once finalized, a clip is no longer a local one (the map does not grow)', async () => {
+    const s = await setup({ online: false, answers: [reply(200, { data: { poolId: 'pool-1' } })] });
+    const ticket = need((await s.adapter.video.createUpload(INSPECTION, {})).data);
+    await s.adapter.video.uploadFile(ticket, clip(), () => undefined);
+    const input = { provider: 'r2', mediaId: 'local-id1', r2Key: 'local/local-id1.mp4' } as const;
+    expect((await s.adapter.video.finalize(INSPECTION, input)).data).toEqual({ poolId: '' });
+    expect(s.api.calls).toEqual([]);
+    // A second finalize of the same id is not answered locally any more: it goes to the engine.
+    await s.adapter.video.finalize(INSPECTION, input);
+    expect(s.api.calls).toHaveLength(1);
+  });
+});
+
 describe('the poster picker and removal', () => {
   it('picking a Stream poster needs a connection, and online posts the percentage', async () => {
     const off = await setup({ online: false });
@@ -249,16 +256,31 @@ describe('resolveVideo: the document step of the reconciler', () => {
     expect(await s.adapter.resolveVideo(INSPECTION, 'local-id1', { provider: 'r2', mediaId: 'local-id1', r2Key: R2_KEY.replace('m1', 'local-id1') })).toBe('resolved');
   });
 
-  it('keeps the file (missing) when the row is not past its upload, holds another key, or is gone', async () => {
+  it('keeps the file (missing) unless the row is `uploaded` with the key of this reference, in this inspection', async () => {
     const key = R2_KEY.replace('m1', 'local-id1');
-    const pending = await setup({ online: false });
-    await storedRow(pending, 'pending', null);
-    expect(await pending.adapter.resolveVideo(INSPECTION, 'local-id1', { provider: 'r2', mediaId: 'local-id1', r2Key: key })).toBe('missing');
+    const refFor = { provider: 'r2', mediaId: 'local-id1', r2Key: key } as const;
+    // `uploading` carries the key BEFORE the server finalizes: a caller in that window must not make the file go.
+    for (const state of ['pending', 'uploading'] as const) {
+      const s = await setup({ online: false });
+      await storedRow(s, state, key);
+      expect(await s.adapter.resolveVideo(INSPECTION, 'local-id1', refFor), state).toBe('missing');
+    }
+    const failed = await setup({ online: false });
+    await storedRow(failed, 'uploaded', key);
+    await failed.world.store.markState('local-id1', 'failed', { attempts: 3 });
+    expect(await failed.adapter.resolveVideo(INSPECTION, 'local-id1', refFor)).toBe('missing');
     const otherKey = await setup({ online: false });
     await storedRow(otherKey, 'uploaded', key);
     expect(await otherKey.adapter.resolveVideo(INSPECTION, 'local-id1', { provider: 'r2', mediaId: 'other', r2Key: R2_KEY.replace('m1', 'other') })).toBe('missing');
+    const otherInspection = await setup({ online: false });
+    await storedRow(otherInspection, 'uploaded', key);
+    expect(await otherInspection.adapter.resolveVideo('insp-other', 'local-id1', refFor)).toBe('missing');
     const gone = await setup({ online: false });
-    expect(await gone.adapter.resolveVideo(INSPECTION, 'local-id1', { provider: 'r2', mediaId: 'local-id1', r2Key: key })).toBe('missing');
+    expect(await gone.adapter.resolveVideo(INSPECTION, 'local-id1', refFor)).toBe('missing');
+    // Control: uploaded, same key, same inspection.
+    const done = await setup({ online: false });
+    await storedRow(done, 'uploaded', key);
+    expect(await done.adapter.resolveVideo(INSPECTION, 'local-id1', refFor)).toBe('resolved');
   });
 
   it('a Stream clip is matched by its uid', async () => {
@@ -277,101 +299,3 @@ describe('resolveVideo: the document step of the reconciler', () => {
   });
 });
 
-describe('offline recording, then the connection returns', () => {
-  it('the reconciler creates the upload, sends the clip, finalizes on the server, and only then resolves and deletes the local copy', async () => {
-    const world = await createMediaWorld();
-    const engine = createFakeVideoEngine('r2');
-    const combined = combinedEngine(world.engine, engine);
-    const plugin = createFakePlugin({ engine: combined, files: world.files });
-    const timers = createManualTimers();
-    const clock = createManualClock(1_000_000);
-    const uploader = createNativeUploader({
-      isBlocked: neverBlocked,
-      store: world.store,
-      http: combined.http,
-      tokens: { getAccessToken: () => Promise.resolve('access-token'), checkSession: () => Promise.resolve(SESSION_OK) },
-      plugin,
-      origin: ORIGIN,
-      isLocked: () => false,
-      clientHeaders: {},
-      timers,
-      clock,
-      random: () => 1,
-      video: createVideoStrategy(),
-    });
-    const s = await setup({ online: false, world });
-    const order: string[] = [];
-    const resolveVideo: typeof s.adapter.resolveVideo = async (inspectionId, pendingId, ref) => {
-      order.push(`resolve:finalizes=${String(engine.finalizes.length)}`);
-      return s.adapter.resolveVideo(inspectionId, pendingId, ref);
-    };
-    const reconciler = createMediaReconciler({
-      isBlocked: neverBlocked,
-      store: world.store,
-      uploader,
-      resolvePending: () => Promise.resolve('resolved'),
-      resolveVideo,
-      isLocked: () => false,
-      network: { online: () => Promise.resolve(true), onChange: () => () => undefined },
-      clock,
-      timers,
-      random: () => 0.5,
-    });
-
-    // Offline: the clip is recorded to the device and nothing reaches the server.
-    const ticket = need((await s.adapter.video.createUpload(INSPECTION, { itemId: 'i1' })).data);
-    await s.adapter.video.uploadFile(ticket, clip(), () => undefined);
-    expect(engine.creates).toEqual([]);
-    expect(world.files.paths()).toHaveLength(1);
-
-    // The connection returns.
-    await expect(reconciler.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
-    expect(engine.creates).toHaveLength(1);
-    expect(engine.finalizes).toHaveLength(1);
-    expect(engine.pool.size).toBe(1);
-    expect(order).toEqual(['resolve:finalizes=1']);
-    expect(await world.store.listRows()).toEqual([]);
-    expect(world.files.paths()).toEqual([]);
-  });
-
-  it('control: with the old placeholder that always answers missing, the file stays on the device for good', async () => {
-    const world = await createMediaWorld();
-    const engine = createFakeVideoEngine('r2');
-    const combined = combinedEngine(world.engine, engine);
-    const plugin = createFakePlugin({ engine: combined, files: world.files });
-    const timers = createManualTimers();
-    const clock = createManualClock(1_000_000);
-    const uploader = createNativeUploader({
-      isBlocked: neverBlocked,
-      store: world.store,
-      http: combined.http,
-      tokens: { getAccessToken: () => Promise.resolve('access-token'), checkSession: () => Promise.resolve(SESSION_OK) },
-      plugin,
-      origin: ORIGIN,
-      isLocked: () => false,
-      clientHeaders: {},
-      timers,
-      clock,
-      random: () => 1,
-      video: createVideoStrategy(),
-    });
-    const s = await setup({ online: false, world });
-    const reconciler = createMediaReconciler({
-      isBlocked: neverBlocked,
-      store: world.store,
-      uploader,
-      resolvePending: () => Promise.resolve('resolved'),
-      resolveVideo: () => Promise.resolve('missing'),
-      isLocked: () => false,
-      network: { online: () => Promise.resolve(true), onChange: () => () => undefined },
-      clock,
-      timers,
-      random: () => 0.5,
-    });
-    const ticket = need((await s.adapter.video.createUpload(INSPECTION, {})).data);
-    await s.adapter.video.uploadFile(ticket, clip(), () => undefined);
-    await reconciler.reconcileUploads();
-    expect(engine.finalizes).toHaveLength(1);
-    expect(world.files.paths()).toHaveLength(1);
-  });
-});

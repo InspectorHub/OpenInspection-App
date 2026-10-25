@@ -169,6 +169,12 @@ export interface MediaStore extends PendingMediaStore {
    * no clip record, so `get` and `list` never return one; `getRow` and `listRows` do.
    */
   putVideo(rec: VideoRecord): Promise<void>;
+  /**
+   * Removes the row and its file only while the row is still unsent (`pending` or `failed`) and belongs to `inspectionId`.
+   * One guarded DELETE decides, so an upload that began after the caller last looked keeps its row. Answers whether a row
+   * was removed. A file that cannot be removed is left for the orphan sweep.
+   */
+  deleteIfUnsent(pendingId: string, inspectionId: string): Promise<boolean>;
   /** The size of the row's file in bytes, null when the platform did not report one. Rejects when it cannot be read. */
   fileSize(row: MediaRow): Promise<number | null>;
   /** Valid rows, oldest first. Rows that fail validation are left out, never thrown on. */
@@ -620,6 +626,18 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
         }
       }
       await db.run('DELETE FROM media WHERE pending_id = ?', [pendingId]);
+    },
+
+    deleteIfUnsent: async (pendingId, inspectionId) => {
+      if (!isValidMediaId(pendingId) || !isValidMediaId(inspectionId)) return false;
+      const raw = await rawRow(pendingId);
+      if (!raw) return false;
+      const row = rowFromDb(raw);
+      const result = await db.run("DELETE FROM media WHERE pending_id = ? AND inspection_id = ? AND state IN ('pending', 'failed')", [pendingId, inspectionId]);
+      if (result.changes === 0) return false;
+      // A row this store did not write has no trustworthy path: only the row is removed.
+      if (row) await files.remove(row.path).catch(() => undefined);
+      return true;
     },
 
     objectUrl: async (pendingId) => {

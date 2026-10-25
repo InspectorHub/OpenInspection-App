@@ -3,7 +3,7 @@ import type { PendingMediaRecord } from '@inspectorhub/field-ui';
 import { MAX_MEDIA_BYTES, PHOTO_CONTENT_TYPES } from '../media/store';
 import { apiPath, type Api, type ApiOutcome } from './api-client';
 import { bodyData, isSuccess, problemResult } from './commands-shared';
-import { findPhotoIndex } from './doc-photos';
+import { findPhotoIndex, hasPendingBefore } from './doc-photos';
 import { MESSAGES } from './messages';
 
 /**
@@ -31,6 +31,12 @@ export interface ForegroundDeps {
    * bytes stay on disk), so a queued crop or annotation is read back through this. Null when they cannot be read.
    */
   readStoredBlob(pendingId: string): Promise<Blob | null>;
+  /**
+   * True when the editor's document for this inspection has caught up with the server (`ResultsDocHandle.synced`). The
+   * server counts photos in its own stored copy, so a position taken from a document that is ahead of it would land the
+   * crop or annotation on another photo.
+   */
+  isSynced(inspectionId: string): boolean;
 }
 
 export interface ForegroundUploads {
@@ -84,10 +90,13 @@ async function safely(work: () => Promise<UploadResult>): Promise<UploadResult> 
 
 export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads {
   /** The photo's current position, or the sentence for why there is none. Nothing is sent without one. */
-  function positionOf(doc: Y.Doc | null, meta: { findingKey: string; photoKey: string }): number | string {
+  function positionOf(doc: Y.Doc | null, inspectionId: string, meta: { findingKey: string; photoKey: string }): number | string {
     if (doc === null) return MESSAGES.photoGone;
     const index = findPhotoIndex(doc, meta.findingKey, meta.photoKey);
-    return index < 0 ? MESSAGES.photoGone : index;
+    if (index < 0) return MESSAGES.photoGone;
+    // The position is only meaningful to the server when the server's copy has the same photos before this one.
+    if (!deps.isSynced(inspectionId) || hasPendingBefore(doc, meta.findingKey, index)) return MESSAGES.waitForSync;
+    return index;
   }
 
   async function defectPhoto(rec: PhotoRecord): Promise<UploadResult> {
@@ -108,7 +117,7 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
   }
 
   async function crop(rec: CropRecord, doc: Y.Doc | null): Promise<UploadResult> {
-    const index = positionOf(doc, rec.meta);
+    const index = positionOf(doc, rec.inspectionId, rec.meta);
     if (typeof index === 'string') return fail(index);
     const blob = await bytesOf(deps, rec);
     if (blob === null) return fail(MESSAGES.photoNotPrepared);
@@ -122,7 +131,7 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
   }
 
   async function annotate(rec: AnnotateRecord, doc: Y.Doc | null): Promise<UploadResult> {
-    const index = positionOf(doc, rec.meta);
+    const index = positionOf(doc, rec.inspectionId, rec.meta);
     if (typeof index === 'string') return fail(index);
     const blob = await bytesOf(deps, rec);
     if (blob === null) return fail(MESSAGES.photoNotPrepared);

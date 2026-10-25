@@ -42,6 +42,33 @@ describe('prefs', () => {
   });
 });
 
+describe('prefs: what the server says is checked', () => {
+  it('a field of the wrong type or with an unknown value is ignored; a good one is taken', async () => {
+    const w = await resourceWorld({
+      answers: [reply(200, { autoAdvance: 'sideways', autoAdvanceDelayMs: 'fast', pinnedTagIds: [1, 2], cloneDefault: 'all', requireDefectFields: 'both', agentRepairAccess: 7, reportLinkTtl: { count: 3, unit: 'weeks' }, extra: 'x' })],
+    });
+    const prefs = await createPrefs(w.deps).load();
+    expect(prefs).toEqual({ ...DEFAULT_INSPECTION_PREFS, cloneDefault: 'all', requireDefectFields: 'both' });
+    expect(prefs).not.toHaveProperty('extra');
+  });
+
+  it('a good time-to-live and a good tag list are taken', async () => {
+    const w = await resourceWorld({ answers: [reply(200, { reportLinkTtl: { count: 3, unit: 'months' }, pinnedTagIds: ['a'], autoAdvanceDelayMs: 500 })] });
+    expect(await createPrefs(w.deps).load()).toMatchObject({ reportLinkTtl: { count: 3, unit: 'months' }, pinnedTagIds: ['a'], autoAdvanceDelayMs: 500 });
+  });
+
+  it('never hands out the shared defaults: changing an answer changes nothing for the next reader', async () => {
+    const off = await resourceWorld({ online: false });
+    const prefs = createPrefs(off.deps);
+    const first = await prefs.load();
+    expect(first).not.toBe(DEFAULT_INSPECTION_PREFS);
+    first.pinnedTagIds.push('x');
+    first.autoAdvance = 'off';
+    expect(await prefs.load()).toEqual(DEFAULT_INSPECTION_PREFS);
+    expect(DEFAULT_INSPECTION_PREFS.pinnedTagIds).toEqual([]);
+  });
+});
+
 describe('comments library', () => {
   it('list: sends only the filters that have a value, in the order they were set, and reads the rows', async () => {
     const w = await resourceWorld({ answers: [reply(200, { data: [{ id: 'c1', text: 'Seal the joint', category: 'Roof', severity: 'minor', section: null, useCount: 2 }, { nope: 1 }] })] });

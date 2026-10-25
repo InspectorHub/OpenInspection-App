@@ -113,6 +113,15 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     }
   };
 
+  /** The sink may fail (the toast host is gone); that is reported and never reaches the editor. */
+  const say = (message: string, variant: NotifyVariant, options?: NotifyOptions): void => {
+    try {
+      deps.notify(message, variant, options);
+    } catch (error) {
+      report(error);
+    }
+  };
+
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
   const execute = createExecutor({
@@ -131,7 +140,11 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     isBlocked,
     store: stack.store,
     native: stack.uploader,
-    foreground: createForegroundUploads({ api: deps.api, readStoredBlob: createStoredBlobReader(stack.store, deps.files) }),
+    foreground: createForegroundUploads({
+      api: deps.api,
+      readStoredBlob: createStoredBlobReader(stack.store, deps.files),
+      isSynced: (inspectionId) => deps.registry.getHandle(inspectionId)?.synced() ?? false,
+    }),
     onError: report,
   });
 
@@ -166,27 +179,31 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     },
     session: () => deps.session,
     execute,
-    notify: (message, variant = 'info', options) => {
-      try {
-        deps.notify(message, variant, options);
-      } catch (error) {
-        report(error);
-      }
-    },
+    notify: (message, variant = 'info', options) => say(message, variant, options),
     reload: () => deps.onReload(),
     ...(deps.onRestart === undefined ? {} : { restartSession: () => deps.onRestart?.() }),
     openUrl: (url) => {
-      let secure = false;
+      // The normalised address is what is opened, so what was checked is what is sent.
+      let href: string | null = null;
       try {
-        secure = new URL(url).protocol === 'https:';
+        const parsed = new URL(url);
+        if (parsed.protocol === 'https:') href = parsed.href;
       } catch {
-        secure = false;
+        href = null;
       }
-      if (!secure) {
-        deps.notify(MESSAGES.linkBlocked, 'warning');
+      if (href === null) {
+        say(MESSAGES.linkBlocked, 'warning');
         return;
       }
-      deps.openExternal(url).catch(report);
+      const failed = (error: unknown): void => {
+        report(error);
+        say(MESSAGES.linkNotOpened, 'warning');
+      };
+      try {
+        deps.openExternal(href).catch(failed);
+      } catch (error) {
+        failed(error);
+      }
     },
     exit: () => {
       deps.onExit();
