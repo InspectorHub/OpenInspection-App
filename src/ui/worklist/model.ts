@@ -1,0 +1,296 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { BoundUserActions, OfflineStack, ReconcilerHandle } from '../../app/offline-stack';
+import type { MediaStore } from '../../media/store';
+import type { Db } from '../../platform/db';
+import { loadTenantName } from '../../offline/lock-state';
+import { accountKey, listOutbox, outboxCountsByInspection, sameAccount, type Account } from '../../offline/outbox';
+import { readPackageRows, readPackageStates, type RefreshErrorCode } from '../../offline/package-targets';
+import { namesMassSuspicious } from '../../offline/purge';
+import { planIsStale, type ReconcilePlan } from '../../offline/reconcile-decision';
+import type { ReconcileOutcome } from '../../offline/reconciler';
+import { isLocalId } from '../../offline/registry';
+import type { UnattributableRow } from '../../offline/user-actions';
+import { OUTBOX_ERROR_CODES, type OutboxErrorCode } from '../../platform/schema';
+import { groupOf, type GroupKey } from './format';
+
+/** What the work list reads from the stack. A pick, so a test can stand in for any part. */
+export type WorkListStack = Pick<OfflineStack, 'db' | 'account' | 'status' | 'replayer' | 'refresher' | 'reconciler' | 'uploader' | 'userActions' | 'store' | 'lastPlan'>;
+
+/** What a read of the list needs. A narrow shape, so a development tool can read the same list without a whole stack. */
+export interface SnapshotSource {
+  db: Db;
+  account: Account;
+  store: Pick<MediaStore, 'listRows'>;
+  userActions: Pick<BoundUserActions, 'listUnattributableOutbox'>;
+  reconciler: Pick<ReconcilerHandle, 'last'>;
+  lastPlan(): ReconcilePlan | null;
+}
+
+export const TITLE_MAX = 120;
+
+export type Blocked = 'none' | 'quarantined' | 'purging';
+
+export interface WorkListRow {
+  id: string;
+  /** The cached address, at most `TITLE_MAX` characters, or null when none is cached. */
+  title: string | null;
+  group: GroupKey;
+  scheduledAt: number | null;
+  pinned: boolean;
+  /** Only a confirmed, healthy package of this account can be pinned. */
+  canPin: boolean;
+  downloaded: boolean;
+  lastError: RefreshErrorCode | null;
+  /** Made on this device and not yet acknowledged by the server. */
+  createdLocally: boolean;
+  blocked: Blocked;
+  /** Queued writes plus photos and clips not yet uploaded. */
+  waiting: number;
+  /** Failed queued writes plus stuck photos and clips. */
+  needAttention: number;
+  /** Queued writes of an inspection that left the list; never counted as waiting. */
+  orphaned: number;
+  /** A person may remove it from the device: it is quarantined, or the latest suspicious answer names it. */
+  removable: boolean;
+  /** The removal rests on the latest suspicious answer rather than on a quarantine. */
+  namedByPlan: boolean;
+}
+
+export interface FailedOutboxItem {
+  key: string;
+  op: string;
+  inspectionId: string | null;
+  error: OutboxErrorCode | null;
+  bytes: number;
+}
+
+export interface FailedMediaItem {
+  pendingId: string;
+  inspectionId: string;
+  kind: string;
+}
+
+export interface RepairItem extends Omit<UnattributableRow, 'lastError'> {
+  lastError: OutboxErrorCode | null;
+}
+
+export interface WorkListSnapshot {
+  rows: WorkListRow[];
+  /** The newest time any package was downloaded, or null. */
+  updatedAt: number | null;
+  failedOutbox: FailedOutboxItem[];
+  failedMedia: FailedMediaItem[];
+  repair: { rows: RepairItem[]; foreign: number };
+  /** The company name for the responsibility wording, or null. */
+  company: string | null;
+  reconcile: ReconcileOutcome;
+}
+
+export type TitleMemo = Map<string, { fetchedAt: number; title: string | null }>;
+
+function isOutboxErrorCode(value: unknown): value is OutboxErrorCode {
+  return typeof value === 'string' && (OUTBOX_ERROR_CODES as readonly string[]).includes(value);
+}
+
+function truncate(text: string): string {
+  const letters = Array.from(text);
+  return letters.length > TITLE_MAX ? `${letters.slice(0, TITLE_MAX - 1).join('')}…` : text;
+}
+
+/** The address out of a cached `/api/inspections/{id}` body, or null for anything that is not the expected shape. */
+function addressOf(body: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed !== 'object' || parsed === null || !('data' in parsed)) return null;
+    const data = parsed.data;
+    if (typeof data !== 'object' || data === null || !('inspection' in data)) return null;
+    const inspection = data.inspection;
+    if (typeof inspection !== 'object' || inspection === null || !('propertyAddress' in inspection)) return null;
+    const address = inspection.propertyAddress;
+    if (typeof address !== 'string' || address.trim().length === 0) return null;
+    return truncate(address.trim());
+  } catch {
+    return null;
+  }
+}
+
+/** Titles of the cached inspection rows. A body is parsed again only when its fetch time changed. */
+async function readTitles(stack: SnapshotSource, memo: TitleMemo): Promise<Map<string, string | null>> {
+  const key = accountKey(stack.account);
+  const stamps = await stack.db.query<{ package_id: string; fetched_at: number }>("SELECT package_id, fetched_at FROM resource_cache WHERE account_key = ? AND key = '/api/inspections/' || package_id", [key]);
+  const titles = new Map<string, string | null>();
+  for (const stamp of stamps) {
+    const known = memo.get(stamp.package_id);
+    if (known !== undefined && known.fetchedAt === stamp.fetched_at) {
+      titles.set(stamp.package_id, known.title);
+      continue;
+    }
+    const bodies = await stack.db.query<{ body: string }>('SELECT body FROM resource_cache WHERE account_key = ? AND key = ?', [key, `/api/inspections/${stamp.package_id}`]);
+    const title = bodies[0] === undefined ? null : addressOf(bodies[0].body);
+    memo.set(stamp.package_id, { fetchedAt: stamp.fetched_at, title });
+    titles.set(stamp.package_id, title);
+  }
+  return titles;
+}
+
+interface MediaCounts {
+  waiting: number;
+  failed: number;
+}
+
+async function readMediaCounts(stack: SnapshotSource): Promise<Map<string, MediaCounts>> {
+  const rows = await stack.db.query<{ inspection_id: string; state: string; n: number }>('SELECT inspection_id, state, COUNT(*) AS n FROM media GROUP BY inspection_id, state');
+  const out = new Map<string, MediaCounts>();
+  for (const row of rows) {
+    const counts = out.get(row.inspection_id) ?? { waiting: 0, failed: 0 };
+    if (row.state === 'pending' || row.state === 'uploading') counts.waiting += Number(row.n);
+    else if (row.state === 'failed') counts.failed += Number(row.n);
+    out.set(row.inspection_id, counts);
+  }
+  return out;
+}
+
+function byTime(a: WorkListRow, b: WorkListRow): number {
+  return (a.scheduledAt ?? Number.MAX_SAFE_INTEGER) - (b.scheduledAt ?? Number.MAX_SAFE_INTEGER) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+/**
+ * Everything the screen shows, read from the database (and the stack's own latest outcome) at one moment. Nothing is
+ * remembered between calls except the parsed titles, which are keyed by the time the cached row was fetched.
+ */
+export async function readWorkListSnapshot(stack: SnapshotSource, now: number, memo: TitleMemo = new Map()): Promise<WorkListSnapshot> {
+  const { db, account } = stack;
+  const states = new Map((await readPackageStates(db, account)).map((s) => [s.inspectionId, s]));
+  const packages = await readPackageRows(db);
+  const titles = await readTitles(stack, memo);
+  const outbox = await outboxCountsByInspection(db, { account });
+  const media = await readMediaCounts(stack);
+  const plan: ReconcilePlan | null = stack.lastPlan();
+  const planFresh = plan !== null && !planIsStale(plan, now);
+
+  const rows: WorkListRow[] = [];
+  for (const pkg of packages.values()) {
+    if (!sameAccount(account, pkg.tenant_id, pkg.user_id)) continue;
+    const state = states.get(pkg.inspection_id);
+    const counts = outbox[pkg.inspection_id];
+    const photos = media.get(pkg.inspection_id);
+    const blocked: Blocked = Number(pkg.purging) !== 0 ? 'purging' : pkg.quarantine_source !== null ? 'quarantined' : 'none';
+    const confirmed = Number(pkg.server_confirmed) === 1;
+    const scheduledAt = pkg.scheduled_at === null ? null : Number(pkg.scheduled_at);
+    const namedByPlan = blocked === 'none' && plan !== null && planFresh && namesMassSuspicious(plan, pkg.inspection_id, account);
+    rows.push({
+      id: pkg.inspection_id,
+      title: titles.get(pkg.inspection_id) ?? null,
+      group: groupOf(scheduledAt, now),
+      scheduledAt,
+      pinned: Number(pkg.pinned) === 1,
+      canPin: confirmed && blocked === 'none',
+      downloaded: (state?.cachedResources ?? 0) > 0,
+      lastError: state?.lastError ?? null,
+      createdLocally: !confirmed,
+      blocked,
+      waiting: (counts?.pending ?? 0) + (photos?.waiting ?? 0),
+      needAttention: (counts?.failed ?? 0) + (photos?.failed ?? 0),
+      orphaned: counts?.orphaned ?? 0,
+      removable: blocked === 'quarantined' || namedByPlan,
+      namedByPlan,
+    });
+  }
+  rows.sort(byTime);
+
+  const repairList = await stack.userActions.listUnattributableOutbox();
+  const repairKeys = new Set(repairList.rows.map((r) => r.idempotencyKey));
+  const failedOutbox: FailedOutboxItem[] = [];
+  const encoder = new TextEncoder();
+  for (const row of await listOutbox(db, { account, states: ['failed'] })) {
+    if (repairKeys.has(row.idempotencyKey)) continue;
+    failedOutbox.push({ key: row.idempotencyKey, op: row.op, inspectionId: isLocalId(row.inspectionId) ? row.inspectionId : null, error: isOutboxErrorCode(row.lastError) ? row.lastError : null, bytes: encoder.encode(row.payload).byteLength });
+  }
+  const failedMedia = (await stack.store.listRows({ states: ['failed'] })).map((m) => ({ pendingId: m.pendingId, inspectionId: m.inspectionId, kind: m.kind }));
+
+  let updatedAt: number | null = null;
+  for (const state of states.values()) if (state.lastRefreshedAt !== null && (updatedAt === null || state.lastRefreshedAt > updatedAt)) updatedAt = state.lastRefreshedAt;
+
+  return {
+    rows,
+    updatedAt,
+    failedOutbox,
+    failedMedia,
+    repair: { rows: repairList.rows.map((r) => ({ ...r, lastError: isOutboxErrorCode(r.lastError) ? r.lastError : null })), foreign: repairList.foreign },
+    company: await loadTenantName(db),
+    reconcile: stack.reconciler.last,
+  };
+}
+
+export type ModelState = { phase: 'loading'; snapshot: null } | { phase: 'error'; snapshot: null } | { phase: 'ready'; snapshot: WorkListSnapshot };
+
+export interface WorkListModel {
+  state: ModelState;
+  /** Reads again. The newest read wins; an older one that finishes later is dropped. */
+  reload(): Promise<void>;
+  /** Forgets an error or the data and reads from scratch, showing the loading state. */
+  retry(): Promise<void>;
+}
+
+export interface ModelOptions {
+  now(): number;
+  /** The interval of the refresh while the page is visible, in ms. 0 turns the interval off; events still refresh. */
+  pollMs: number;
+}
+
+/**
+ * Reads the work list from the stack and keeps it current. It reads on mount; when the stack's status changes; when the
+ * page comes back to the front; after anything the screen itself does (through `reload`); and, because the reconciler,
+ * the replayer and the uploader publish no change signal, on a bounded interval while the page is visible (a hidden page
+ * reads nothing). A read that fails after data was shown keeps the data on screen.
+ */
+export function useWorkListModel(stack: WorkListStack, options: ModelOptions): WorkListModel {
+  const [state, setState] = useState<ModelState>({ phase: 'loading', snapshot: null });
+  const newest = useRef(0);
+  const alive = useRef(true);
+  const memo = useRef<TitleMemo>(new Map());
+  const clock = useRef(options.now);
+  clock.current = options.now;
+
+  const reload = useCallback(async (): Promise<void> => {
+    newest.current += 1;
+    const mine = newest.current;
+    try {
+      const snapshot = await readWorkListSnapshot(stack, clock.current(), memo.current);
+      if (alive.current && mine === newest.current) setState({ phase: 'ready', snapshot });
+    } catch {
+      if (alive.current && mine === newest.current) setState((current) => (current.snapshot === null ? { phase: 'error', snapshot: null } : current));
+    }
+  }, [stack]);
+
+  const retry = useCallback(async (): Promise<void> => {
+    setState({ phase: 'loading', snapshot: null });
+    await reload();
+  }, [reload]);
+
+  useEffect(() => {
+    alive.current = true;
+    void reload();
+    const off = stack.status.subscribe(() => {
+      void reload();
+    });
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void reload();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const timer =
+      options.pollMs > 0
+        ? setInterval(() => {
+            if (document.visibilityState === 'visible') void reload();
+          }, options.pollMs)
+        : null;
+    return () => {
+      alive.current = false;
+      off();
+      document.removeEventListener('visibilitychange', onVisible);
+      if (timer !== null) clearInterval(timer);
+    };
+  }, [stack, reload, options.pollMs]);
+
+  return { state, reload, retry };
+}

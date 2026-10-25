@@ -62,6 +62,14 @@ describe('check-release-bundle', () => {
     expect(result.stderr).toContain(name);
   });
 
+  it.each(['Seed demo data', 'Remove demo data', 'diag-quarantined'])('fails on a bundle that carries the demo-data seed (%s), even in a lazy chunk', (needle) => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Continue")', 'assets/seed-def.js': `y("${needle}")` });
+    const result = check(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('seed-def.js');
+    expect(result.stderr).toContain(needle);
+  });
+
   it('control: names that merely resemble the test-support ones pass', () => {
     const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'issuePlan(); purgeAuthority(); isBlocked(); neverBlock()' });
     expect(check(dir).status).toBe(0);

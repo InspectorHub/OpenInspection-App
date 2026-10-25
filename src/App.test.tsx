@@ -22,7 +22,7 @@ describe('App first screen', () => {
     const world = await createSignedInWorld();
     const { services, calls } = restartOffline(world);
     render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} />);
-    expect(await screen.findByRole('heading', { name: 'Work list coming in a later task' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeInTheDocument();
     expect(screen.getByTestId('identity-role')).toHaveTextContent('Inspector');
     expect(screen.queryByTestId('identity-tenant')).toBeNull();
     expect(screen.queryByRole('heading', { name: /^Sign in/ })).toBeNull();
@@ -100,7 +100,7 @@ describe('App whole journey', () => {
       await held?.approve();
     });
 
-    expect(await screen.findByRole('heading', { name: 'Work list coming in a later task' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Work list' })).toBeInTheDocument();
     expect(screen.getByTestId('identity-role')).toHaveTextContent('Inspector');
     expect(world.store.entries()[refreshTokenKey(world.server.origin)]).toBeTruthy();
 

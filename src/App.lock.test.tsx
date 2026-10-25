@@ -14,7 +14,7 @@ configure({ asyncUtilTimeout: 5000 });
 
 afterEach(cleanup);
 
-const WORK_HEADING = 'Work list coming in a later task';
+const WORK_HEADING = 'Work list';
 const START = 9_000_000;
 const DATA_TABLES = ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package'];
 

@@ -1,11 +1,13 @@
 import { useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
+import { useOfflineStack } from '../app/stack-context';
 import type { StoredIdentity } from '../auth/server-config';
 import { ConfirmDialog } from './ConfirmDialog';
 import { DevDiagnostics } from './dev-diagnostics';
 import { Body, Button, Heading, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor } from './messages';
+import { WorkList } from './WorkList';
 
 export interface SignedInProps {
   services: AppServices;
@@ -27,13 +29,14 @@ export function roleLabel(role: string): string {
   return Object.hasOwn(ROLE_LABELS, role) ? (ROLE_LABELS[role] ?? UNKNOWN_ROLE_LABEL) : UNKNOWN_ROLE_LABEL;
 }
 
-/** Placeholder home until the work list exists; it already carries the sign-out contract. */
+/** The home of a signed-in device: the work list (where there is an offline stack), the account, and the sign-out contract. */
 export function SignedIn({ services, origin, identity, onSignedOut }: SignedInProps) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const latch = useActionLatch();
+  const stack = useOfflineStack();
 
   async function signOut(): Promise<void> {
     setError(null);
@@ -54,8 +57,8 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
   }
 
   return (
-    <Screen>
-      <Heading>Work list coming in a later task</Heading>
+    <Screen wide={stack !== null}>
+      {stack === null ? <Heading>Work list</Heading> : <WorkList stack={stack} />}
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>
         <dd data-testid="identity-role" className="text-ih-fg-1">

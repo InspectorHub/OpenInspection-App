@@ -4,10 +4,10 @@ import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
  * The page frame: full height, safe-area padding, a plain column on a phone and a single
  * card centred on a tablet. Colours come only from the field-ui theme tokens.
  */
-export function Screen({ children }: { children: ReactNode }) {
+export function Screen({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
   return (
     <div className="safe-pad flex min-h-dvh flex-col items-center justify-start md:justify-center">
-      <main className="flex w-full max-w-md flex-col gap-6 md:rounded-ih-modal md:border md:border-ih-border md:bg-ih-bg-card md:p-8 md:shadow-ih-popover">
+      <main className={`flex w-full max-w-md flex-col gap-6 ${wide ? 'md:max-w-2xl' : ''} md:rounded-ih-modal md:border md:border-ih-border md:bg-ih-bg-card md:p-8 md:shadow-ih-popover`}>
         <p className="font-ih-display text-lg font-bold tracking-tight text-ih-primary-text">InspectorHub</p>
         {children}
       </main>
@@ -40,7 +40,7 @@ export function Notice({ tone, children }: { tone: Tone; children: ReactNode }) 
   );
 }
 
-type Variant = 'primary' | 'secondary' | 'quiet';
+type Variant = 'primary' | 'secondary' | 'quiet' | 'danger';
 
 const BUTTON_BASE = 'min-h-11 w-full rounded-ih-button px-4 text-base font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus';
 
@@ -53,6 +53,8 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   primary: 'bg-ih-primary text-ih-primary-fg',
   secondary: 'border border-ih-border-strong bg-ih-bg-card text-ih-fg-1 hover:bg-ih-bg-muted',
   quiet: 'text-ih-primary-text hover:bg-ih-bg-muted',
+  /** For an action that cannot be undone. The text token flips with the scheme, like the primary button's. */
+  danger: 'bg-ih-bad text-ih-fg-inverse',
 };
 
 export function Button({
