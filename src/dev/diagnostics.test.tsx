@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { appTimings } from '../app/timings';
 import { CHECKS } from './checks';
 import { INSPECTION_ID_STORAGE_KEY, Diagnostics } from './diagnostics';
 import { resetLog } from './log';
@@ -124,3 +125,18 @@ describe('Diagnostics screen', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+describe('Diagnostics screen: timings', () => {
+  it('shows the first and the latest duration of each measured step, so the next device pass can read real numbers', async () => {
+    const ring = appTimings;
+    ring.record('launch_wait_ms', 2750);
+    ring.record('snapshot_ms', 640);
+    ring.record('snapshot_ms', 41);
+    const rig = await createDiagRig({ signedIn: false });
+    render(<Diagnostics services={rig.services} origin={null} deps={rig.deps} onClose={vi.fn()} />);
+    const section = screen.getByTestId('timings');
+    expect(section).toHaveTextContent('launch_wait_ms first 2750 ms');
+    expect(section).toHaveTextContent(/snapshot_ms first \d+ ms, latest .*41 ms/);
+  });
+});
+

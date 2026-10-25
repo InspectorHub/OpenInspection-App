@@ -88,7 +88,7 @@ describe('a throwing port never becomes an unhandled rejection, and its text is 
     vi.spyOn(w.stack.userActions, 'discardMedia').mockImplementation(boom);
     renderList(w.stack);
     const user = userEvent.setup();
-    await user.click(within(await screen.findByRole('region', { name: 'Needs attention' })).getByRole('button', { name: 'Discard photo' }));
+    await user.click(within(await screen.findByRole('region', { name: 'Needs attention' })).getByRole('button', { name: /^Discard photo, / }));
     await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard photo' }));
     expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent('Could not discard this change. Try again.');
     await expectContained();
@@ -176,7 +176,7 @@ describe('a throwing port never becomes an unhandled rejection, and its text is 
     const stack: OfflineStack = { ...w.stack, userActions: { ...w.stack.userActions, removeFromDevice: vi.fn(boom) } };
     renderList(stack);
     const user = userEvent.setup();
-    await user.click(within(await screen.findByTestId('row-q1')).getByRole('button', { name: 'Remove from this device' }));
+    await user.click(within(await screen.findByTestId('row-q1')).getByRole('button', { name: /^Remove .+ from this device$/ }));
     const dialog = await screen.findByRole('alertdialog');
     await within(dialog).findByText(/Edits on this device/);
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this device' }));

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
+import { appTimings } from '../app/timings';
 import { Body, Button, Heading, INPUT_CLASSES, Screen } from '../ui/kit';
 import { useActionLatch } from '../ui/latch';
 import { CHECKS, EXTRAS, stopKillSession } from './checks';
@@ -152,6 +153,18 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
           <pre data-testid="summary" className="overflow-x-auto font-ih-mono text-xs whitespace-pre-wrap text-ih-fg-2">
             {summary}
           </pre>
+        </section>
+        <section data-testid="timings" className="flex flex-col gap-2">
+          <h2 className="text-base font-semibold text-ih-fg-1">Timings</h2>
+          {appTimings.summary().length === 0 ? (
+            <p className="font-ih-mono text-xs text-ih-fg-3">Nothing measured yet.</p>
+          ) : (
+            appTimings.summary().map((entry) => (
+              <p key={entry.code} className="font-ih-mono text-xs break-words text-ih-fg-2">
+                {`${entry.code} first ${String(entry.first)} ms, latest ${entry.last.map((ms) => `${String(ms)} ms`).join(', ')}`}
+              </p>
+            ))
+          )}
         </section>
         <Button variant="quiet" onClick={onClose}>
           Close diagnostics

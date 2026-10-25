@@ -3,8 +3,9 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markOrphaned } from '../offline/outbox';
 import { renderList, withStatus } from './test-support/worklist-render';
-import { at, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, seedTenantName, type ListWorld } from './test-support/worklist-world';
+import { ALICE, at, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, seedTenantName, type ListWorld } from './test-support/worklist-world';
 
 let w: ListWorld;
 
@@ -104,7 +105,24 @@ describe('WorkList: grouping and row content', () => {
     const row = await rowOf('a');
     expect(within(row).getByText('Waiting to upload: 2')).toBeInTheDocument();
     expect(within(row).getByText('2 need attention')).toBeInTheDocument();
-    expect(within(row).getByText('2 items belong to an inspection that is no longer on your list')).toBeInTheDocument();
+    expect(within(row).getByText('2 queued changes are on hold because this inspection is no longer on your list')).toBeInTheDocument();
+  });
+
+  it('after the reconcile quarantines it, the same row says what became of each kind of item, and the numbers add up', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    await seedCached(w.db, 'a', '7 Mill Lane');
+    await seedQueued(w.db, { key: 'k1', seq: 1, inspectionId: 'a' });
+    await seedMedia(w.db, 'm1', 'a', 'pending');
+    renderList(w.stack);
+    expect(within(await rowOf('a')).getByText('Waiting to upload: 2')).toBeInTheDocument();
+    cleanup();
+    await markOrphaned(w.db, 'a', ALICE);
+    await w.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = 'a'");
+    renderList(w.stack);
+    const row = await rowOf('a');
+    expect(within(row).getByText('1 queued change is on hold because this inspection is no longer on your list')).toBeInTheDocument();
+    expect(within(row).getByText('1 photo or clip is not being uploaded because this inspection is no longer on your list')).toBeInTheDocument();
+    expect(within(row).queryByText(/Waiting to upload/)).toBeNull();
   });
 
   it('a row with nothing waiting shows no waiting badge', async () => {
@@ -144,14 +162,14 @@ describe('WorkList: pin', () => {
     await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
     renderList(w.stack);
     const user = userEvent.setup();
-    const pin = within(await rowOf('a')).getByRole('button', { name: /^Pin/ });
-    expect(pin).toHaveAttribute('aria-pressed', 'false');
+    const pin = within(await rowOf('a')).getByRole('button', { name: /^Pin / });
+    expect(pin).not.toHaveAttribute('aria-pressed');
     await user.click(pin);
-    await waitFor(() => expect(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Pin/ })).toHaveAttribute('aria-pressed', 'true'));
+    await waitFor(() => expect(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Unpin / })).toBeInTheDocument());
     expect((await w.db.query<{ pinned: number }>('SELECT pinned FROM work_package WHERE inspection_id = ?', ['a']))[0]?.pinned).toBe(1);
     expect(within(screen.getByTestId('row-a')).getByText('Pinned', { selector: 'span' })).toBeInTheDocument();
-    await user.click(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Pin/ }));
-    await waitFor(() => expect(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Pin/ })).toHaveAttribute('aria-pressed', 'false'));
+    await user.click(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Unpin / }));
+    await waitFor(() => expect(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Pin / })).toBeInTheDocument());
     expect((await w.db.query<{ pinned: number }>('SELECT pinned FROM work_package WHERE inspection_id = ?', ['a']))[0]?.pinned).toBe(0);
   });
 
@@ -163,6 +181,20 @@ describe('WorkList: pin', () => {
     for (const id of ['q', 'r', 'c']) expect(within(await rowOf(id)).queryByRole('button', { name: /^Pin/ })).toBeNull();
   });
 
+  it('a pinned row that was quarantined can be unpinned, and a quarantined row that is not pinned still offers no pin', async () => {
+    await seedPkg(w.db, { id: 'q', pinned: 1, quarantine: 'reconcile_missing' });
+    await seedPkg(w.db, { id: 'p', quarantine: 'reconcile_missing' });
+    await seedPkg(w.db, { id: 'r', pinned: 1, purging: 1 });
+    renderList(w.stack);
+    const user = userEvent.setup();
+    expect(within(await rowOf('p')).queryByRole('button', { name: /pin/i })).toBeNull();
+    expect(within(await rowOf('r')).queryByRole('button', { name: /pin/i })).toBeNull();
+    await user.click(within(await rowOf('q')).getByRole('button', { name: /^Unpin / }));
+    await waitFor(() => expect(within(screen.getByTestId('row-q')).queryByRole('button', { name: /pin/i })).toBeNull());
+    expect((await w.db.query<{ pinned: number }>('SELECT pinned FROM work_package WHERE inspection_id = ?', ['q']))[0]?.pinned).toBe(0);
+    expect(screen.queryByText('This inspection cannot be pinned right now.')).toBeNull();
+  });
+
   it('two taps in one frame write once', async () => {
     await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
     renderList(w.stack);
@@ -170,7 +202,7 @@ describe('WorkList: pin', () => {
     const pin = within(await rowOf('a')).getByRole('button', { name: /^Pin/ });
     pin.click();
     pin.click();
-    await waitFor(() => expect(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Pin/ })).toHaveAttribute('aria-pressed', 'true'));
+    await waitFor(() => expect(within(screen.getByTestId('row-a')).getByRole('button', { name: /^Unpin / })).toBeInTheDocument());
     expect(run.mock.calls.filter(([sql]) => /UPDATE work_package SET pinned/.test(sql))).toHaveLength(1);
   });
 
@@ -269,7 +301,7 @@ describe('WorkList: quarantined rows and their wording', () => {
     await quarantined();
     renderList(w.stack);
     const row = await rowOf('q1');
-    expect(within(row).getByRole('button', { name: 'Remove from this device' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /^Remove .+ from this device$/ })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /export/i })).toBeNull();
     expect(row).not.toHaveTextContent('not encrypted');
   });

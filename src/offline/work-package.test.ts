@@ -291,10 +291,11 @@ describe('freshness', () => {
     w.serve('t1');
     await w.run('start');
     w.pkg.requests.length = 0;
-    w.clock.advance(299_999);
+    // Each background run is also past the list debounce, so only the freshness window decides what is downloaded.
+    w.clock.advance(269_999);
     await w.run('start');
     expect(w.pkg.forInspection('t1')).toEqual([]);
-    w.clock.advance(2);
+    w.clock.advance(30_002);
     await w.run('start');
     expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));
     w.pkg.requests.length = 0;
@@ -329,6 +330,7 @@ describe('freshness', () => {
     await w.run('start');
     await w.db.run("INSERT OR REPLACE INTO resource_cache (account_key, key, body, fetched_at, package_id) VALUES (?, '$refresh_error:t1', 'server_error', 1, 't1')", [ALICE_KEY]);
     w.pkg.requests.length = 0;
+    w.clock.advance(31_000);
     await w.run('start');
     expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));
   });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { accountKey } from '../../offline/outbox';
+import { accountKey, markOrphaned } from '../../offline/outbox';
 import { at, ALICE, BOB, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, seedTenantName, type ListWorld } from '../test-support/worklist-world';
 import { readWorkListSnapshot } from './model';
 
@@ -65,6 +65,24 @@ describe('readWorkListSnapshot: rows come from the database', () => {
     expect((await row('q'))?.canPin).toBe(false);
     expect((await row('c'))?.canPin).toBe(false);
     expect((await row('r'))?.canPin).toBe(false);
+  });
+
+  it('a quarantined inspection: every queued write is on hold (orphaned, and a pending one that arrived later alike), and only photos and clips count as waiting', async () => {
+    await seedPkg(w.db, { id: 'q', scheduledAt: at(0) });
+    await seedQueued(w.db, { key: 'k1', seq: 1, inspectionId: 'q' });
+    await seedQueued(w.db, { key: 'k2', seq: 2, inspectionId: 'q' });
+    await seedQueued(w.db, { key: 'k3', seq: 3, inspectionId: 'q' });
+    await w.db.run("UPDATE outbox SET next_at = ? WHERE idempotency_key = 'k3'", [NOW + 60_000]);
+    await seedQueued(w.db, { key: 'k4', seq: 4, inspectionId: 'q', state: 'failed', error: 'rejected' });
+    await seedMedia(w.db, 'm1', 'q', 'pending');
+    expect(await row('q')).toMatchObject({ waiting: 4, needAttention: 1, orphaned: 0 });
+    // What the reconcile does: the pending writes (held ones included) become orphaned, then the package is quarantined.
+    expect(await markOrphaned(w.db, 'q', ALICE)).toBe(3);
+    await w.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = 'q'");
+    expect(await row('q')).toMatchObject({ waiting: 1, needAttention: 1, orphaned: 3 });
+    // A write that is still pending on a quarantined package is on hold too, not waiting to upload.
+    await seedQueued(w.db, { key: 'k5', seq: 5, inspectionId: 'q' });
+    expect(await row('q')).toMatchObject({ waiting: 1, orphaned: 4 });
   });
 
   it('the last refresh error is a fixed code', async () => {

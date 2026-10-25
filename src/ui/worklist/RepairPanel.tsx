@@ -3,6 +3,7 @@ import { Button } from '../kit';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useActionLatch } from '../latch';
 import { DISCARD_THREW, OUTBOX_ERROR_TEXT, OUTBOX_ERROR_UNKNOWN, discardMediaFailureText, discardOutboxFailureText, opLabel, plural } from './copy';
+import { LiveNote } from './LiveNote';
 import type { FailedMediaItem, RepairItem, WorkListStack } from './model';
 
 export interface RepairPanelProps {
@@ -130,9 +131,7 @@ export function RepairPanel({ stack, rows, foreign, orphanMedia, foreignMedia, r
                 Change data
               </label>
               <textarea id={copyId} readOnly rows={4} value={removed.payload} className="w-full rounded-ih-input border border-ih-border-strong bg-ih-bg-app p-2 font-ih-mono text-xs text-ih-fg-1" />
-              <p aria-live="polite" className="min-h-5 text-sm text-ih-fg-3">
-                {copy === 'copied' ? 'Copied.' : copy === 'failed' ? 'Could not copy. Select the text and copy it by hand.' : ''}
-              </p>
+              <LiveNote className="text-sm text-ih-fg-3" text={copy === 'copied' ? 'Copied.' : copy === 'failed' ? 'Could not copy. Select the text and copy it by hand.' : ''} />
               <div className="flex gap-3">
                 {canCopy() && (
                   <Button variant="secondary" onClick={() => void latch(copyPayload)}>

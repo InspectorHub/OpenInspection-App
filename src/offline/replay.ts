@@ -132,9 +132,14 @@ export interface Replayer {
   idle(): Promise<void>;
   /** Puts a failed row back in line (or makes a waiting row due now) and runs. */
   retry(idempotencyKey: string): Promise<boolean>;
-  /** Deletes a queued write. The caller must have shown the confirmation: `confirmed: true` is that promise. */
-  discard(idempotencyKey: string, options: { confirmed: true }): Promise<boolean>;
+  /**
+   * Deletes a queued write. The caller must have shown the confirmation: `confirmed: true` is that promise. Refused while
+   * the device is locked, and while another flow (a replay in flight included) holds the shared lease.
+   */
+  discard(idempotencyKey: string, options: { confirmed: true }): Promise<DiscardResult>;
 }
+
+export type DiscardResult = { kind: 'discarded' } | { kind: 'not_found' } | { kind: 'locked' } | { kind: 'busy' };
 
 type Decision =
   | { kind: 'sent' }
@@ -551,6 +556,19 @@ export function createReplayer(deps: ReplayDeps): Replayer {
       if (changed) trigger();
       return changed;
     },
-    discard: (idempotencyKey, options) => discardRow(deps.db, idempotencyKey, options),
+    discard: async (idempotencyKey, options) => {
+      if (options?.confirmed !== true) throw new Error('discard needs an explicit confirmation');
+      // A person confirming a deletion on a locked device is not the person the lock protects the data from; an answer that
+      // is not exactly `false`, or a throw, counts as locked.
+      try {
+        if ((await deps.isLocked()) !== false) return { kind: 'locked' };
+      } catch {
+        return { kind: 'locked' };
+      }
+      // Under the shared lease, so the delete cannot land between a replay reading a row and sending or completing it.
+      const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, () => discardRow(deps.db, idempotencyKey, options));
+      if (!outcome.acquired) return { kind: 'busy' };
+      return outcome.value ? { kind: 'discarded' } : { kind: 'not_found' };
+    },
   };
 }

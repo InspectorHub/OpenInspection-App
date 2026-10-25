@@ -17,8 +17,9 @@ beforeEach(async () => {
 });
 afterEach(cleanup);
 
-const ROW_REMOVE = { name: 'Remove from this device' };
-const SUSPICIOUS_REMOVE = { name: 'No longer on the server — remove from this device' };
+const ROW_REMOVE = { name: /^Remove .+ from this device$/ };
+const SUSPICIOUS_REMOVE = { name: /^No longer on the server — remove .+ from this device$/ };
+const DIALOG_REMOVE = { name: 'Remove from this device' };
 
 function planNaming(id: string, patch: Partial<ReconcilePlan> = {}): ReconcilePlan {
   return issuePlanForTest({
@@ -51,7 +52,7 @@ async function openDialog(id: string, name = ROW_REMOVE): Promise<HTMLElement> {
   return screen.findByRole('alertdialog');
 }
 
-const confirmButton = (dialog: HTMLElement): HTMLElement => within(dialog).getByRole('button', ROW_REMOVE);
+const confirmButton = (dialog: HTMLElement): HTMLElement => within(dialog).getByRole('button', DIALOG_REMOVE);
 
 describe('Remove dialog: what it shows', () => {
   it('names the action, says it cannot be undone, and moves focus into the dialog', async () => {

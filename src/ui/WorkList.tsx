@@ -2,6 +2,7 @@ import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'r
 import { realTimers, type TimerPort } from '../collab/timers';
 import { setPinned } from '../offline/pins';
 import type { Network } from '../platform/network';
+import { DialogFocusFallback } from './ConfirmDialog';
 import { Button, Notice } from './kit';
 import { useActionLatch } from './latch';
 import { LOAD_FAILED, PIN_REFUSED, REFRESH_THREW_TEXT, refreshSummaryText } from './worklist/copy';
@@ -129,100 +130,102 @@ export function WorkList({ stack, onOpenInspection, onExport, network, now = Dat
   const quarantined = rows.filter((r) => r.blocked === 'quarantined').length;
 
   return (
-    <div className="flex flex-col gap-4">
-      <WorkListHeader
-        updatedAt={snapshot?.updatedAt ?? null}
-        now={now()}
-        locale={language}
-        online={online}
-        downloading={downloading}
-        summary={summary}
-        onDownload={() => void latch(download)}
-        headingRef={headingRef}
-      />
-      <StatusStrip status={status} />
-      {snapshot !== null && (
-        <ReconcileStatus
-          outcome={snapshot.reconcile}
+    <DialogFocusFallback value={headingRef}>
+      <div className="flex flex-col gap-4">
+        <WorkListHeader
+          updatedAt={snapshot?.updatedAt ?? null}
           now={now()}
           locale={language}
-          onCheck={() => stack.reconciler.trigger('manual')}
-          canRun={online !== false && snapshot.reconcile.status !== 'never'}
-          timers={timers}
-          onReview={snapshot.repair.rows.length > 0 ? review : null}
+          online={online}
+          downloading={downloading}
+          summary={summary}
+          onDownload={() => void latch(download)}
+          headingRef={headingRef}
         />
-      )}
-      <QuarantineSummary count={quarantined} />
-      {note !== null && <Notice tone="info">{note}</Notice>}
-
-      {model.state.phase === 'loading' && <Skeleton />}
-      {model.state.phase === 'error' && (
-        <div className="flex flex-col gap-3">
-          <Notice tone="bad">{LOAD_FAILED}</Notice>
-          <Button variant="secondary" onClick={() => void model.retry()}>
-            Try again
-          </Button>
-        </div>
-      )}
-      {snapshot !== null && rows.length === 0 && <p className="text-base leading-relaxed text-ih-fg-2">No inspections downloaded yet. Connect to the internet and tap Download today&apos;s work.</p>}
-      {GROUP_ORDER.map((group) => {
-        const inGroup = rows.filter((r) => r.group === group);
-        if (inGroup.length === 0) return null;
-        return (
-          <Group key={group} group={group} rows={inGroup}>
-            {inGroup.map((row) => (
-              <RowBoundary key={row.id}>
-                <InspectionRow
-                  row={row}
-                  locale={language}
-                  company={snapshot?.company ?? null}
-                  onOpen={(r) => onOpenInspection?.(r.id)}
-                  onTogglePin={(r) => void latch(() => togglePin(r))}
-                  onRemove={(r) => {
-                    trigger.current = document.activeElement;
-                    setRemoving(r);
-                  }}
-                  onExport={onExport}
-                />
-              </RowBoundary>
-            ))}
-          </Group>
-        );
-      })}
-
-      {snapshot !== null && <FailedItemsPanel stack={stack} rows={rows} outbox={snapshot.failedOutbox} media={snapshot.failedMedia} now={now} reload={model.reload} notify={setNote} />}
-      {snapshot !== null && (
-        <RepairPanel
-          stack={stack}
-          rows={snapshot.repair.rows}
-          foreign={snapshot.repair.foreign}
-          orphanMedia={snapshot.repair.orphanMedia}
-          foreignMedia={snapshot.repair.foreignMedia}
-          reload={model.reload}
-          headingRef={repairRef}
-        />
-      )}
-
-      {removing !== null && (
-        <RemoveDialog
-          stack={stack}
-          row={removing}
-          now={now}
-          reload={model.reload}
-          onClose={closeRemove}
-          onUnavailable={(message) => {
-            setRemoving(null);
-            setNote(message);
-            headingRef.current?.focus();
-          }}
-          onRemoved={() => {
-            setRemoving(null);
-            setNote('Removed from this device.');
-            headingRef.current?.focus();
-            void model.reload();
-          }}
-        />
-      )}
-    </div>
+        <StatusStrip status={status} />
+        {snapshot !== null && (
+          <ReconcileStatus
+            outcome={snapshot.reconcile}
+            now={now()}
+            locale={language}
+            onCheck={() => stack.reconciler.trigger('manual')}
+            canRun={online !== false && snapshot.reconcile.status !== 'never'}
+            timers={timers}
+            onReview={snapshot.repair.rows.length > 0 ? review : null}
+          />
+        )}
+        <QuarantineSummary count={quarantined} />
+        {note !== null && <Notice tone="info">{note}</Notice>}
+  
+        {model.state.phase === 'loading' && <Skeleton />}
+        {model.state.phase === 'error' && (
+          <div className="flex flex-col gap-3">
+            <Notice tone="bad">{LOAD_FAILED}</Notice>
+            <Button variant="secondary" onClick={() => void model.retry()}>
+              Try again
+            </Button>
+          </div>
+        )}
+        {snapshot !== null && rows.length === 0 && <p className="text-base leading-relaxed text-ih-fg-2">No inspections downloaded yet. Connect to the internet and tap Download today&apos;s work.</p>}
+        {GROUP_ORDER.map((group) => {
+          const inGroup = rows.filter((r) => r.group === group);
+          if (inGroup.length === 0) return null;
+          return (
+            <Group key={group} group={group} rows={inGroup}>
+              {inGroup.map((row) => (
+                <RowBoundary key={row.id}>
+                  <InspectionRow
+                    row={row}
+                    locale={language}
+                    company={snapshot?.company ?? null}
+                    onOpen={(r) => onOpenInspection?.(r.id)}
+                    onTogglePin={(r) => void latch(() => togglePin(r))}
+                    onRemove={(r) => {
+                      trigger.current = document.activeElement;
+                      setRemoving(r);
+                    }}
+                    onExport={onExport}
+                  />
+                </RowBoundary>
+              ))}
+            </Group>
+          );
+        })}
+  
+        {snapshot !== null && <FailedItemsPanel stack={stack} rows={rows} outbox={snapshot.failedOutbox} media={snapshot.failedMedia} now={now} reload={model.reload} notify={setNote} />}
+        {snapshot !== null && (
+          <RepairPanel
+            stack={stack}
+            rows={snapshot.repair.rows}
+            foreign={snapshot.repair.foreign}
+            orphanMedia={snapshot.repair.orphanMedia}
+            foreignMedia={snapshot.repair.foreignMedia}
+            reload={model.reload}
+            headingRef={repairRef}
+          />
+        )}
+  
+        {removing !== null && (
+          <RemoveDialog
+            stack={stack}
+            row={removing}
+            now={now}
+            reload={model.reload}
+            onClose={closeRemove}
+            onUnavailable={(message) => {
+              setRemoving(null);
+              setNote(message);
+              headingRef.current?.focus();
+            }}
+            onRemoved={() => {
+              setRemoving(null);
+              setNote('Removed from this device.');
+              headingRef.current?.focus();
+              void model.reload();
+            }}
+          />
+        )}
+      </div>
+    </DialogFocusFallback>
   );
 }

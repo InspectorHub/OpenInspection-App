@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Button } from '../kit';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useActionLatch } from '../latch';
-import { DISCARD_CHANGE_GONE, DISCARD_THREW, OUTBOX_ERROR_TEXT, OUTBOX_ERROR_UNKNOWN, RETRY_THREW, bytesLabel, discardMediaFailureText, opConsequence, opLabel } from './copy';
+import { DISCARD_THREW, discardChangeFailureText, OUTBOX_ERROR_TEXT, OUTBOX_ERROR_UNKNOWN, RETRY_THREW, bytesLabel, discardMediaFailureText, opConsequence, opLabel } from './copy';
 import { shortTitle } from './format';
 import type { FailedMediaItem, FailedOutboxItem, WorkListRow, WorkListStack } from './model';
 import { DISCARD_AND_REMOVE_LABEL, RemoveDialog } from './RemoveDialog';
@@ -68,8 +68,8 @@ export function FailedItemsPanel({ stack, rows, outbox, media, now, reload, noti
     try {
       if (target.kind === 'outbox') {
         const done = await stack.replayer.discard(target.item.key, { confirmed: true });
-        if (!done) {
-          setError(DISCARD_CHANGE_GONE);
+        if (done.kind !== 'discarded') {
+          setError(discardChangeFailureText(done));
           return;
         }
       } else {
@@ -162,7 +162,7 @@ export function FailedItemsPanel({ stack, rows, outbox, media, now, reload, noti
                     Retry
                   </Button>
                   {quarantinedMedia(item) && (
-                    <Button variant="secondary" onClick={() => setTarget({ kind: 'media', item })}>
+                    <Button variant="secondary" aria-label={`${isClip(item) ? 'Discard clip' : 'Discard photo'}, ${titleOf(rows, item.inspectionId)}`} onClick={() => setTarget({ kind: 'media', item })}>
                       {isClip(item) ? 'Discard clip' : 'Discard photo'}
                     </Button>
                   )}

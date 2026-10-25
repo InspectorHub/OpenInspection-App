@@ -14,6 +14,7 @@ import {
   addListRows,
   isRefreshable,
   newParsedList,
+  notVisibleMarkers,
   orderTargets,
   packagesWithError,
   readPackageRow,
@@ -87,6 +88,8 @@ export interface RefreshSummary {
   refreshed: number;
   /** Not downloaded: fresh enough, owned by someone else, or replaced or purged by another flow while this one fetched. */
   skipped: number;
+  /** Inspections the server answered 403 or 404 for on the inspection itself: skipped quietly, not counted as failures. */
+  notVisible: number;
   /** Inspections whose download failed and whose previous cache was kept. Counts only; the codes are in `readPackageStates`. */
   failed: number;
   /** List rows whose id could not safely be put in a path. */
@@ -116,6 +119,8 @@ export interface RefreshLimits {
   cacheCapBytes: number;
   /** An inspection refreshed more recently than this is not downloaded again unless a person asked. */
   freshnessMs: number;
+  /** A background run (any reason but `manual`) within this long after a completed list cycle does nothing: the list was just read. */
+  listDebounceMs: number;
   listPageSize: number;
   maxListPages: number;
   maxDepth: number;
@@ -132,6 +137,7 @@ export const DEFAULT_REFRESH_LIMITS: RefreshLimits = {
   inspectionBytes: 8 * 1024 * 1024,
   cacheCapBytes: 200 * 1024 * 1024,
   freshnessMs: 300_000,
+  listDebounceMs: 30_000,
   listPageSize: 100,
   maxListPages: 10,
   ...DEFAULT_JSON_LIMITS,
@@ -196,6 +202,7 @@ export interface WorkPackageRefresher {
 type Fetched =
   | { kind: 'ok'; text: string; json: unknown; etag: string | null }
   | { kind: 'missing' }
+  | { kind: 'forbidden' }
   | { kind: 'fail'; code: RefreshErrorCode }
   | { kind: 'cancelled' }
   | { kind: 'halt' };
@@ -211,13 +218,15 @@ interface Run {
   consecutive: number;
   halted: RefreshHalt | null;
   cooling: Promise<void> | null;
+  /** Inspections this run already found not visible: never asked about again in the same run. */
+  hidden: Set<string>;
   /** Set when the account is over its cache cap and eviction could not get it under: replacements may not grow the cache. */
   replaceOnly: boolean;
   /** Growth already granted to replacements of this run while in `replaceOnly` mode. */
   granted: number;
 }
 
-const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false });
+const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, notVisible: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false });
 
 const utf8Length = (text: string): number => new TextEncoder().encode(text).byteLength;
 
@@ -242,6 +251,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
   let queued: RefreshReason | null = null;
   let runningReason: RefreshReason | null = null;
   let busyStreak = 0;
+  /** When the list queries of a run last all completed, and for whom. */
+  let lastListed: { key: string; at: number } | null = null;
   let timer: unknown = null;
   const unsubscribe: (() => void)[] = [];
   const sleepers = new Set<() => void>();
@@ -428,6 +439,9 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
         } else if (res.status === 404) {
           run.consecutive = 0;
           return { kind: 'missing' };
+        } else if (res.status === 403) {
+          run.consecutive = 0;
+          return { kind: 'forbidden' };
         } else if (res.status >= 400 && res.status < 500) {
           run.consecutive = 0;
           return { kind: 'fail', code: 'refused' };
@@ -468,6 +482,18 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     }
   }
 
+  /** The server does not show this inspection to this person: a quiet marker, not a failure, and not an error for the halt rule. */
+  async function notVisible(run: Run, id: string): Promise<void> {
+    run.summary.notVisible += 1;
+    run.hidden.add(id);
+    if ((await gate(run, false)) !== null) return;
+    try {
+      await recordRefreshError(deps.db, { accountKey: run.key, inspectionId: id, code: 'not_visible', at: deps.clock.now() });
+    } catch (error) {
+      report(error);
+    }
+  }
+
   function stage(into: Map<string, StagedResource>, path: string, fetched: Extract<Fetched, { kind: 'ok' }>, now: number): void {
     into.set(path, { body: fetched.text, etag: fetched.etag, fetchedAt: now });
   }
@@ -490,7 +516,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
 
   async function refreshOne(run: Run, target: Target): Promise<void> {
     const before = await readPackageRow(deps.db, target.id);
-    if (before === null || !isRefreshable(before, run.account)) {
+    if (before === null || !isRefreshable(before, run.account) || run.hidden.has(target.id)) {
       run.summary.skipped += 1;
       return;
     }
@@ -502,7 +528,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     if (rowPath === undefined) return;
     const row = await getJson(run, rowPath, skip);
     if (row.kind === 'halt' || row.kind === 'cancelled') return;
-    if (row.kind === 'missing') return fail(run, target.id, 'not_found');
+    if (row.kind === 'missing' || row.kind === 'forbidden') return notVisible(run, target.id);
     if (row.kind === 'fail') return fail(run, target.id, row.code);
     const inspection = asRecord(asRecord(asRecord(row.json)?.data)?.inspection);
     if (inspection === null || inspection.id !== target.id) return fail(run, target.id, 'invalid_response');
@@ -521,6 +547,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       if (answer.kind === 'ok') stage(staged, path, answer, now);
       else if (answer.kind === 'missing' && !optional) failure ??= 'not_found';
       else if (answer.kind === 'fail') failure ??= answer.code;
+      else if (answer.kind === 'forbidden') failure ??= 'refused';
     }
     if (failure !== null) return fail(run, target.id, failure);
     let bytes = 0;
@@ -633,6 +660,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     for (const params of queries) {
       if (!(await readList(run, params, list, todayDay))) return;
     }
+    lastListed = { key: run.key, at: deps.clock.now() };
     run.summary.invalidIds = list.invalid.size + list.invalidAnonymous;
     const blocked = await gate(run, false);
     if (blocked !== null) {
@@ -642,6 +670,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     await upsertListed(deps.db, run.account, list.items);
     const rows = await readPackageRows(deps.db);
     const withError = await packagesWithError(deps.db, run.account);
+    const hiddenAt = await notVisibleMarkers(deps.db, run.account);
     const held = run.replaceOnly ? await packagesWithCachedRows(deps.db, run.key) : new Set<string>();
     const targets: Target[] = [];
     const considered = new Set<string>();
@@ -649,6 +678,11 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       considered.add(id);
       const row = rows.get(id);
       if (row === undefined || !isRefreshable(row, run.account)) {
+        run.summary.skipped += 1;
+        return;
+      }
+      const hiddenFor = now - (hiddenAt.get(id) ?? Number.NEGATIVE_INFINITY);
+      if (run.reason !== 'manual' && hiddenFor >= 0 && hiddenFor < limits.freshnessMs) {
         run.summary.skipped += 1;
         return;
       }
@@ -698,7 +732,13 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       summary.halted = 'no_account';
       return summary;
     }
-    const run: Omit<Run, 'lease'> = { account, key: accountKeyOf(account), reason, summary, consecutive: 0, halted: null, cooling: null, replaceOnly: false, granted: 0 };
+    const key = accountKeyOf(account);
+    // Two triggers a moment apart (the network coming back and the app coming to the front) are one cycle: the list was just read.
+    if (reason !== 'manual' && lastListed !== null && lastListed.key === key) {
+      const since = deps.clock.now() - lastListed.at;
+      if (since >= 0 && since < limits.listDebounceMs) return summary;
+    }
+    const run: Omit<Run, 'lease'> = { account, key, reason, summary, consecutive: 0, halted: null, cooling: null, hidden: new Set<string>(), replaceOnly: false, granted: 0 };
     try {
       const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease) => {
         const live: Run = { ...run, lease };

@@ -5,7 +5,7 @@ import { SYNC_LEASE, withLease } from './lease';
 import { sameAccount, type Account } from './outbox';
 import { isIssuedPlan } from './plan-brand';
 import { purgeAuthority } from './purge-authority';
-import { namesMassSuspicious, purgeInspection, TOMBSTONE_AUTO, TOMBSTONE_USER, type PurgeDeps, type PurgeOutcome, type PurgeRefusal } from './purge';
+import { isNeverSent, namesMassSuspicious, purgeInspection, TOMBSTONE_AUTO, TOMBSTONE_USER, type PurgeDeps, type PurgeOutcome, type PurgeRefusal } from './purge';
 import { planIsStale, type ReconcilePlan } from './reconcile-decision';
 import { ALLOWED_GLOBAL_OPS, isLocalId } from './registry';
 
@@ -99,7 +99,7 @@ export async function removeFromDevice(deps: UserActionDeps, inspectionId: strin
     const flag = Number(row.purging);
     // A package the server never acknowledged is the person's own to remove once no create is queued for it; the purge
     // re-checks both facts inside its tombstone transaction. A server-confirmed one still needs the quarantine or the plan.
-    const neverSent = Number(row.server_confirmed) !== 1;
+    const neverSent = isNeverSent(row.server_confirmed);
     if (flag === 0 && row.quarantine_source === null && !neverSent && !massEvidence(options.plan, inspectionId, who, deps.clock.now())) return { kind: 'refused', reason: 'not_quarantined' };
     // A person-confirmed tombstone is finished as it is; an automatic one that got stuck is taken over by this confirmation.
     // The purge asks again between its steps, so a lock that arrives mid-way stops it with the tombstone kept.

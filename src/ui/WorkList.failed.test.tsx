@@ -75,7 +75,7 @@ describe('Needs attention: failed queued changes', () => {
   });
 
   it('Discard asks first, says the change will be permanently removed with its size, and sends nothing until confirmed', async () => {
-    const discard = vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue(true);
+    const discard = vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue({ kind: 'discarded' });
     renderList(w.stack);
     await userEvent.setup().click(within(await panel()).getByRole('button', { name: /^Discard/ }));
     const dialog = await screen.findByRole('alertdialog');
@@ -85,7 +85,7 @@ describe('Needs attention: failed queued changes', () => {
   });
 
   it('Cancel leaves it queued', async () => {
-    const discard = vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue(true);
+    const discard = vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue({ kind: 'discarded' });
     renderList(w.stack);
     const user = userEvent.setup();
     await user.click(within(await panel()).getByRole('button', { name: /^Discard/ }));
@@ -97,7 +97,7 @@ describe('Needs attention: failed queued changes', () => {
   it('confirming discards once with confirmed: true, even for two taps in a frame, and reads the list again', async () => {
     const discard = vi.spyOn(w.stack.replayer, 'discard').mockImplementation(async (key) => {
       await w.db.run('DELETE FROM outbox WHERE idempotency_key = ?', [key]);
-      return true;
+      return { kind: 'discarded' as const };
     });
     renderList(w.stack);
     await userEvent.setup().click(within(await panel()).getByRole('button', { name: /^Discard/ }));
@@ -110,12 +110,24 @@ describe('Needs attention: failed queued changes', () => {
   });
 
   it('a discard that finds nothing says so and stays open', async () => {
-    vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue(false);
+    vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue({ kind: 'not_found' });
     renderList(w.stack);
     await userEvent.setup().click(within(await panel()).getByRole('button', { name: /^Discard/ }));
     const dialog = await screen.findByRole('alertdialog');
     await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Discard change' }));
     expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent('Could not discard this change. It may already be gone.');
+  });
+
+  it.each([
+    ['locked', 'The app is locked. Verify online first.'],
+    ['busy', 'Another sync step is running. Try again in a moment.'],
+  ] as const)('a discard the replayer refuses as %s says so with a fixed line and stays open', async (kind, text) => {
+    vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue({ kind });
+    renderList(w.stack);
+    await userEvent.setup().click(within(await panel()).getByRole('button', { name: /^Discard/ }));
+    const dialog = await screen.findByRole('alertdialog');
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Discard change' }));
+    expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent(text);
   });
 
   it('the panel is absent when nothing failed', async () => {
@@ -148,7 +160,7 @@ describe('Needs attention: stuck photos', () => {
     await seedMedia(w.db, 'm1', 'q', 'failed');
     const discard = vi.spyOn(w.stack.userActions, 'discardMedia').mockResolvedValue({ kind: 'discarded', inspectionId: 'q' });
     renderList(w.stack);
-    await userEvent.setup().click(within(await panel()).getByRole('button', { name: 'Discard photo' }));
+    await userEvent.setup().click(within(await panel()).getByRole('button', { name: /^Discard photo, / }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog).toHaveAccessibleName('Discard this photo?');
     expect(discard).not.toHaveBeenCalled();
@@ -171,7 +183,7 @@ describe('Needs attention: stuck photos', () => {
     await seedMedia(w.db, 'm1', 'q', 'failed');
     vi.spyOn(w.stack.userActions, 'discardMedia').mockResolvedValue(outcome);
     renderList(w.stack);
-    await userEvent.setup().click(within(await panel()).getByRole('button', { name: 'Discard photo' }));
+    await userEvent.setup().click(within(await panel()).getByRole('button', { name: /^Discard photo, / }));
     await userEvent.setup().click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard photo' }));
     expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent(text);
   });

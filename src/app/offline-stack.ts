@@ -33,6 +33,7 @@ import type { Network } from '../platform/network';
 import type { UploaderPluginLike } from '../platform/uploader';
 import { createDiagnosticRing } from './diagnostics';
 import { createStore, type ReadableStore } from './stack-store';
+import type { TimingCode } from './timings';
 
 /** The orphan and temp-file sweeps run at most this often, however many times a stack is built. */
 export const SWEEP_MIN_INTERVAL_MS = 6 * 3_600_000;
@@ -46,6 +47,8 @@ export const SWEEP_TIMEOUT_MS = 10_000;
 export const LAUNCH_LEASE_WAIT_MS = 2_500;
 /** How many times the start sequence waits for the lease before it goes on anyway. */
 export const LAUNCH_LEASE_MAX_WAITS = 5;
+/** With `deferLaunchUntilPainted`: the longest the start sequence waits for the work list's first paint before it goes on anyway. */
+export const LAUNCH_PAINT_CAP_MS = 3_000;
 
 /**
  * The document step of a clip until the editor can place one (Task 9 replaces this). `missing` is what the media
@@ -113,6 +116,14 @@ export interface OfflineStackDeps {
   /** Every status the connector reports, after the stack has taken what it needs from it. */
   onCollabStatus?: (inspectionId: string, status: CollabStatus) => void;
   onDiagnostic?: (code: StackDiagnostic) => void;
+  /** A measured duration, under a fixed code. Never receives anything else. A throw is ignored. */
+  onTiming?: (code: TimingCode, ms: number) => void;
+  /**
+   * Holds the start sequence (the sweeps, the first replay, the reconcile, the refresher) back until the work list has painted
+   * its first snapshot (`markListPainted`) or `LAUNCH_PAINT_CAP_MS` has passed, so the list's own reads do not queue behind them
+   * on the single database connection. Only the moment the sequence begins moves; its order and what it does are unchanged.
+   */
+  deferLaunchUntilPainted?: boolean;
   /** Test knobs for the shared lease and the jitter. */
   tuning?: { random?: () => number; leaseTtlMs?: number; newToken?: () => string };
 }
@@ -155,6 +166,8 @@ export interface OfflineStack {
   recentDiagnostics(): readonly StackDiagnostic[];
   /** The editor's side of the purge and the quarantine: it must unmount the inspection on `purging` and `quarantined`. */
   onEditorEvent(listener: (event: EditorEvent) => void): () => void;
+  /** The work list painted its first snapshot: lets a deferred start sequence begin. Idempotent; harmless after `stop()`. */
+  markListPainted(): void;
   /** Idempotent. Does nothing while the device is locked; the first unlock starts it. */
   start(): void;
   /** Terminal and idempotent. Stops every flow, removes every listener and timer, destroys open connections. */
@@ -216,6 +229,14 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   /** Set right after `reconcile.start()`. Before it no trigger may reach the reconciler: its first flow must follow the first replay. */
   let reconcileStarted = false;
   let mediaStarted = false;
+  let painted = false;
+  let markPainted: () => void = () => undefined;
+  const listPainted = new Promise<void>((resolve) => {
+    markPainted = () => {
+      painted = true;
+      resolve();
+    };
+  });
   let chain: Promise<void> = Promise.resolve();
   let latestPlan: ReconcilePlan | null = null;
   let stopping: Promise<void> | null = null;
@@ -628,9 +649,43 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     await replay.idle();
   }
 
+  /** Waits for the paint, the cap or `stop()`, whichever comes first. The cap timer never outlives the wait. */
+  function untilPaintedOrCap(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let handle: unknown = null;
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        timerPort.clearTimeout(handle);
+        releases.delete(finish);
+        resolve();
+      };
+      try {
+        handle = timerPort.setTimeout(finish, LAUNCH_PAINT_CAP_MS);
+      } catch {
+        // No timer could be set: do not wait at all rather than risk waiting for ever.
+        resolve();
+        return;
+      }
+      releases.add(finish);
+      void listPainted.then(finish);
+    });
+  }
+
   async function launch(): Promise<void> {
     if (launched || stopped) return;
     launched = true;
+    if (deps.deferLaunchUntilPainted === true && !painted) {
+      const waitedFrom = clock.now();
+      await untilPaintedOrCap();
+      if (stopped) return;
+      try {
+        deps.onTiming?.('launch_wait_ms', Math.max(0, clock.now() - waitedFrom));
+      } catch {
+        // A failing reporter must not change what the stack does.
+      }
+    }
     // The sweeps hold nothing up but the uploader, which must not start while the temp sweep looks for copies of finished uploads.
     const mediaUp = runSweeps().then(() => {
       if (stopped) return;
@@ -737,6 +792,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       return () => {
         editorListeners.delete(listener);
       };
+    },
+    markListPainted: () => {
+      markPainted();
     },
     start: () => {
       if (started || stopped) return;

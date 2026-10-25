@@ -32,7 +32,7 @@ export function withOutcome(stack: OfflineStack, patch: Partial<ReconcileOutcome
 }
 
 export function refreshSummary(patch: Partial<RefreshSummary> = {}): RefreshSummary {
-  return { refreshed: 0, skipped: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false, ...patch };
+  return { refreshed: 0, skipped: 0, notVisible: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false, ...patch };
 }
 
 export function renderList(stack: OfflineStack, props: Partial<WorkListProps> = {}) {

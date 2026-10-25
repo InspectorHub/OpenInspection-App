@@ -54,6 +54,6 @@ describe('stripBidi', () => {
   it('removes every direction control and mark, and nothing else', () => {
     const all = '‪‫‬‭‮⁦⁧⁨⁩‎‏';
     expect(stripBidi(`a${all}b`)).toBe('ab');
-    expect(stripBidi('Zażółć 日本 \u{1F600} 12 Elm St.')).toBe('Zażółć 日本 \u{1F600} 12 Elm St.');
+    expect(stripBidi('Zażółć café 😀 12 Elm St.')).toBe('Zażółć café 😀 12 Elm St.');
   });
 });

@@ -1,6 +1,7 @@
 import type { Ref } from 'react';
 import { Button } from '../kit';
 import { updatedLabel } from './format';
+import { LiveNote } from './LiveNote';
 
 export interface WorkListHeaderProps {
   updatedAt: number | null;
@@ -44,9 +45,7 @@ export function WorkListHeader({ updatedAt, now, locale, online, downloading, su
       <Button busy={downloading} onClick={onDownload}>
         Download today&apos;s work
       </Button>
-      <p data-testid="refresh-summary" aria-live="polite" className="min-h-5 text-sm leading-relaxed text-ih-fg-2">
-        {downloading ? 'Downloading…' : (summary ?? '')}
-      </p>
+      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} />
     </header>
   );
 }

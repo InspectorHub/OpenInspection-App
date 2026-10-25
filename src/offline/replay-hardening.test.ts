@@ -331,13 +331,13 @@ describe('M-5: survivors of the mutation run', () => {
     const w = await createReplayWorld();
     seed(w, 'a');
     const row = await w.queue('inspection.complete', COMPLETE('a'));
-    const untyped = w.replayer.discard as (key: string, options?: unknown) => Promise<boolean>;
+    const untyped = w.replayer.discard as (key: string, options?: unknown) => Promise<unknown>;
     await expect(untyped(row.idempotencyKey)).rejects.toThrow();
     await expect(untyped(row.idempotencyKey, {})).rejects.toThrow();
     await expect(untyped(row.idempotencyKey, { confirmed: false })).rejects.toThrow();
     await expect(untyped(row.idempotencyKey, { confirmed: 'true' })).rejects.toThrow();
     expect(await stateOf(w, row.idempotencyKey)).not.toBeNull();
-    expect(await w.replayer.discard(row.idempotencyKey, { confirmed: true })).toBe(true);
+    expect(await w.replayer.discard(row.idempotencyKey, { confirmed: true })).toEqual({ kind: 'discarded' });
     expect(await stateOf(w, row.idempotencyKey)).toBeNull();
   });
 

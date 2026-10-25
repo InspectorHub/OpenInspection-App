@@ -1,4 +1,5 @@
 import type { DiscardMediaOutcome, DiscardOutboxOutcome, RemoveOutcome } from '../../offline/user-actions';
+import type { DiscardResult } from '../../offline/replay';
 import type { RefreshErrorCode, RefreshHalt, RefreshSummary } from '../../offline/work-package';
 import type { OutboxErrorCode } from '../../platform/schema';
 
@@ -10,6 +11,7 @@ import type { OutboxErrorCode } from '../../platform/schema';
 
 export const REFRESH_ERROR_TEXT: Record<RefreshErrorCode, string> = {
   not_found: 'The server did not find this inspection during the last download.',
+  not_visible: 'The server no longer shows this inspection to you.',
   refused: 'The server refused the last download.',
   invalid_response: 'The server sent an answer the app could not use.',
   too_large: 'The last download was too large to keep.',
@@ -177,6 +179,18 @@ export function discardOutboxFailureText(outcome: Exclude<DiscardOutboxOutcome, 
 }
 
 export const DISCARD_CHANGE_GONE = 'Could not discard this change. It may already be gone.';
+
+/** The message for a queued change that was not discarded. `discarded` has none. */
+export function discardChangeFailureText(outcome: Exclude<DiscardResult, { kind: 'discarded' }>): string {
+  switch (outcome.kind) {
+    case 'locked':
+      return LOCKED;
+    case 'busy':
+      return BUSY;
+    case 'not_found':
+      return DISCARD_CHANGE_GONE;
+  }
+}
 export const DISCARD_THREW = 'Could not discard this change. Try again.';
 export const PIN_REFUSED = 'This inspection cannot be pinned right now.';
 export const LOAD_FAILED = 'Could not read the work list from this device.';

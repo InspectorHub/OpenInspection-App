@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfirmDialog } from './ConfirmDialog';
+import { ConfirmDialog, DialogFocusFallback } from './ConfirmDialog';
 
 afterEach(cleanup);
 
@@ -39,5 +41,106 @@ describe('ConfirmDialog extras', () => {
   it('scrolls inside the screen when the content is tall', () => {
     render(<ConfirmDialog {...base} />);
     expect(screen.getByRole('alertdialog').className).toContain('overflow-y-auto');
+  });
+});
+
+/** An opener button, a dialog it opens, and optionally a second button that the dialog's confirm removes from the page. */
+function Harness({ removeOpenerOnConfirm = false, fallback = false }: { removeOpenerOnConfirm?: boolean; fallback?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [openerGone, setOpenerGone] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const page = (
+    <div>
+      <h1 ref={heading} tabIndex={-1}>
+        List heading
+      </h1>
+      {!openerGone && <button onClick={() => setOpen(true)}>Open it</button>}
+      {open && (
+        <ConfirmDialog
+          {...base}
+          onConfirm={() => {
+            setOpen(false);
+            if (removeOpenerOnConfirm) setOpenerGone(true);
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+  return fallback ? <DialogFocusFallback value={heading}>{page}</DialogFocusFallback> : page;
+}
+
+describe('ConfirmDialog returns focus to the button that opened it', () => {
+  it('Escape', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open it' })).toHaveFocus();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open it' }));
+  });
+
+  it('Cancel', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open it' }));
+  });
+
+  it('a confirm that closes it', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    await user.click(screen.getByRole('button', { name: 'Go' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open it' }));
+  });
+
+  it('when the opener is gone afterwards, focus goes to the fallback heading', async () => {
+    const user = userEvent.setup();
+    render(<Harness removeOpenerOnConfirm fallback />);
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    await user.click(screen.getByRole('button', { name: 'Go' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open it' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'List heading' }));
+  });
+
+  it('when the opener is gone and there is no fallback, nothing throws and focus is not left on a removed element', async () => {
+    const user = userEvent.setup();
+    render(<Harness removeOpenerOnConfirm />);
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    await user.click(screen.getByRole('button', { name: 'Go' }));
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('does not steal focus the page moved on purpose before the dialog went away', async () => {
+    const user = userEvent.setup();
+    function Moves() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button onClick={() => setOpen(true)}>Open it</button>
+          <input aria-label="elsewhere" />
+          {open && (
+            <ConfirmDialog
+              {...base}
+              onConfirm={() => {
+                screen.getByLabelText('elsewhere').focus();
+                setOpen(false);
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+    render(<Moves />);
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    await user.click(screen.getByRole('button', { name: 'Go' }));
+    expect(document.activeElement).toBe(screen.getByLabelText('elsewhere'));
   });
 });

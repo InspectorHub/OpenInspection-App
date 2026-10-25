@@ -52,11 +52,10 @@ export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRem
           </h3>
           {when !== null && <p className="text-sm text-ih-fg-3">{when}</p>}
         </div>
-        {row.canPin && (
+        {(row.canPin || row.canUnpin) && (
           <button
             type="button"
-            aria-label={`Pin ${title}`}
-            aria-pressed={row.pinned}
+            aria-label={`${row.pinned ? 'Unpin' : 'Pin'} ${title}`}
             onClick={() => onTogglePin(row)}
             className={`relative z-10 min-h-11 min-w-11 rounded-ih-button border px-3 text-sm font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus ${row.pinned ? 'border-ih-primary bg-ih-primary-tint text-ih-primary-text' : 'border-ih-border-strong bg-ih-bg-card text-ih-fg-2'}`}
           >
@@ -77,7 +76,10 @@ export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRem
       </div>
 
       {row.orphaned > 0 && (
-        <p className="text-sm text-ih-fg-2">{`${plural(row.orphaned, 'item belongs', 'items belong')} to an inspection that is no longer on your list`}</p>
+        <p className="text-sm text-ih-fg-2">{`${plural(row.orphaned, 'queued change is', 'queued changes are')} on hold because this inspection is no longer on your list`}</p>
+      )}
+      {quarantined && row.waiting > 0 && (
+        <p className="text-sm text-ih-fg-2">{`${plural(row.waiting, 'photo or clip is', 'photos and clips are')} not being uploaded because this inspection is no longer on your list`}</p>
       )}
       {quarantined && <RowQuarantineBanner />}
       {row.blocked === 'purging' && <p className="text-sm text-ih-fg-3">Removing from this device…</p>}
@@ -86,7 +88,7 @@ export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRem
         <div className="relative z-10 flex flex-col gap-3">
           {quarantined && onExport !== undefined && <ExportBlock company={company} onExport={() => onExport(row.id)} />}
           {row.removable && (
-            <Button variant="secondary" onClick={() => onRemove(row)}>
+            <Button variant="secondary" aria-label={row.namedByPlan ? `No longer on the server — remove ${title} from this device` : `Remove ${title} from this device`} onClick={() => onRemove(row)}>
               {row.namedByPlan ? SUSPICIOUS_REMOVE_LABEL : REMOVE_LABEL}
             </Button>
           )}

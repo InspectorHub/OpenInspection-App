@@ -14,7 +14,7 @@ export const MAX_SYNC_DAYS = 60;
 const DAY_MS = 86_400_000;
 
 /** Failure codes of one inspection's refresh. Fixed strings: nothing the server said is ever one of them. */
-export const REFRESH_ERROR_CODES = ['not_found', 'refused', 'invalid_response', 'too_large', 'rate_limited', 'server_error', 'network', 'storage_failed'] as const;
+export const REFRESH_ERROR_CODES = ['not_found', 'not_visible', 'refused', 'invalid_response', 'too_large', 'rate_limited', 'server_error', 'network', 'storage_failed'] as const;
 export type RefreshErrorCode = (typeof REFRESH_ERROR_CODES)[number];
 
 export function isRefreshErrorCode(value: unknown): value is RefreshErrorCode {
@@ -145,6 +145,12 @@ export function orderTargets(targets: readonly Target[]): Target[] {
 export async function packagesWithError(db: Db, account: Account): Promise<Set<string>> {
   const rows = await db.query<{ package_id: string }>('SELECT package_id FROM resource_cache WHERE account_key = ? AND key = ? || package_id', [accountKeyOf(account), REFRESH_ERROR_PREFIX]);
   return new Set(rows.map((r) => r.package_id));
+}
+
+/** Packages whose last download was answered "not visible" (403 or 404 on the inspection itself), with when that was recorded. */
+export async function notVisibleMarkers(db: Db, account: Account): Promise<Map<string, number>> {
+  const rows = await db.query<{ package_id: string; fetched_at: number }>("SELECT package_id, fetched_at FROM resource_cache WHERE account_key = ? AND key = ? || package_id AND body = 'not_visible'", [accountKeyOf(account), REFRESH_ERROR_PREFIX]);
+  return new Map(rows.map((r) => [r.package_id, Number(r.fetched_at)]));
 }
 
 export interface PackageState {

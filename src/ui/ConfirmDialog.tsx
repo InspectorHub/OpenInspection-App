@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { Button, Notice } from './kit';
 
 export interface ConfirmDialogProps {
@@ -25,9 +25,23 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
+  const opener = useRef<Element | null>(null);
+  const fallback = useContext(DialogFocusFallback);
+
   useEffect(() => {
+    // The button that opened the dialog is still the focused element here, just before Cancel takes focus.
+    if (opener.current === null) opener.current = document.activeElement;
     cancelRef.current?.focus();
-  }, []);
+    return () => {
+      // Runs once the dialog is gone from the page. Focus the page moved elsewhere on purpose is left alone; focus that fell to
+      // the body goes back to the opener, or to the fallback (the list's heading) when the opener no longer exists.
+      const active = document.activeElement;
+      if (active !== null && active !== document.body) return;
+      const back = opener.current;
+      if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus();
+      else fallback?.current?.focus();
+    };
+  }, [fallback]);
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.key === 'Escape') {
@@ -77,3 +91,6 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
     </div>
   );
 }
+
+/** Where focus goes when a dialog closes and the button that opened it no longer exists, such as the list's heading. */
+export const DialogFocusFallback = createContext<RefObject<HTMLElement | null> | null>(null);

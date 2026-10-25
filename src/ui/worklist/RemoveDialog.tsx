@@ -6,7 +6,7 @@ import { unsentData, type UnsentResult } from '../../offline/unsent';
 import type { RemoveOutcome, RemoveOptions } from '../../offline/user-actions';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useActionLatch } from '../latch';
-import { COUNTS_FAILED, DISCARD_CHANGE_GONE, REMOVE_GONE, REMOVE_NOT_ALLOWED, REMOVE_RUNNING, REMOVE_THREW_TEXT, removeFailureText } from './copy';
+import { COUNTS_FAILED, DISCARD_CHANGE_GONE, discardChangeFailureText, REMOVE_GONE, REMOVE_NOT_ALLOWED, REMOVE_RUNNING, REMOVE_THREW_TEXT, removeFailureText } from './copy';
 import { REMOVE_LABEL } from './InspectionRow';
 import { readWorkListSnapshot, type WorkListRow, type WorkListStack } from './model';
 
@@ -97,9 +97,10 @@ export function RemoveDialog({ stack, row, discardKey, now, reload, onClose, onR
     let message: string | null = null;
     try {
       if (discardKey !== undefined) {
-        const gone = await stack.replayer.discard(discardKey, { confirmed: true });
+        const result = await stack.replayer.discard(discardKey, { confirmed: true });
         // Nothing found to discard is fine when the queued create is already gone; the removal re-checks it either way.
-        if (!gone && (await createStillQueued(stack, discardKey))) message = DISCARD_CHANGE_GONE;
+        if (result.kind === 'locked' || result.kind === 'busy') message = discardChangeFailureText(result);
+        else if (result.kind === 'not_found' && (await createStillQueued(stack, discardKey))) message = DISCARD_CHANGE_GONE;
       }
       if (message === null) {
         const plan = planFor(stack, row.id, stack.account, now());
@@ -141,7 +142,7 @@ export function RemoveDialog({ stack, row, discardKey, now, reload, onClose, onR
       title="Remove this inspection from this device?"
       description={
         neverSent
-          ? 'This inspection was never sent to the server. Everything on this device for it, including photos and edits, will be permanently removed. This cannot be undone.'
+          ? 'This inspection was never sent to the server. Everything on this device for it, including photos and edits, will be permanently removed. If the server already received it, it will appear again the next time you download your work; anything you added only on this device will be lost. This cannot be undone.'
           : 'This removes the inspection and everything stored for it on this device. This cannot be undone.'
       }
       confirmLabel={discardKey !== undefined ? DISCARD_AND_REMOVE_LABEL : REMOVE_LABEL}

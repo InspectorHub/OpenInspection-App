@@ -589,7 +589,7 @@ describe('unreadable rows are failed and kept; the loop goes on', () => {
     expect(await retryRow(w.db, row.idempotencyKey)).toBe(true);
     w.server.script.push(failure(422, 'VALIDATION_ERROR'));
     await w.replayer.replay();
-    expect(await w.replayer.discard(row.idempotencyKey, { confirmed: true })).toBe(true);
+    expect(await w.replayer.discard(row.idempotencyKey, { confirmed: true })).toEqual({ kind: 'discarded' });
     expect(await w.rows()).toEqual([]);
   });
 });

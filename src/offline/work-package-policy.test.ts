@@ -54,6 +54,7 @@ describe('one marker per failing inspection, end to end', () => {
     expect((await readPackageStates(w.db, ALICE)).map((s) => s.lastError)).toEqual(['refused', 'refused']);
     w.pkg.overrides.clear();
     w.pkg.requests.length = 0;
+    w.clock.advance(31_000);
     const again = await w.run('start');
     expect(again).toMatchObject({ refreshed: 2, skipped: 0 });
     expect(await markerRows()).toEqual([]);
@@ -309,6 +310,7 @@ describe('the write-time checks', () => {
     const summary = await w.run();
     expect(summary.halted).toBe('too_many_errors');
     expect(w.pkg.forInspection('t5')).toEqual(['/api/inspections/t5']);
-    expect(summary.failed).toBe(4);
+    // t2 answered 404 on the inspection itself: not visible, which is not a failure.
+    expect(summary).toMatchObject({ failed: 3, notVisible: 1 });
   });
 });

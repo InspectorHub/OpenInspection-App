@@ -31,6 +31,32 @@ describe('setPinned', () => {
     expect(await pinnedOf('a')).toBe(0);
   });
 
+  it.each([
+    ['quarantined', { quarantine: 'reconcile_missing' }],
+    ['not confirmed by the server', { confirmed: 0 }],
+    ['quarantined and not confirmed', { quarantine: 'reconcile_missing', confirmed: 0 }],
+  ])('unpins a pinned package that is %s, so a pin can always be taken back', async (_name, spec) => {
+    await seedPkg(world.db, { id: 'a', pinned: 1, ...spec });
+    expect(await setPinned(world.db, ALICE, 'a', false)).toBe(true);
+    expect(await pinnedOf('a')).toBe(0);
+  });
+
+  it.each([
+    ['being purged', { purging: 1 }],
+    ["being purged on a person's word", { purging: 2 }],
+    ["another account's", { owner: BOB }],
+  ])('refuses to unpin a package that is %s and changes nothing', async (_name, spec) => {
+    await seedPkg(world.db, { id: 'a', pinned: 1, ...spec });
+    expect(await setPinned(world.db, ALICE, 'a', false)).toBe(false);
+    expect(await pinnedOf('a')).toBe(1);
+  });
+
+  it('a quarantined package still cannot be PINNED (control for the unpin rule)', async () => {
+    await seedPkg(world.db, { id: 'a', quarantine: 'reconcile_missing' });
+    expect(await setPinned(world.db, ALICE, 'a', true)).toBe(false);
+    expect(await pinnedOf('a')).toBe(0);
+  });
+
   it('refuses an unknown package and an id that could not be an inspection id', async () => {
     expect(await setPinned(world.db, ALICE, 'missing', true)).toBe(false);
     expect(await setPinned(world.db, ALICE, 'bad id; DROP', true)).toBe(false);

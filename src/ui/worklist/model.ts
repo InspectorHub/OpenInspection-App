@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BoundUserActions, OfflineStack, ReconcilerHandle } from '../../app/offline-stack';
+import { appTimings } from '../../app/timings';
 import type { MediaStore } from '../../media/store';
 import type { Db } from '../../platform/db';
 import { loadTenantName } from '../../offline/lock-state';
@@ -14,7 +15,7 @@ import { OUTBOX_ERROR_CODES, type OutboxErrorCode } from '../../platform/schema'
 import { groupOf, shortTitle, stripBidi, type GroupKey } from './format';
 
 /** What the work list reads from the stack. A pick, so a test can stand in for any part. */
-export type WorkListStack = Pick<OfflineStack, 'db' | 'account' | 'status' | 'replayer' | 'refresher' | 'reconciler' | 'uploader' | 'userActions' | 'store' | 'lastPlan'>;
+export type WorkListStack = Pick<OfflineStack, 'db' | 'account' | 'status' | 'markListPainted' | 'replayer' | 'refresher' | 'reconciler' | 'uploader' | 'userActions' | 'store' | 'lastPlan'>;
 
 /** What a read of the list needs. A narrow shape, so a development tool can read the same list without a whole stack. */
 export interface SnapshotSource {
@@ -39,6 +40,8 @@ export interface WorkListRow {
   pinned: boolean;
   /** Only a confirmed, healthy package of this account can be pinned. */
   canPin: boolean;
+  /** A pinned package of this account that is not being removed can always be unpinned, even a quarantined one. */
+  canUnpin: boolean;
   downloaded: boolean;
   lastError: RefreshErrorCode | null;
   /** Made on this device and not yet acknowledged by the server. */
@@ -48,7 +51,7 @@ export interface WorkListRow {
   waiting: number;
   /** Failed queued writes plus stuck photos and clips. */
   needAttention: number;
-  /** Queued writes of an inspection that left the list; never counted as waiting. */
+  /** Queued writes of an inspection that left the list: on hold, never counted as waiting. */
   orphaned: number;
   /** A person may remove it from the device: it is quarantined, the latest suspicious answer names it, or it was never sent. */
   removable: boolean;
@@ -127,10 +130,20 @@ function addressOf(body: string): string | null {
   }
 }
 
-/** Titles of the cached inspection rows. A body is parsed again only when its fetch time changed. */
+/**
+ * Titles of the cached inspection rows, in at most TWO statements whatever the number of inspections: the fetch times of
+ * every cached row, then (only when one of them is new or changed since `memo` saw it) the bodies, all in one query. A body is
+ * parsed again only when its fetch time changed.
+ */
 async function readTitles(stack: SnapshotSource, memo: TitleMemo): Promise<Map<string, string | null>> {
   const key = accountKey(stack.account);
   const stamps = await stack.db.query<{ package_id: string; fetched_at: number }>("SELECT package_id, fetched_at FROM resource_cache WHERE account_key = ? AND key = '/api/inspections/' || package_id", [key]);
+  const stale = stamps.some((stamp) => memo.get(stamp.package_id)?.fetchedAt !== stamp.fetched_at);
+  const bodies = new Map<string, string>();
+  if (stale) {
+    const rows = await stack.db.query<{ package_id: string; body: string }>("SELECT package_id, body FROM resource_cache WHERE account_key = ? AND key = '/api/inspections/' || package_id", [key]);
+    for (const row of rows) bodies.set(row.package_id, row.body);
+  }
   const titles = new Map<string, string | null>();
   for (const stamp of stamps) {
     const known = memo.get(stamp.package_id);
@@ -138,8 +151,8 @@ async function readTitles(stack: SnapshotSource, memo: TitleMemo): Promise<Map<s
       titles.set(stamp.package_id, known.title);
       continue;
     }
-    const bodies = await stack.db.query<{ body: string }>('SELECT body FROM resource_cache WHERE account_key = ? AND key = ?', [key, `/api/inspections/${stamp.package_id}`]);
-    const title = bodies[0] === undefined ? null : addressOf(bodies[0].body);
+    const body = bodies.get(stamp.package_id);
+    const title = body === undefined ? null : addressOf(body);
     memo.set(stamp.package_id, { fetchedAt: stamp.fetched_at, title });
     titles.set(stamp.package_id, title);
   }
@@ -217,13 +230,18 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
       scheduledAt,
       pinned: Number(pkg.pinned) === 1,
       canPin: confirmed && blocked === 'none',
+      canUnpin: Number(pkg.pinned) === 1 && blocked !== 'purging',
       downloaded: (state?.cachedResources ?? 0) > 0,
       lastError: state?.lastError ?? null,
       createdLocally: !confirmed,
       blocked,
-      waiting: (counts?.pending ?? 0) + (photos?.waiting ?? 0),
+      // On a quarantined inspection nothing is sent any more. Its queued writes are all "on hold" (the orphaned ones, and a
+      // write that is still pending, such as one that was held back or arrived after the reconcile), so they are not counted
+      // as waiting to upload; only photos and clips are, because they stay on the device, still unsent. Counting both under
+      // "waiting" before and only the writes after is what made two items read as one.
+      waiting: (blocked === 'quarantined' ? 0 : (counts?.pending ?? 0)) + (photos?.waiting ?? 0),
       needAttention: (counts?.failed ?? 0) + (photos?.failed ?? 0),
-      orphaned: counts?.orphaned ?? 0,
+      orphaned: (counts?.orphaned ?? 0) + (blocked === 'quarantined' ? (counts?.pending ?? 0) : 0),
       removable: blocked === 'quarantined' || namedByPlan || neverSent,
       neverSent,
       namedByPlan,
@@ -299,8 +317,10 @@ export function useWorkListModel(stack: WorkListStack, options: ModelOptions): W
   const reload = useCallback(async (): Promise<void> => {
     newest.current += 1;
     const mine = newest.current;
+    const startedAt = performance.now();
     try {
       const snapshot = await readWorkListSnapshot(stack, clock.current(), memo.current);
+      appTimings.record('snapshot_ms', performance.now() - startedAt);
       if (alive.current && mine === newest.current) setState({ phase: 'ready', snapshot });
     } catch {
       if (alive.current && mine === newest.current) setState((current) => (current.snapshot === null ? { phase: 'error', snapshot: null } : current));
@@ -311,6 +331,13 @@ export function useWorkListModel(stack: WorkListStack, options: ModelOptions): W
     setState({ phase: 'loading', snapshot: null });
     await reload();
   }, [reload]);
+
+  // The first snapshot (or the first failure) is on screen: the stack may begin its start sequence, which would otherwise have
+  // queued behind or ahead of these reads on the one database connection. Idempotent on the stack's side.
+  const phase = state.phase;
+  useEffect(() => {
+    if (phase !== 'loading') stack.markListPainted();
+  }, [phase, stack]);
 
   useEffect(() => {
     alive.current = true;

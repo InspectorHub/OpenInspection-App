@@ -20,10 +20,11 @@ afterEach(() => {
 });
 
 const REMOVE = { name: 'Remove from this device' };
+const ROW_REMOVE = { name: /^Remove .+ from this device$/ };
 
 async function openDialog(id: string): Promise<HTMLElement> {
   const row = await screen.findByTestId(`row-${id}`);
-  await userEvent.setup().click(within(row).getByRole('button', REMOVE));
+  await userEvent.setup().click(within(row).getByRole('button', ROW_REMOVE));
   const dialog = await screen.findByRole('alertdialog');
   await within(dialog).findByText(/Edits on this device/);
   return dialog;
@@ -93,11 +94,11 @@ describe('Remove dialog: a refused removal shows what is true now', () => {
     await seedPkg(w.db, { id: 'q1', scheduledAt: at(0), quarantine: 'reconcile_missing' });
     renderList(stackRemoving({ kind: 'busy' }));
     const dialog = await openDialog('q1');
-    expect(screen.queryByText(/belongs to an inspection that is no longer on your list/)).toBeNull();
+    expect(screen.queryByText(/queued changes? (is|are) on hold because this inspection is no longer on your list/)).toBeNull();
     await seedQueued(w.db, { key: 'k1', seq: 1, inspectionId: 'q1', state: 'orphaned', error: 'target_gone' });
     await userEvent.setup().click(within(dialog).getByRole('button', REMOVE));
     await within(dialog).findByRole('alert');
-    expect(await screen.findByText('1 item belongs to an inspection that is no longer on your list')).toBeInTheDocument();
+    expect(await screen.findByText('1 queued change is on hold because this inspection is no longer on your list')).toBeInTheDocument();
   });
 
   it('control: a removal that succeeds closes the dialog and reads nothing more', async () => {

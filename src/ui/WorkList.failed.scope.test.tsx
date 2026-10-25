@@ -178,7 +178,7 @@ describe('a failed create has one exit that leaves nothing behind', () => {
     renderList(w.stack);
     await userEvent.setup().click(within(await attention()).getByRole('button', { name: new RegExp(`^${DISCARD_AND_REMOVE}`) }));
     const dialog = await screen.findByRole('alertdialog');
-    expect(dialog).toHaveAccessibleDescription('This inspection was never sent to the server. Everything on this device for it, including photos and edits, will be permanently removed. This cannot be undone.');
+    expect(dialog).toHaveAccessibleDescription('This inspection was never sent to the server. Everything on this device for it, including photos and edits, will be permanently removed. If the server already received it, it will appear again the next time you download your work; anything you added only on this device will be lost. This cannot be undone.');
     await within(dialog).findByText('Queued changes: 2');
     expect(within(dialog).getByText('Photos and clips waiting to upload: 1')).toBeInTheDocument();
     expect(within(dialog).getByText('Created on this device and never sent: Yes')).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('a failed create has one exit that leaves nothing behind', () => {
     await seedFailedCreate();
     vi.spyOn(w.stack.replayer, 'discard').mockImplementation(async (key) => {
       await w.db.run('DELETE FROM outbox WHERE idempotency_key = ?', [key]);
-      return false;
+      return { kind: 'not_found' as const };
     });
     renderList(w.stack);
     const user = userEvent.setup();
@@ -225,7 +225,7 @@ describe('a failed create has one exit that leaves nothing behind', () => {
 
   it('a discard that reports nothing found while the create is still queued stops with a fixed line and removes nothing', async () => {
     await seedFailedCreate();
-    vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue(false);
+    vi.spyOn(w.stack.replayer, 'discard').mockResolvedValue({ kind: 'not_found' });
     const remove = vi.spyOn(w.stack.userActions, 'removeFromDevice');
     renderList(w.stack);
     const user = userEvent.setup();
@@ -269,7 +269,7 @@ describe('a failed create has one exit that leaves nothing behind', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     // Nothing queued makes it any more: the row itself now offers the removal.
     const row = await screen.findByTestId('row-mine00001');
-    expect(within(row).getByRole('button', { name: 'Remove from this device' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /^Remove .+ from this device$/ })).toBeInTheDocument();
     expect(within(row).getByText('Created on this device, not yet sent')).toBeInTheDocument();
   });
 
@@ -300,7 +300,7 @@ describe('a package that was never sent can always be removed from its row', () 
     await seedPkg(w.db, { id: 'mine00001', scheduledAt: at(0), confirmed: 0 });
     renderList(w.stack);
     const row = await screen.findByTestId('row-mine00001');
-    await userEvent.setup().click(within(row).getByRole('button', { name: 'Remove from this device' }));
+    await userEvent.setup().click(within(row).getByRole('button', { name: /^Remove .+ from this device$/ }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog).toHaveAccessibleDescription(/This inspection was never sent to the server\./);
     await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Remove from this device' }));

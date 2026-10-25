@@ -126,6 +126,7 @@ describe('triggers', () => {
     w.serve('t1');
     await w.run('start');
     w.pkg.requests.length = 0;
+    w.clock.advance(31_000);
     const held = gate();
     w.pkg.hook = async (request) => {
       if (request.path === '/api/inspections' && request.query.has('dateFrom') && w.pkg.requests.length === 1) await held.promise;
@@ -149,15 +150,18 @@ describe('triggers', () => {
     w.network.set(false);
     await w.refresher.idle();
     expect(windowLists()).toBe(1);
+    w.clock.advance(31_000);
     w.network.set(true);
     await vi.waitFor(() => expect(windowLists()).toBe(2));
     await w.refresher.idle();
     w.appState.emit(false);
     await w.refresher.idle();
     expect(windowLists()).toBe(2);
+    w.clock.advance(31_000);
     w.appState.emit(true);
     await vi.waitFor(() => expect(windowLists()).toBe(3));
     await w.refresher.idle();
+    w.clock.advance(31_000);
     w.unlock();
     await vi.waitFor(() => expect(windowLists()).toBe(4));
     await w.refresher.idle();
@@ -198,6 +202,7 @@ describe('triggers', () => {
     await w.refresher.idle();
     await vi.waitFor(() => expect(w.timers.pending()).toBe(1));
     const before = windowLists();
+    w.clock.advance(31_000);
     w.timers.fireNext();
     await vi.waitFor(() => expect(windowLists()).toBe(before + 1));
     await w.refresher.idle();

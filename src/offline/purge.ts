@@ -148,6 +148,14 @@ type Phase = { kind: 'go'; tombstone: number } | PurgeOutcome;
 const refused = (reason: PurgeRefusal): PurgeOutcome => ({ kind: 'refused', reason });
 const failed = (step: PurgeStep, code: PurgeFailure): PurgeOutcome => ({ kind: 'failed', step, code });
 
+/**
+ * True only for a `server_confirmed` of exactly 0 (the package was made on this device and the server never acknowledged it).
+ * Not `Number(x) === 0`: that is also true of NULL and the empty string, which would grant a removal instead of refusing it.
+ */
+export function isNeverSent(serverConfirmed: unknown): boolean {
+  return serverConfirmed === 0 || serverConfirmed === '0';
+}
+
 async function count(db: Db, sql: string, params: unknown[]): Promise<number> {
   const rows = await db.query<{ n: number }>(sql, params);
   return Number(rows[0]?.n ?? 0);
@@ -209,8 +217,10 @@ async function tombstone(deps: PurgeDeps, id: string, options: PurgeOptions): Pr
     // The server never acknowledged it. Automatic mode never touches such a package. A person may remove one that was
     // NEVER SENT: no create is queued for it any more (checked below, in this same transaction), so nothing can still
     // make it exist on the server. This is the only way a package that is not server-confirmed becomes removable.
-    const neverSent = Number(row.server_confirmed) !== 1;
-    if (neverSent && options.mode !== 'user_confirmed') return refused('unconfirmed');
+    // Fail closed: only an exact 0 is "never sent". Any other value that is not 1 (a damaged flag) counts as a healthy package
+    // here, so a person still needs a quarantine, and automatic mode refuses it as unconfirmed.
+    const neverSent = isNeverSent(row.server_confirmed);
+    if (Number(row.server_confirmed) !== 1 && options.mode === 'auto') return refused('unconfirmed');
     // A person may take over an automatic tombstone that got stuck; nothing else may touch a row that is being purged.
     if (flag !== 0 && !(options.mode === 'user_confirmed' && flag === TOMBSTONE_AUTO)) return refused('tombstoned');
     // A person's word removes a quarantined inspection, or one a suspicious answer named; never a healthy one.

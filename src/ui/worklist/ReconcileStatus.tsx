@@ -5,6 +5,7 @@ import { Button, Notice } from '../kit';
 import { useActionLatch } from '../latch';
 import { CHECK_IGNORED, CHECK_REQUESTED, CHECK_THREW } from './copy';
 import { checkedLabel } from './format';
+import { LiveNote } from './LiveNote';
 
 /** How long "Check requested." stays when no outcome arrives: a check that never runs must not look like one that is coming. */
 export const CHECK_NOTE_MS = 10_000;
@@ -83,9 +84,7 @@ export function ReconcileStatus({ outcome, now, locale, onCheck, canRun, timers,
           Check now
         </Button>
       </div>
-      <p aria-live="polite" className="min-h-5 text-sm text-ih-fg-3">
-        {asked !== null && asked.at === outcome.at ? asked.note : ''}
-      </p>
+      <LiveNote className="text-sm text-ih-fg-3" text={asked !== null && asked.at === outcome.at ? asked.note : ''} />
     </section>
   );
 }

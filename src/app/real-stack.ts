@@ -5,6 +5,7 @@ import { createRealNetwork } from '../platform/network';
 import { createRealUploaderPlugin } from '../platform/uploader';
 import { appDiagnostics } from './diagnostics';
 import { createOfflineStack } from './offline-stack';
+import { appTimings } from './timings';
 import type { StackFactory } from './use-offline-stack';
 
 /**
@@ -34,5 +35,8 @@ export function createRealStackFactory(options: { appState: AppStatePort }): Sta
       onTokenVerified: services.onTokenVerified,
       // The latest fixed codes stay in memory for a settings screen; they never leave the device and carry no id, path or url.
       onDiagnostic: appDiagnostics.push,
+      // The list's first paint comes before the sweeps, replay, reconcile and refresh begin: they would queue its reads behind them.
+      deferLaunchUntilPainted: true,
+      onTiming: appTimings.record,
     });
 }

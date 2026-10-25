@@ -262,9 +262,9 @@ describe('what the server answers with a status', () => {
     await prime('t1');
     w.pkg.overrides.set('/api/inspections/t1', () => jsonReply(404, { success: false }));
     const summary = await w.run();
-    expect(summary.failed).toBe(1);
+    expect(summary).toMatchObject({ failed: 0, notVisible: 1 });
     expect(await versionOf('/api/inspections/t1/results')).toBe(1);
-    expect(await lastError('t1')).toBe('not_found');
+    expect(await lastError('t1')).toBe('not_visible');
   });
 
   it('404 on an optional read means it does not apply: the set is replaced without it', async () => {
