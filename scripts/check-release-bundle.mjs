@@ -10,7 +10,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 
 // Development-only UI and the diagnostics screen: its button label, and the marker every check title and console line starts with.
-const FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]'];
+// Then the test support that bypasses the plan brand, the purge authority and the data-layer block: no production module imports
+// it (a source test pins that), and this catches what such an import would have put into the built files.
+const FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]', 'issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'];
 const SCANNED = new Set(['.js', '.mjs', '.css', '.html']);
 
 function* walk(dir) {

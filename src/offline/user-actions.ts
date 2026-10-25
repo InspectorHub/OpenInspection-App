@@ -30,7 +30,8 @@ export interface UserActionDeps extends PurgeDeps {
   newToken?: () => string;
 }
 
-export type RemoveOutcome = PurgeOutcome | { kind: 'busy' } | { kind: 'locked' } | { kind: 'refused'; reason: PurgeRefusal | 'no_account' | 'not_quarantined' | 'plan_not_issued' };
+/** `lease_lost`: the shared lease was taken by another flow mid-way; the purge stopped and the tombstone is kept for a later run. */
+export type RemoveOutcome = PurgeOutcome | { kind: 'busy' } | { kind: 'locked' } | { kind: 'lease_lost' } | { kind: 'refused'; reason: PurgeRefusal | 'no_account' | 'not_quarantined' | 'plan_not_issued' };
 
 export interface RemoveOptions {
   confirmed: true;
@@ -64,7 +65,13 @@ async function lockedNow(deps: Pick<UserActionDeps, 'isLocked'>): Promise<boolea
  * "No longer on the server, remove from this device." A person-confirmed purge: the queued writes and photos of the
  * inspection go too. Only for an inspection that is quarantined, one a suspicious answer named in the latest plan, or one
  * whose purge stopped on its own (tombstone 1 or 2: the person finishes it). Anything else is refused as `not_quarantined`:
- * this is not a way to wipe a healthy inspection. Takes the shared lease (`busy` when another flow holds it).
+ * this is not a way to wipe a healthy inspection. Takes the shared lease (`busy` when another flow holds it) and renews it
+ * between the purge's steps (`lease_lost` when it was taken over).
+ *
+ * A person-confirmed tombstone whose inspection still has a queued write of ANOTHER account cannot finish: the purge stops
+ * with `failed` / `foreign_outbox` and keeps the tombstone, because that row is not this person's to delete. The exits are
+ * that account signing in and dealing with its own queue, or clearing the device's local data (`clear-local-data.ts`);
+ * nothing in this module deletes another account's row.
  */
 export async function removeFromDevice(deps: UserActionDeps, inspectionId: string, options: RemoveOptions): Promise<RemoveOutcome> {
   requireConfirmation(options, 'Removing an inspection');
@@ -80,7 +87,7 @@ export async function removeFromDevice(deps: UserActionDeps, inspectionId: strin
   if (account === null) return { kind: 'refused', reason: 'no_account' };
   const who = account;
   const leaseOptions = { clock: deps.clock, ...(deps.leaseTtlMs === undefined ? {} : { ttlMs: deps.leaseTtlMs }), ...(deps.newToken === undefined ? {} : { newToken: deps.newToken }) };
-  const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (): Promise<RemoveOutcome> => {
+  const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease): Promise<RemoveOutcome> => {
     const rows = await deps.db.query<{ tenant_id: string | null; user_id: string | null; purging: number; quarantine_source: string | null }>('SELECT tenant_id, user_id, purging, quarantine_source FROM work_package WHERE inspection_id = ?', [inspectionId]);
     const row = rows[0];
     if (row === undefined) return { kind: 'refused', reason: 'no_package' };
@@ -89,10 +96,22 @@ export async function removeFromDevice(deps: UserActionDeps, inspectionId: strin
     if (flag === 0 && row.quarantine_source === null && !massEvidence(options.plan, inspectionId, who, deps.clock.now())) return { kind: 'refused', reason: 'not_quarantined' };
     // A person-confirmed tombstone is finished as it is; an automatic one that got stuck is taken over by this confirmation.
     // The purge asks again between its steps, so a lock that arrives mid-way stops it with the tombstone kept.
-    const checkpoint = async (): Promise<boolean> => !(await lockedNow(deps)) && (deps.checkpoint === undefined ? true : (await Promise.resolve(deps.checkpoint()).catch(() => false)) !== false);
+    // It also renews the shared lease, like the resume and the executor: a purge of an inspection with many photos can outlive
+    // the default ttl, and a lease that expired would let another flow take it and resume this same tombstone concurrently.
+    // A lease that is no longer ours (renew false or throwing) stops the purge with the tombstone kept: `lease_lost`.
+    let leaseLost = false;
+    const checkpoint = async (): Promise<boolean> => {
+      if (await lockedNow(deps)) return false;
+      if (!(await lease.renew().catch(() => false))) {
+        leaseLost = true;
+        return false;
+      }
+      return deps.checkpoint === undefined ? true : (await Promise.resolve(deps.checkpoint()).catch(() => false)) !== false;
+    };
     const authority = purgeAuthority();
     const purgeDeps: PurgeDeps = { ...deps, checkpoint };
-    return purgeInspection(purgeDeps, inspectionId, flag === TOMBSTONE_USER ? { mode: 'resume', account: who, authority } : { mode: 'user_confirmed', account: who, authority, ...(options.plan === undefined ? {} : { plan: options.plan }) });
+    const result = await purgeInspection(purgeDeps, inspectionId, flag === TOMBSTONE_USER ? { mode: 'resume', account: who, authority } : { mode: 'user_confirmed', account: who, authority, ...(options.plan === undefined ? {} : { plan: options.plan }) });
+    return leaseLost && result.kind === 'failed' && result.code === 'interrupted' ? { kind: 'lease_lost' } : result;
   });
   return outcome.acquired ? outcome.value : { kind: 'busy' };
 }

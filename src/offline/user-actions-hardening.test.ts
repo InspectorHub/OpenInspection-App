@@ -215,3 +215,91 @@ describe('removeFromDevice accepts only a plan that decideReconcile issued', () 
     expect(await world.hash()).toBe(hash);
   });
 });
+
+describe('a person-confirmed removal on a suspicious plan covers only the state the plan saw', () => {
+  async function suspicious(): Promise<ReconcilePlan> {
+    await world.seedPurgeable('p1');
+    await world.seedPurgeable('p2');
+    await world.seedPurgeable('p3');
+    return planOf('p1', 'p2', 'p3');
+  }
+
+  it.each([
+    ['a queued write', async () => world.outbox('p2', 'pending')],
+    ['a stored document row', async () => void (await world.ydoc('p2'))],
+    ['a photo row', async () => world.media('p2', 'pending')],
+  ])('%s that appeared after the plan was issued refuses the removal as changed and deletes nothing', async (_name, change) => {
+    const plan = await suspicious();
+    await change();
+    const hash = await world.hash();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true, plan })).toEqual({ kind: 'refused', reason: 'changed' });
+    expect(await world.hash()).toBe(hash);
+    expect((await world.counts('p2')).work_package).toBe(1);
+    expect(world.purgingSignals).toEqual([]);
+  });
+
+  it('a plan that carries no fingerprint for the id refuses as changed', async () => {
+    const plan = await suspicious();
+    const { p2: _dropped, ...rest } = plan.fingerprints;
+    void _dropped;
+    const hash = await world.hash();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true, plan: issuePlanForTest({ ...plan, fingerprints: rest }) })).toEqual({ kind: 'refused', reason: 'changed' });
+    expect(await world.hash()).toBe(hash);
+  });
+
+  it('control: nothing changed since the plan, so the removal proceeds', async () => {
+    const plan = await suspicious();
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true, plan })).toEqual({ kind: 'purged' });
+    expect((await world.counts('p2')).work_package).toBe(0);
+    expect((await world.counts('p1')).work_package).toBe(1);
+  });
+
+  it('a change to ANOTHER inspection does not matter to this one', async () => {
+    const plan = await suspicious();
+    await world.outbox('p3', 'pending');
+    expect(await removeFromDevice(deps(), 'p2', { confirmed: true, plan })).toEqual({ kind: 'purged' });
+  });
+});
+
+describe('removeFromDevice keeps the shared lease alive while it purges', () => {
+  const lease = async (): Promise<{ holder: string; expires_at: number } | undefined> => (await world.db.query<{ holder: string; expires_at: number }>("SELECT holder, expires_at FROM lease WHERE name = 'sync'"))[0];
+
+  it('renews it between steps: after the ttl has passed mid-purge the lease is extended, not expired', async () => {
+    await world.seedFull('p2', { quarantine: 'reconcile_missing' });
+    const seen: number[] = [];
+    const base = world.purgeDeps();
+    const connector = {
+      closeFor: (id: string) => base.connector.closeFor(id),
+      purge: async (id: string) => {
+        await base.connector.purge(id);
+        world.clock.advance(50_000);
+      },
+    };
+    const uploader = {
+      cancelFor: async (): Promise<void> => {
+        const held = await lease();
+        seen.push((held?.expires_at ?? 0) - world.clock.now());
+      },
+    };
+    expect(await removeFromDevice(deps({ connector, uploader, leaseTtlMs: 60_000 }), 'p2', { confirmed: true })).toEqual({ kind: 'purged' });
+    expect(seen).toEqual([60_000]);
+    expect(await lease()).toBeUndefined();
+  });
+
+  it('a lease another flow took mid-purge stops it with the tombstone kept and reports lease_lost', async () => {
+    await world.seedFull('p2', { quarantine: 'reconcile_missing' });
+    const base = world.purgeDeps();
+    const connector = {
+      closeFor: (id: string) => base.connector.closeFor(id),
+      purge: async (id: string) => {
+        await base.connector.purge(id);
+        await world.db.run("UPDATE lease SET holder = 'thief' WHERE name = 'sync'");
+      },
+    };
+    expect(await removeFromDevice(deps({ connector }), 'p2', { confirmed: true })).toEqual({ kind: 'lease_lost' });
+    const flag = await world.db.query<{ purging: number }>('SELECT purging FROM work_package WHERE inspection_id = ?', ['p2']);
+    expect(Number(flag[0]?.purging)).toBe(2);
+    expect((await world.counts('p2')).media).toBe(2);
+    expect((await lease())?.holder).toBe('thief');
+  });
+});

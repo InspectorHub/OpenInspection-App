@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Db } from '../platform/db';
 import { isMediaError } from './errors';
 import { createMediaStore } from './store';
 import { createMediaWorld, INSPECTION, photoRecord } from './test-support/fakes';
@@ -117,5 +118,51 @@ describe('the second guard check of a put (after the file is written)', () => {
     await expect(store.putVideo(videoRecord('v1'))).rejects.toMatchObject({ code: 'BLOCKED' });
     expect(await mediaCount(world)).toBe(0);
     expect(world.files.paths()).toEqual([]);
+  });
+});
+
+describe('an insert that changed nothing: a repeated id is told from a refusal by reading the row', () => {
+  it('a row for the SAME id that lands in the guard gap keeps the existing row and its file, and the put stays silent', async () => {
+    const world = await createMediaWorld();
+    const other = createMediaStore({ db: world.db, files: world.files, isBlocked: () => Promise.resolve(false) });
+    const store = createMediaStore({ db: world.db, files: world.files, isBlocked: guardWithGap(2, () => other.put(photoRecord('p1', { seed: 1 }))) });
+    await store.put(photoRecord('p1', { seed: 1 }));
+    expect(await mediaCount(world)).toBe(1);
+    expect(world.files.paths()).toEqual(['media/p1.jpg']);
+  });
+
+  it('a read of the row that fails cannot tell a repeat from a refusal: the file is KEPT and the put fails with DB_FAILED', async () => {
+    const world = await createMediaWorld();
+    let armed = false;
+    let reads = 0;
+    const db: Db = {
+      execute: (sql) => world.db.execute(sql),
+      query: (sql, params) => {
+        if (armed && /FROM media WHERE pending_id = \?/.test(sql)) {
+          reads += 1;
+          return Promise.reject(new Error('injected read failure'));
+        }
+        return world.db.query(sql, params);
+      },
+      run: (sql, params) => world.db.run(sql, params),
+      transaction: (fn) => world.db.transaction(fn),
+    };
+    // A tombstone lands in the gap, so the insert changes nothing and the store has to read the row to know why.
+    const store = createMediaStore({
+      db,
+      files: world.files,
+      isBlocked: guardWithGap(2, async () => {
+        await tombstone(world)();
+        armed = true;
+      }),
+    });
+    const error = await store.put(photoRecord('p1')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(isMediaError(error) && error.code).toBe('DB_FAILED');
+    expect(reads).toBe(1);
+    expect(world.files.paths()).toEqual(['media/p1.jpg']);
+    expect(await mediaCount(world)).toBe(0);
   });
 });

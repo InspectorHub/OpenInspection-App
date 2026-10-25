@@ -104,6 +104,28 @@ describe('the hold after a failure', () => {
     expect(delays.every((d) => d <= HOLD_MAX_MS)).toBe(true);
   });
 
+  it.each([
+    ['jitter at the top of its range (random = 1)', 1],
+    ['a random source that overshoots its range (1.5)', 1.5],
+  ])('at the maximum backoff with %s the hold is an hour, never longer, and is not read as no hold', async (_name, value) => {
+    const w = createWorld({ random: () => value });
+    for (let i = 0; i < 40; i += 1) {
+      w.answers.push(FAILED);
+      await run(w, 'manual');
+    }
+    const delays = w.timers.requested();
+    expect(Math.max(...delays)).toBe(HOLD_MAX_MS);
+    expect(delays.every((d) => d <= HOLD_MAX_MS)).toBe(true);
+    // A hold longer than an hour would read as "a clock that moved back" and be over at once; this one must still hold.
+    const decides = w.decides;
+    await run(w, 'refresh');
+    await run(w, 'foreground');
+    expect(w.decides).toBe(decides);
+    w.clock.advance(HOLD_MAX_MS + 1);
+    await run(w, 'refresh');
+    expect(w.decides).toBe(decides + 1);
+  });
+
   it('a server asking for a very long wait is held for an hour at most', async () => {
     const w = createWorld();
     w.answers.push({ kind: 'failed', reason: 'network', retryAfterMs: 10 ** 12 });

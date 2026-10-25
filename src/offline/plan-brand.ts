@@ -14,10 +14,16 @@
 
 const issued = new WeakSet<object>();
 
-function deepFreeze(value: unknown): void {
-  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return;
+/**
+ * Freezes `value` and everything reachable from it. An object that is ALREADY frozen is still descended into: freezing is
+ * shallow, so a frozen outer object can hold a mutable inner one, and stopping there would leave that inner object editable
+ * inside an issued plan. `seen` ends the walk on a cycle.
+ */
+function deepFreeze(value: unknown, seen: WeakSet<object> = new WeakSet()): void {
+  if (typeof value !== 'object' || value === null || seen.has(value)) return;
+  seen.add(value);
   Object.freeze(value);
-  for (const inner of Object.values(value)) deepFreeze(inner);
+  for (const inner of Object.values(value)) deepFreeze(inner, seen);
 }
 
 /** Registers a plan as issued without freezing it. For the test support, which builds fixtures it then edits. */

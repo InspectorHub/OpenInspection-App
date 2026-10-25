@@ -630,6 +630,47 @@ describe('resuming', () => {
   });
 });
 
+describe('a lock that arrives in the middle of a resume run', () => {
+  const run = (isLocked: () => boolean | Promise<boolean>) => resumePurges({ ...world.purgeDeps(), clock: world.clock, account: () => ALICE, isLocked });
+  const tombstoned = async (...ids: string[]): Promise<void> => {
+    for (const id of ids) {
+      await world.seedPurgeable(id);
+      await world.db.run('UPDATE work_package SET purging = 1 WHERE inspection_id = ?', [id]);
+    }
+  };
+  const packageGone = async (id: string): Promise<boolean> => (await world.counts(id)).work_package === 0;
+
+  it('between two inspections: the first is finished, the second is left tombstoned and untouched, and the run reports locked', async () => {
+    await tombstoned('p2', 'p3');
+    const second = await world.data('p3');
+    const summary = await run(async () => packageGone('p2'));
+    expect(summary).toMatchObject({ resumed: 1, failed: 0, stopped: 'locked' });
+    expect(await world.data('p3')).toBe(second);
+    expect((await world.counts('p3')).work_package).toBe(1);
+  });
+
+  it('inside one purge: the step after the lock stops it with the tombstone kept', async () => {
+    await tombstoned('p2');
+    let locked = false;
+    const base = world.purgeDeps();
+    const connector = {
+      closeFor: (id: string) => base.connector.closeFor(id),
+      purge: async (id: string) => {
+        await base.connector.purge(id);
+        locked = true;
+      },
+    };
+    const summary = await resumePurges({ ...base, connector, clock: world.clock, account: () => ALICE, isLocked: () => locked });
+    expect(summary).toMatchObject({ resumed: 0, failed: 1, stopped: 'locked', failures: { interrupted: 1 } });
+    expect((await world.counts('p2')).work_package).toBe(1);
+  });
+
+  it('control: a device that stays unlocked finishes both', async () => {
+    await tombstoned('p2', 'p3');
+    expect(await run(() => false)).toMatchObject({ resumed: 2, failed: 0, stopped: null });
+  });
+});
+
 describe('the helpers the tests lean on', () => {
   it('the not-found test of the file adapter matches the memory double (so "already gone" is tested against the real rule)', async () => {
     const error = await world.files.remove('media/never-there.jpg').catch((e: unknown) => e);

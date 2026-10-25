@@ -54,6 +54,19 @@ describe('check-release-bundle', () => {
     expect(check(dir).status).toBe(1);
   });
 
+  it.each(['issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'])('fails on a bundle that carries the test-support name %s, even in a lazy chunk', (name) => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Continue")', 'assets/lazy-def.js': `export{${name} as a}` });
+    const result = check(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('lazy-def.js');
+    expect(result.stderr).toContain(name);
+  });
+
+  it('control: names that merely resemble the test-support ones pass', () => {
+    const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'issuePlan(); purgeAuthority(); isBlocked(); neverBlock()' });
+    expect(check(dir).status).toBe(0);
+  });
+
   it('control: a bundle with similar but allowed words passes', () => {
     const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Diagnostics are off"); y("diag"); z("[diagram]")' });
     expect(check(dir).status).toBe(0);

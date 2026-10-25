@@ -209,7 +209,13 @@ async function tombstone(deps: PurgeDeps, id: string, options: PurgeOptions): Pr
     // A person may take over an automatic tombstone that got stuck; nothing else may touch a row that is being purged.
     if (flag !== 0 && !(options.mode === 'user_confirmed' && flag === TOMBSTONE_AUTO)) return refused('tombstoned');
     // A person's word removes a quarantined inspection, or one a suspicious answer named; never a healthy one.
-    if (options.mode === 'user_confirmed' && flag === 0 && row.quarantine_source === null && !namesMassSuspicious(options.plan, id, account)) return refused('not_quarantined');
+    if (options.mode === 'user_confirmed' && flag === 0 && row.quarantine_source === null) {
+      if (!namesMassSuspicious(options.plan, id, account)) return refused('not_quarantined');
+      // The plan is evidence about the state it saw. Minutes later the person may have kept editing, or the server may list the
+      // inspection again; the confirmation covers only what the plan looked at, so any change refuses (a missing fingerprint too).
+      const seen = options.plan?.fingerprints[id];
+      if (seen === undefined || (await fingerprintOf(tx, id)) !== seen) return refused('changed');
+    }
     if (options.mode === 'auto' && row.quarantine_source !== null) return refused('quarantined');
     if (createOps.length > 0 && (await count(tx, `SELECT COUNT(*) AS n FROM outbox WHERE inspection_id = ? AND op IN (${createOps.map(() => '?').join(', ')})`, [id, ...createOps])) > 0) {
       return refused('create_pending');
