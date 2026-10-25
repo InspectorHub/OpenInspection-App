@@ -1,7 +1,8 @@
 import type { Clock } from '../platform/clock';
 import type { SecureStore } from '../platform/secure-store';
-import { AuthError, isAuthError } from './errors';
+import { AuthError, isAuthError, type RetryCause } from './errors';
 import type { Http } from './http';
+import { causeOfReason, codeForRetry } from './retry-cause';
 import { fetchSession, refreshTokenKey, serverEndpoints, type SessionInfo } from './server-config';
 
 export const NATIVE_SCOPE = 'native';
@@ -34,7 +35,7 @@ export type RefreshResult =
   | { kind: 'ok'; accessToken: string; expiresAt: number }
   | { kind: 'relogin' }
   | { kind: 'signed_out' }
-  | { kind: 'retry'; reason: RetryReason; retryAfterMs: number };
+  | { kind: 'retry'; reason: RetryReason; retryAfterMs: number; cause: RetryCause };
 
 export type FailureClass = { kind: 'relogin' } | { kind: 'retry'; reason: Exclude<RetryReason, 'network' | 'timeout' | 'storage' | 'backoff' | 'superseded'>; retryAfterMs: number | null };
 
@@ -150,7 +151,7 @@ export type SessionCheck =
   | { kind: 'ok'; session: SessionInfo }
   | { kind: 'relogin' }
   | { kind: 'signed_out' }
-  | { kind: 'retry'; reason: RetryReason; retryAfterMs: number };
+  | { kind: 'retry'; reason: RetryReason; retryAfterMs: number; cause: RetryCause };
 
 export interface TokenManager {
   /** Stores the tokens of a completed sign-in: the refresh token first, then the in-memory access token. */
@@ -176,12 +177,13 @@ export interface TokenManager {
   revokeRefreshToken(origin: string, refreshToken: string): Promise<void>;
 }
 
-/** The error a caller sees when a token could not be had and the session is still fine. */
-function codeForRetry(reason: RetryReason): 'server_timeout' | 'storage_failed' | 'server_response_invalid' | 'server_unreachable' {
-  if (reason === 'timeout') return 'server_timeout';
-  if (reason === 'storage') return 'storage_failed';
-  if (reason === 'malformed') return 'server_response_invalid';
-  return 'server_unreachable';
+/** The retry reason of an error thrown while asking the session endpoint: only a connection failure or a timeout is "no answer". */
+function reasonOfError(err: unknown): RetryReason {
+  if (!isAuthError(err)) return 'malformed';
+  if (err.code === 'server_timeout') return 'timeout';
+  if (err.code === 'server_unreachable') return 'network';
+  if (err.code === 'storage_failed') return 'storage';
+  return 'malformed';
 }
 
 function formBody(values: Record<string, string>): { headers: Record<string, string>; body: string } {
@@ -232,7 +234,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   const signOutEpochs = new Map<string, number>();
   /** Origins whose sign-in is storing its token; settles once the write finished or failed. */
   const adopting = new Map<string, Promise<void>>();
-  const backoff = new Map<string, { until: number; attempt: number }>();
+  /** The cause is kept so a request that is held back by the wait says what began it, not that the server was reached or not. */
+  const backoff = new Map<string, { until: number; attempt: number; cause: RetryCause }>();
   let activeOrigin: string | null = null;
   let access: { token: string; expiresAt: number } | null = null;
 
@@ -279,8 +282,9 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
   function retry(origin: string, reason: RetryReason, retryAfterMs: number | null): Extract<RefreshResult, { kind: 'retry' }> {
     const attempt = (backoff.get(origin)?.attempt ?? 0) + 1;
     const delay = backoffMs(attempt, retryAfterMs, random);
-    backoff.set(origin, { until: deps.clock.now() + delay, attempt });
-    return { kind: 'retry', reason, retryAfterMs: delay };
+    const cause = causeOfReason(reason);
+    backoff.set(origin, { until: deps.clock.now() + delay, attempt, cause });
+    return { kind: 'retry', reason, retryAfterMs: delay, cause };
   }
 
   async function runRefresh(origin: string, generation: number): Promise<RefreshResult> {
@@ -362,7 +366,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     if (running) return running;
     const waiting = backoff.get(origin);
     if (!options.ignoreBackoff && waiting && deps.clock.now() < waiting.until) {
-      return Promise.resolve({ kind: 'retry', reason: 'backoff', retryAfterMs: waiting.until - deps.clock.now() });
+      return Promise.resolve({ kind: 'retry', reason: 'backoff', retryAfterMs: waiting.until - deps.clock.now(), cause: waiting.cause });
     }
     const flight = runRefresh(origin, generationOf(origin)).finally(() => {
       flights.delete(origin);
@@ -379,7 +383,8 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
     if (result.kind === 'ok') return result.accessToken;
     // A refresh that reached no verdict (no connection, a timeout, a 5xx, a rate limit, a back-off) is not "no token":
     // null is for a signed-out or refused session only, because every caller reads null as "sign in again".
-    if (result.kind === 'retry') throw new AuthError(codeForRetry(result.reason));
+    // A thrown error carries no Retry-After: the callers wait by their own back-off, and the token manager keeps the server's.
+    if (result.kind === 'retry') throw new AuthError(codeForRetry(result.reason, result.cause), result.cause);
     return null;
   }
 
@@ -402,7 +407,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
      */
     const overtaken = (): SessionCheck | null => {
       if (signOutEpochOf(origin) !== epoch || isSigningOut(origin)) return { kind: 'signed_out' };
-      if (generationOf(origin) !== generation) return { kind: 'retry', reason: 'superseded', retryAfterMs: 0 };
+      if (generationOf(origin) !== generation) return { kind: 'retry', reason: 'superseded', retryAfterMs: 0, cause: 'none' };
       return null;
     };
     try {
@@ -427,7 +432,7 @@ export function createTokenManager(deps: TokenDeps): TokenManager {
       await notify(() => deps.onRevoked?.());
       return { kind: 'relogin' };
     } catch (err) {
-      return retry(origin, isAuthError(err) && err.code === 'server_timeout' ? 'timeout' : 'network', null);
+      return retry(origin, reasonOfError(err), null);
     }
   }
 

@@ -229,7 +229,7 @@ describe('api client', () => {
   });
 
   it('a session check that says retry, or throws, or a token read that throws, are all offline (the request was not applied)', async () => {
-    const retry = rig([response(401)], { session: { kind: 'retry', reason: 'network', retryAfterMs: 1 } });
+    const retry = rig([response(401)], { session: { kind: 'retry', reason: 'network', retryAfterMs: 1, cause: 'no_answer' } });
     expect(await createApiClient(retry.deps).send({ method: 'POST', path: '/api/x', json: {} })).toEqual({ kind: 'problem', problem: 'offline' });
     const throwingSession = rig([response(401)]);
     throwingSession.deps.tokens.checkSession = () => Promise.reject(new Error('x'));

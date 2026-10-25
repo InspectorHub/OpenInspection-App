@@ -902,7 +902,7 @@ describe('a session answer that completes after the sign-in it belongs to was en
     await entered;
     await m.adopt(r.origin, await issueTokens(r.server, r.clientId));
     release();
-    expect(await check).toEqual({ kind: 'retry', reason: 'superseded', retryAfterMs: 0 });
+    expect(await check).toEqual({ kind: 'retry', reason: 'superseded', retryAfterMs: 0, cause: 'none' });
     expect(confirmed).toEqual([]);
   });
 });

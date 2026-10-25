@@ -68,15 +68,25 @@ export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
   storage_failed: 'The sign-in could not be saved on this device.',
 };
 
+/**
+ * What a failed attempt to get a token says about the server, carried as a structured fact so nobody has to guess it from the
+ * error code: `no_answer` (no connection, or none in time), `answered` (the server replied but not with a usable token),
+ * `local` (this device's own storage failed), `upgrade_required` (the server refuses this app version) and `none` (nothing).
+ */
+export type RetryCause = 'no_answer' | 'answered' | 'local' | 'upgrade_required' | 'none';
+
 export class AuthError extends Error {
   readonly code: AuthErrorCode;
   readonly messageKey: string;
+  /** Set only on an error that a failed token fetch throws; absent on every other `AuthError`. */
+  readonly retryCause: RetryCause | undefined;
 
-  constructor(code: AuthErrorCode) {
+  constructor(code: AuthErrorCode, retryCause?: RetryCause) {
     super(AUTH_ERROR_MESSAGES[code]);
     this.name = 'AuthError';
     this.code = code;
     this.messageKey = AUTH_ERROR_MESSAGE_KEYS[code];
+    this.retryCause = retryCause;
   }
 }
 

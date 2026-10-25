@@ -82,6 +82,9 @@ export const REFRESH_THREW_TEXT = 'The download did not finish. Try again.';
 /** The network is up but the last contact with the server got no answer. Nothing is wrong with the sign-in. */
 export const SERVER_UNREACHABLE_TEXT = "The server can't be reached right now. Your work is saved on this device and will sync when it is back.";
 
+/** The server answered but sync cannot go on, or this device's storage failed. Not a sign-in problem, and not an unreachable server. */
+export const SYNC_PAUSED_TEXT = 'Sync is paused. The app will try again shortly.';
+
 /** One sentence group for what a download run did. */
 export function refreshSummaryText(summary: RefreshSummary): string {
   if (summary.halted !== null) {

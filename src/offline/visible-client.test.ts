@@ -361,7 +361,7 @@ describe('authentication', () => {
   it('a 401 whose session check says to retry later is a failure with that wait', async () => {
     const r = rig();
     r.script = [json(401, { success: false })];
-    const { client } = makeClient(r, { checkSession: () => Promise.resolve({ kind: 'retry', reason: 'server', retryAfterMs: 4000 }) });
+    const { client } = makeClient(r, { checkSession: () => Promise.resolve({ kind: 'retry', reason: 'server', retryAfterMs: 4000, cause: 'answered' }) });
     expect(await client.check(['a'])).toEqual({ kind: 'failed', reason: 'auth_retry', retryAfterMs: 4000 });
   });
 
@@ -507,7 +507,7 @@ describe('the session probe', () => {
   });
 
   it('a 401 whose check says retry later is a failure', async () => {
-    const { probe } = probeWith([json(401, {})], { checkSession: () => Promise.resolve({ kind: 'retry', reason: 'server', retryAfterMs: 10 }) });
+    const { probe } = probeWith([json(401, {})], { checkSession: () => Promise.resolve({ kind: 'retry', reason: 'server', retryAfterMs: 10, cause: 'answered' }) });
     expect(await probe.check()).toEqual({ kind: 'failed' });
   });
 });

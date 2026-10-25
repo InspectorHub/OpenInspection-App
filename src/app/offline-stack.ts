@@ -65,6 +65,8 @@ export interface StackStatus {
   auth: boolean;
   /** The latest contact with the server got no answer (no connection, or none in time) while nothing was refused. Cleared by the next answer. */
   serverUnreachable: boolean;
+  /** The server answered but sync cannot go on (an unusable answer to the token request), or this device's own storage failed. Never both this and `serverUnreachable`. Cleared by the next real success or an unlock. */
+  syncPaused: boolean;
   /** The server refuses this app version. Stays until the stack ends (the app has to be updated). */
   upgrade: boolean;
   /** A document could not be stored: the person must be told their edits are not being saved. Sticky until the stack ends. */
@@ -87,6 +89,9 @@ export interface EditorPorts {
   /** The live document of the open inspection, or null when the host cannot hand it out (the photo step then waits: `DOC_BUSY`). */
   liveDoc?(inspectionId: string): Doc | null;
 }
+
+/** Both grey lines off: nothing is known to be wrong with the server contact. */
+const NO_GREY_LINE = { serverUnreachable: false, syncPaused: false } as const;
 
 export interface OfflineStackDeps {
   db: Db;
@@ -291,9 +296,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   const diagnosticRing = createDiagnosticRing<StackDiagnostic>();
   const handles = new Set<{ destroy(): void }>();
   const editorListeners = new Set<(event: EditorEvent) => void>();
-  const status = createStore<StackStatus>({ auth: false, serverUnreachable: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never' });
+  const status = createStore<StackStatus>({ auth: false, serverUnreachable: false, syncPaused: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never' });
   // Every server contact reports whether the server answered, so a refused connection is told apart from a refused sign-in.
-  const { http, tokens } = observeServerContact(deps.http, deps.tokens, { reached: () => status.patch({ serverUnreachable: false }), unreachable: () => status.patch({ serverUnreachable: true }) });
+  const { http, tokens } = observeServerContact(deps.http, deps.tokens, { reached: () => status.patch(NO_GREY_LINE), unreachable: () => status.patch({ serverUnreachable: true, syncPaused: false }), paused: () => status.patch({ serverUnreachable: false, syncPaused: true }) });
 
   function report(code: StackDiagnostic): () => void {
     return () => {
@@ -837,7 +842,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       teardown.push(
         deps.onTokenVerified(() => {
           if (stopped) return;
-          status.patch({ auth: false });
+          // A genuine refresh or a confirmed session: the server answered and gave a token, whichever http it went through.
+          status.patch({ auth: false, ...NO_GREY_LINE });
           // Before the start sequence has reached the reconciler, its own first flow covers this.
           triggerReconcile('token');
           // A run of uploads halted for the sign-in resumes at once instead of waiting for its slow timer.
@@ -846,6 +852,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       );
     }
     if (stopped || (await lockedNow())) return;
+    // A line that was true before the device locked is not known to be true after it unlocks. (A stack that starts locked has no line.)
+    if (deps.onUnlocked) teardown.push(deps.onUnlocked(() => status.patch(NO_GREY_LINE)));
     connector.onLockChange();
     enqueueLaunch();
   }

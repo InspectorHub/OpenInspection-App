@@ -486,7 +486,7 @@ describe('when the ticket is refused for authentication', () => {
 
   it('asks the token manager when there is no access token, and retries when it only says "later"', async () => {
     world.tokens.getAccessToken.mockResolvedValueOnce(null);
-    world.tokens.checkSession.mockResolvedValueOnce({ kind: 'retry', reason: 'network', retryAfterMs: 7_000 });
+    world.tokens.checkSession.mockResolvedValueOnce({ kind: 'retry', reason: 'network', retryAfterMs: 7_000, cause: 'no_answer' });
     const handle = connect(world);
     await world.statuses.waitFor(2);
     expect(world.requests).toHaveLength(0);
