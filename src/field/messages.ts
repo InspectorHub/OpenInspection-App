@@ -1,0 +1,50 @@
+import type { CommandResult } from '@inspectorhub/field-ui';
+
+/**
+ * The sentences the editor shows. `CommandResult.error` is displayed verbatim to the inspector, so it is always one
+ * of these readable sentences and never an internal code. Code that has to recognise a result uses the predicates
+ * below, not the text of the sentence at a call site.
+ */
+export const MESSAGES = {
+  needsConnection: 'This needs an internet connection. Connect and try again.',
+  blocked: 'This inspection is being removed from this device and cannot be used right now.',
+  unavailable: 'This inspection is not available on this device.',
+  notDownloaded: 'This inspection has not finished downloading to this device. Connect to the internet and open it again.',
+  notSaved: 'The change could not be stored on this device. Try again.',
+  invalidValue: 'One of the values is not valid. Check it and try again.',
+  upgradeRequired: 'This version of the app is too old to do that. Update the app and try again.',
+  sessionExpired: 'Your session has expired. Sign in again to continue.',
+  forbidden: 'Your account is not allowed to do that.',
+  requestFailed: 'The server could not complete that. Try again.',
+  timedOut: 'The server took too long to answer. The change may or may not have been saved, so check before trying again.',
+  stillSaving: 'The server is still saving your earlier attempt. Check the inspection before trying again; the change may already be there.',
+  publishFailed: 'Could not publish the report. Try again.',
+  structureNotSaved: 'The structure change was not saved. Try again.',
+  syncNotConverged: 'Structure saved, but live sync did not converge. Reload to continue editing.',
+  noSourceTemplate: 'There is no source template to update.',
+  sourceTemplateUnreadable: 'Could not load the source template to update it.',
+  sourceTemplateUnnamed: 'The source template has no name.',
+  missingItem: 'Missing item.',
+  followupNeedsLiveEditing: 'Live editing is not enabled on this deployment, so the follow-up verdict cannot be saved.',
+  followupAmbiguous: 'This item appears in more than one unit of this round; the verdict was not recorded.',
+  followupNotSaved: 'The follow-up verdict was not saved.',
+  instanceNotRecorded: 'Could not record that instance.',
+  unreadableAnswer: 'The server sent an answer the app could not read.',
+} as const;
+
+export function needsConnectionResult<D = undefined>(data?: D): CommandResult<D> {
+  return data === undefined ? { ok: false, error: MESSAGES.needsConnection } : { ok: false, error: MESSAGES.needsConnection, data };
+}
+
+export function blockedResult(): CommandResult {
+  return { ok: false, error: MESSAGES.blocked };
+}
+
+export function failure(error: string): CommandResult {
+  return { ok: false, error };
+}
+
+/** True for a result that asks the person to connect. The one place that knows how such a result looks. */
+export function isNeedsConnection(result: CommandResult<unknown>): boolean {
+  return !result.ok && result.error === MESSAGES.needsConnection;
+}

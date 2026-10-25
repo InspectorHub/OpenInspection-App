@@ -187,6 +187,12 @@ const updateFields: Readonly<Record<string, Field>> = {
   referenceNumber: nullable(str(0, 64)),
 };
 
+/**
+ * The keys `inspection.update` keeps. `parse` drops every other key without a word, so a caller that wants to queue a
+ * change must check its keys against this list first: a superset would be stored as a smaller change than the person made.
+ */
+export const UPDATE_FIELD_NAMES: readonly string[] = Object.keys(updateFields);
+
 const parseCreate = shape(createFields, ['id', 'propertyAddress', 'templateId']);
 const parseChanges = shape(updateFields, []);
 const parseInspectionRef = shape({ inspectionId: localId }, ['inspectionId']);

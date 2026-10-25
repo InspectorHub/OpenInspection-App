@@ -8,9 +8,11 @@ const MAX_RETRY_AFTER_MS = 3_600_000;
 
 export interface HttpRequest {
   url: string;
-  method: 'GET' | 'POST' | 'PATCH';
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   headers?: Record<string, string>;
   body?: string;
+  /** An upload, sent instead of `body`. The platform sets the multipart content type, so a caller must not. */
+  form?: FormData;
   timeoutMs?: number;
   maxBytes?: number;
 }
@@ -163,7 +165,7 @@ export function createHttp(deps: HttpDeps): Http {
           response = await deps.fetch(req.url, {
             method: req.method,
             headers: { ...deps.defaultHeaders, ...req.headers },
-            body: req.body,
+            body: req.form ?? req.body,
             redirect: 'manual',
             credentials: 'omit',
             cache: 'no-store',
