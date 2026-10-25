@@ -34,6 +34,22 @@ export const MESSAGES = {
   followupNotSaved: 'The follow-up verdict was not saved.',
   instanceNotRecorded: 'Could not record that instance.',
   unreadableAnswer: 'The server sent an answer the app could not read.',
+  photoTooLarge: 'This photo is larger than 10 MB and cannot be uploaded.',
+  photoTypeUnsupported: 'Only JPEG, PNG and HEIC photos can be uploaded.',
+  photoNotPrepared: 'The photo could not be prepared for upload. Try again.',
+  photoUploadFailed: 'The photo could not be uploaded. Try again.',
+  photoGone: 'The photo this change belongs to is no longer in the inspection.',
+  unreachable: 'The app could not reach the server. Try again.',
+  videoRemovalUnavailable: 'Removing a video is not available in the app yet.',
+  videoTooLarge: 'This video is larger than 200 MB and cannot be uploaded.',
+  videoTypeUnsupported: 'Only MP4 and QuickTime videos can be uploaded.',
+  videoDiskFull: 'There is not enough free space on this device to keep the video.',
+  posterNotSaved: 'The poster frame was not saved.',
+  videoNotPrepared:'The video could not be prepared for upload. Try again.',
+  prefsNotSaved: 'The preferences were not saved.',
+  commentNotSaved: 'The comment was not saved.',
+  aiUnavailable: 'AI writing assistance is unavailable right now.',
+  linkBlocked:'Only secure links can be opened from the app.',
 } as const;
 
 export function needsConnectionResult<D = undefined>(data?: D): CommandResult<D> {
@@ -41,6 +57,15 @@ export function needsConnectionResult<D = undefined>(data?: D): CommandResult<D>
 }
 
 export function blockedResult(): CommandResult {
+  return { ok: false, error: MESSAGES.blocked };
+}
+
+/** Like `failure`, typed for any command's data: a refusal never carries any. */
+export function failureOf<D>(error: string): CommandResult<D> {
+  return { ok: false, error };
+}
+
+export function blockedOf<D>(): CommandResult<D> {
   return { ok: false, error: MESSAGES.blocked };
 }
 

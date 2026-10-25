@@ -16,6 +16,8 @@ export interface ApiCall {
   method: ApiMethod;
   /** An `/api/...` path built with `apiPath`. */
   path: string;
+  /** Query parameters, appended encoded after the path. The path itself never carries a query. */
+  query?: Record<string, string>;
   json?: unknown;
   /** An upload. The platform sets the multipart content type. */
   form?: FormData;
@@ -86,6 +88,12 @@ export function apiPath(inspectionId: string, ...segments: string[]): string {
   return ['/api/inspections', encodeURIComponent(inspectionId), ...segments.map(checkedSegment)].join('/');
 }
 
+/** A fixed `/api/...` route (no query, no dot segments) with checked, encoded segments after it: `/api/admin/comments/<id>/touch`. */
+export function apiRoute(base: string, ...segments: string[]): string {
+  assertSendable(base);
+  return [base, ...segments.map(checkedSegment)].join('/');
+}
+
 /** `/api/inspections/templates` or one template under it. */
 export function templatePath(templateId?: string): string {
   return templateId === undefined ? '/api/inspections/templates' : `/api/inspections/templates/${checkedSegment(templateId)}`;
@@ -112,6 +120,11 @@ async function open(gate: ApiClientDeps['gate']): Promise<boolean> {
 export function createApiClient(deps: ApiClientDeps): Api {
   const clientHeaders = safeClientHeaders(deps.clientHeaders ?? {}, ['content-type', 'idempotency-key']);
 
+  function urlOf(call: ApiCall): string {
+    const entries = Object.entries(call.query ?? {});
+    return `${deps.origin}${call.path}${entries.length === 0 ? '' : `?${new URLSearchParams(entries).toString()}`}`;
+  }
+
   async function send(call: ApiCall): Promise<ApiOutcome> {
     assertSendable(call.path);
     let refreshed = false;
@@ -133,7 +146,7 @@ export function createApiClient(deps: ApiClientDeps): Api {
       let res: HttpResponse;
       try {
         res = await deps.http.request({
-          url: `${deps.origin}${call.path}`,
+          url: urlOf(call),
           method: call.method,
           headers,
           ...(call.form !== undefined ? { form: call.form } : call.json !== undefined ? { body: JSON.stringify(call.json) } : {}),

@@ -3,7 +3,7 @@ import { AuthError } from '../auth/errors';
 import { createHttp, type Http, type HttpRequest, type HttpResponse } from '../auth/http';
 import type { TokenManager } from '../auth/tokens';
 import { installStrictGlobals, restoreGlobals } from '../test-support/strict-globals';
-import { apiPath, createApiClient, templatePath, type ApiClientDeps } from './api-client';
+import { apiPath, apiRoute, createApiClient, templatePath, type ApiClientDeps } from './api-client';
 
 const ORIGIN = 'https://app.example.com';
 
@@ -70,6 +70,13 @@ describe('api path', () => {
     for (const bad of ['..', '', '%2e%2e', 'a/b']) expect(() => templatePath(bad)).toThrow(RangeError);
   });
 
+  it('apiRoute joins checked, encoded segments to a fixed route', () => {
+    expect(apiRoute('/api/admin/comments')).toBe('/api/admin/comments');
+    expect(apiRoute('/api/admin/comments', 'c 1', 'touch')).toBe('/api/admin/comments/c%201/touch');
+    for (const bad of ['..', '', '%2e%2e', 'a/b']) expect(() => apiRoute('/api/admin/comments', bad), bad).toThrow(RangeError);
+    for (const base of ['/other', '/api/x?y=1', '/api/../admin', 'https://evil.example/api/x']) expect(() => apiRoute(base), base).toThrow(RangeError);
+  });
+
   it('refuses an id that is not an inspection id', () => {
     expect(() => apiPath('../x')).toThrow(RangeError);
     expect(() => apiPath('bulk')).toThrow(RangeError);
@@ -99,6 +106,23 @@ describe('api client', () => {
     await api.send({ method: 'POST', path: '/api/inspections/i1/units', json: {} });
     expect(r.requests[0]?.headers).toMatchObject({ 'Idempotency-Key': 'key-1' });
     expect(r.requests[1]?.headers).not.toHaveProperty('Idempotency-Key');
+  });
+
+  it('appends query parameters encoded after the path, and only when there are some', async () => {
+    const r = rig([response(200), response(200), response(200)]);
+    const api = createApiClient(r.deps);
+    await api.send({ method: 'GET', path: '/api/inspections/templates', query: { page: '1', q: 'a b&c=d' } });
+    await api.send({ method: 'GET', path: '/api/inspections/templates', query: {} });
+    await api.send({ method: 'GET', path: '/api/inspections/templates' });
+    expect(r.requests[0]?.url).toBe(`${ORIGIN}/api/inspections/templates?page=1&q=a+b%26c%3Dd`);
+    expect(r.requests[1]?.url).toBe(`${ORIGIN}/api/inspections/templates`);
+    expect(r.requests[2]?.url).toBe(`${ORIGIN}/api/inspections/templates`);
+  });
+
+  it('a query in the path itself is still refused, whatever query parameters are given', async () => {
+    const r = rig([response(200)]);
+    await expect(createApiClient(r.deps).send({ method: 'GET', path: '/api/x?y=1', query: { a: 'b' } })).rejects.toThrow(RangeError);
+    expect(r.requests).toHaveLength(0);
   });
 
   it('sends a form without setting its content type', async () => {
