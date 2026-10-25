@@ -156,6 +156,8 @@ export interface ReconcilerHandle {
   trigger(reason: ReconcileReason): void;
   onNeedsReconcile(inspectionId: string): void;
   readonly last: ReconcileOutcome;
+  /** Settles when no reconcile flow is running or queued. Optional only so test doubles need not supply it; the real stack always does. */
+  idle?(): Promise<void>;
 }
 
 export interface BoundUserActions {
@@ -888,6 +890,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       get last() {
         return reconcile.last;
       },
+      idle: () => reconcile.idle(),
     },
     mediaReconciler: media,
     uploader,

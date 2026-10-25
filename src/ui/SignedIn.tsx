@@ -1,10 +1,12 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import { useOfflineStack } from '../app/stack-context';
 import type { StoredIdentity } from '../auth/server-config';
+import { reconcileGateFor } from '../export/reconcile-gate';
 import { ClientNotices } from './ClientNotices';
 import { ConfirmDialog } from './ConfirmDialog';
 import { DevDiagnostics } from './dev-diagnostics';
+import { ExportFlow } from './ExportFlow';
 import { Body, Button, Heading, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor } from './messages';
@@ -35,9 +37,12 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What the open export covers: everything (an empty object) or the listed inspections (a quarantined row's own export).
+  const [exporting, setExporting] = useState<{ only?: readonly string[] } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const latch = useActionLatch();
   const stack = useOfflineStack();
+  const reconcile = useMemo(() => (stack === null ? undefined : reconcileGateFor(stack.reconciler)), [stack]);
   // After the first-level heading: the notices have second-level ones.
   const notices = <ClientNotices services={services} origin={origin} />;
 
@@ -65,9 +70,12 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
         <>
           <Heading>Work list</Heading>
           {notices}
+          <Button variant="secondary" onClick={() => setExporting({})}>
+            Export unsent data
+          </Button>
         </>
       ) : (
-        <WorkList stack={stack} notices={notices} />
+        <WorkList stack={stack} notices={notices} onExportAll={() => setExporting({})} onExport={(inspectionId) => setExporting({ only: [inspectionId] })} />
       )}
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>
@@ -82,6 +90,7 @@ export function SignedIn({ services, origin, identity, onSignedOut }: SignedInPr
         Sign out
       </Button>
       <DevDiagnostics services={services} origin={origin} />
+      {exporting !== null && <ExportFlow services={services} reconcile={reconcile} only={exporting.only} onClose={() => setExporting(null)} />}
       {confirming && (
         <ConfirmDialog
           title="Sign out of this device?"

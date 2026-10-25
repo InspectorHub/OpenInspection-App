@@ -26,10 +26,12 @@ export interface WorkListProps {
   /** The editor opens here (Task 9). The default does nothing. A quarantined or removing row never calls it. */
   onOpenInspection?: (inspectionId: string) => void;
   /**
-   * Offers an export on quarantined rows, with the responsibility wording. Without it no export is offered. `SignedIn` does not
-   * supply it yet (Task 11 builds the export), so the quarantined rows of the real app show no export button for now.
+   * Offers an export on quarantined rows, with the responsibility wording. Without it no export is offered. `SignedIn` supplies it
+   * and opens the export of that one inspection.
    */
   onExport?: (inspectionId: string) => void;
+  /** Opens the export of everything on the device, from the header. Without it the header offers none. */
+  onExportAll?: () => void;
   /** Link state. Without it the page's own online and offline events are used. */
   network?: Pick<Network, 'online' | 'onChange'>;
   now?: () => number;
@@ -72,7 +74,7 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
  * The home of a signed-in device: today's work, what is on the device, and what has not reached the server. Everything
  * shown is read from the database through the stack; the screen remembers only what it is in the middle of doing.
  */
-export function WorkList({ stack, onOpenInspection, onExport, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices }: WorkListProps) {
+export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices }: WorkListProps) {
   const language = locale ?? (typeof navigator === 'undefined' ? undefined : navigator.language);
   const model = useWorkListModel(stack, { now, pollMs });
   const status = useSyncExternalStore(stack.status.subscribe, stack.status.get);
@@ -142,6 +144,7 @@ export function WorkList({ stack, onOpenInspection, onExport, network, now = Dat
           downloading={downloading}
           summary={summary}
           onDownload={() => void latch(download)}
+          onExport={onExportAll}
           headingRef={headingRef}
         />
         {notices}

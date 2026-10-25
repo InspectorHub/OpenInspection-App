@@ -12,6 +12,8 @@ export interface WorkListHeaderProps {
   /** The sentence about the last download, or null. */
   summary: string | null;
   onDownload(): void;
+  /** Opens the export of everything this device holds. Without it the header offers none. */
+  onExport?: (() => void) | undefined;
   headingRef: Ref<HTMLHeadingElement>;
 }
 
@@ -30,7 +32,7 @@ function ConnectionChip({ online }: { online: boolean | null }) {
  * pull-to-refresh gesture is NOT implemented: this always-visible button is the only way to start a download, and it runs
  * the single flight the refresher allows.
  */
-export function WorkListHeader({ updatedAt, now, locale, online, downloading, summary, onDownload, headingRef }: WorkListHeaderProps) {
+export function WorkListHeader({ updatedAt, now, locale, online, downloading, summary, onDownload, onExport, headingRef }: WorkListHeaderProps) {
   return (
     <header className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
@@ -45,6 +47,11 @@ export function WorkListHeader({ updatedAt, now, locale, online, downloading, su
       <Button busy={downloading} onClick={onDownload}>
         Download today&apos;s work
       </Button>
+      {onExport !== undefined && (
+        <Button variant="quiet" onClick={onExport}>
+          Export unsent data
+        </Button>
+      )}
       <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} />
     </header>
   );

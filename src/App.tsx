@@ -4,6 +4,7 @@ import { loadIdentity, type StoredIdentity } from './auth/server-config';
 import type { CallbackRouter } from './app/callbacks';
 import type { AppServices } from './app/compose';
 import { appDiagnostics } from './app/diagnostics';
+import { APP_START_SWEEP_AGE_MS, sweepStaleExports } from './export/sweep';
 import { createUnlockEmitter } from './app/lock-events';
 import { OfflineStackContext } from './app/stack-context';
 import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
@@ -11,6 +12,7 @@ import type { Network } from './platform/network';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
 import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
+import { ExportFlow } from './ui/ExportFlow';
 import { Locked } from './ui/Locked';
 import { ServerSetup } from './ui/ServerSetup';
 import { SignedIn } from './ui/SignedIn';
@@ -71,6 +73,7 @@ async function backToLock(services: AppServices, origin: string, held: StoredIde
 export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline, network }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
+  const [lockedExport, setLockedExport] = useState(false);
   const started = useRef<Promise<BootResult> | null>(null);
   const unlocks = useMemo(() => createUnlockEmitter(), []);
   const insecure = import.meta.env.DEV && allowInsecureHttp;
@@ -89,6 +92,15 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       current = false;
     };
   }, [open, allowInsecureHttp]);
+
+  // An export archive left in the cache by a run that never finished holds customers' data in the clear: remove it at every start.
+  useEffect(() => {
+    if (services) void sweepStaleExports(services.files, services.clock.now(), APP_START_SWEEP_AGE_MS);
+  }, [services]);
+
+  useEffect(() => {
+    if (screen.kind !== 'locked') setLockedExport(false);
+  }, [screen.kind]);
 
   const flow = services?.flow;
   useEffect(() => {
@@ -181,6 +193,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       );
     case 'locked':
       return (
+        <>
         <Locked
           services={services}
           origin={screen.origin}
@@ -191,7 +204,10 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
           }}
           onSignInRequired={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: screen.identity })}
           onCleared={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
+          onExport={() => setLockedExport(true)}
         />
+        {lockedExport && <ExportFlow services={services} onClose={() => setLockedExport(false)} />}
+        </>
       );
     default:
       return <Booting />;
