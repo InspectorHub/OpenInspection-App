@@ -1,4 +1,6 @@
 import type { Db } from '../platform/db';
+import { sweepStaleExports } from '../export/sweep';
+import { MEDIA_DIRECTORY, MEDIA_FILE_PATTERN } from '../media/sweep';
 import type { Files } from '../platform/files';
 import { DEVICE_STATE_KEY_PREFIXES, type DeviceStateKey } from '../platform/schema';
 
@@ -29,12 +31,12 @@ export interface ClearResult {
  * write queue, the resource cache, the work package, and `device_state` except the survivors above.
  * The caller has already asked the person to confirm; nothing else in the app calls this.
  *
- * Files go first and each failure is recorded rather than thrown, so one stuck file cannot keep the
+ * Export archives in the cache and unreferenced media files are removed as well. Files go first and each failure is recorded rather than thrown, so one stuck file cannot keep the
  * rest on the device. Then one statement per table, each atomic by itself, data tables first and
  * `device_state` last: a failure part-way leaves the lock marks in place and a second run finishes
  * the job (repeating is harmless).
  */
-export async function clearLocalData(db: Db, files: Files): Promise<ClearResult> {
+export async function clearLocalData(db: Db, files: Pick<Files, 'remove' | 'list' | 'listCache' | 'removeCache'>, nowMs: number): Promise<ClearResult> {
   const media = await db.query<{ path: string }>('SELECT path FROM media');
   let filesRemoved = 0;
   const filesFailed: string[] = [];
@@ -47,6 +49,24 @@ export async function clearLocalData(db: Db, files: Files): Promise<ClearResult>
     }
   }
 
+  // Files the store wrote that no row points at (a crash between the file and its row) go too, whatever their age: the rows are
+  // being deleted, so nothing can claim them any more. Only names the store writes are touched.
+  try {
+    for (const entry of await files.list(MEDIA_DIRECTORY)) {
+      if (!MEDIA_FILE_PATTERN.test(entry.name)) continue;
+      const path = `${MEDIA_DIRECTORY}/${entry.name}`;
+      if (filesFailed.includes(path)) continue;
+      try {
+        await files.remove(path);
+        filesRemoved += 1;
+      } catch {
+        filesFailed.push(path);
+      }
+    }
+  } catch {
+    // A directory that cannot be listed leaves its files to the orphan sweep of a later start.
+  }
+
   for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'work_package', 'lease'] as const) {
     await db.run(`DELETE FROM ${table}`);
   }
@@ -56,6 +76,9 @@ export async function clearLocalData(db: Db, files: Files): Promise<ClearResult>
   const params: unknown[] = [...DEVICE_STATE_SURVIVORS];
   for (const prefix of DEVICE_STATE_SURVIVOR_PREFIXES) params.push(prefix.length, prefix);
   await db.run(`DELETE FROM device_state WHERE key NOT IN (${keep}) ${prefixTests}`, params);
+
+  // An export archive holds customers' data in the clear: none stays after a clear, whatever its age.
+  await sweepStaleExports(files, nowMs, 0);
 
   return { filesRemoved, filesFailed };
 }

@@ -84,6 +84,16 @@ describe('useEscapeLayer', () => {
   });
 });
 
+describe('a layer that declines', () => {
+  it('leaves the event unused, so the press goes on down the back chain', () => {
+    const onEscape = vi.fn(() => false);
+    render(<Layer onEscape={onEscape} />);
+    const event = escape();
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
 describe('a layer and the back key', () => {
   it('a back press closes the layer first and does not leave the app; a second press leaves it', () => {
     const registry = createBackRegistry();

@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { realTimers, type TimerPort } from '../collab/timers';
 import { useEscapeLayer } from './escape-layer';
 import { haptic } from '../platform/haptics';
 import { Button, Notice } from './kit';
@@ -18,18 +19,38 @@ export interface ConfirmDialogProps {
   error: string | null;
   onConfirm(): void;
   onCancel(): void;
+  /** The timers behind the busy watchdog. Defaults to the real ones. */
+  timers?: TimerPort;
 }
 
+/** A dialog that has been busy this long is treated as stuck: Back and Cancel work again while the action carries on. */
+export const BUSY_WATCHDOG_MS = 30_000;
+
 /** A modal that asks first: Cancel has focus, Escape and Cancel close it, Tab stays inside. Never `window.confirm`. */
-export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 'Cancel', destructive = false, details, confirmDisabled = false, busy, error, onConfirm, onCancel }: ConfirmDialogProps) {
+export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 'Cancel', destructive = false, details, confirmDisabled = false, busy, error, onConfirm, onCancel, timers = realTimers }: ConfirmDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
-  // The back key sends Escape to the window; a dialog that is busy still uses the press up and stays open.
+  // An action that never settles must not trap the person: after the watchdog the dialog can be left, and the action goes on.
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    if (!busy) {
+      setStuck(false);
+      return undefined;
+    }
+    const handle = timers.setTimeout(() => setStuck(true), BUSY_WATCHDOG_MS);
+    return () => timers.clearTimeout(handle);
+  }, [busy, timers]);
+  const holding = busy && !stuck;
+
+  // The back key sends Escape to the window. While the action runs the press is used up and the dialog stays; once the watchdog
+  // has fired the press is not used up here and goes on down the back chain.
   useEscapeLayer(() => {
+    if (stuck) return false;
     if (!busy) onCancel();
+    return true;
   });
 
   const opener = useRef<Element | null>(null);
@@ -53,7 +74,7 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.key === 'Escape') {
       event.stopPropagation();
-      if (!busy) onCancel();
+      if (!holding) onCancel();
       return;
     }
     if (event.key !== 'Tab') return;
@@ -70,7 +91,7 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ih-bg-app/80 p-4 md:items-center" onKeyDown={onKeyDown}>
+    <div className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center" onKeyDown={onKeyDown}>
       <div
         role="alertdialog"
         aria-modal="true"
@@ -94,7 +115,7 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
           >
             {confirmLabel}
           </Button>
-          <Button ref={cancelRef} variant="secondary" disabled={busy} onClick={onCancel}>
+          <Button ref={cancelRef} variant="secondary" disabled={holding} onClick={onCancel}>
             {cancelLabel}
           </Button>
         </div>

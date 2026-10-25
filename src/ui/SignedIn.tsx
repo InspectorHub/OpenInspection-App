@@ -104,7 +104,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, timers }: Si
           </Button>
         </>
       ) : (
-        <WorkList stack={stack} notices={notices} onExportAll={() => setExporting({})} onExport={(inspectionId) => setExporting({ only: [inspectionId] })} />
+        <WorkList stack={stack} notices={notices} onSettings={() => setView('settings')} settingsRef={settingsTrigger} onExportAll={() => setExporting({})} onExport={(inspectionId) => setExporting({ only: [inspectionId] })} />
       )}
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>
@@ -115,9 +115,11 @@ export function SignedIn({ services, origin, identity, onSignedOut, timers }: Si
         <dd className="break-all font-ih-mono text-sm text-ih-fg-1">{origin}</dd>
       </dl>
       <Body>Signing out removes your sign-in from this device. Inspections, photos and anything not yet uploaded stay on the device.</Body>
-      <Button ref={settingsTrigger} variant="secondary" onClick={() => setView('settings')}>
-        Settings
-      </Button>
+      {stack === null && (
+        <Button ref={settingsTrigger} variant="secondary" onClick={() => setView('settings')}>
+          Settings
+        </Button>
+      )}
       <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
       <DevDiagnostics services={services} origin={origin} />
       {exportFlow}

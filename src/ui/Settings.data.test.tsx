@@ -56,6 +56,8 @@ describe('Settings: clear local data', () => {
     const { dialog, user, onCleared } = await ask(world);
     expect(within(dialog).getByTestId('at-risk')).toHaveTextContent('2 photos, clips and changes not uploaded');
     expect(within(dialog).getByTestId('at-risk')).toHaveTextContent('1 inspection created on this device and not yet on the server');
+    // The seeded document has no proof from the server that it holds the edits.
+    expect(within(dialog).getByTestId('at-risk')).toHaveTextContent('1 inspection with edits not yet on the server');
     expect(within(dialog).queryByRole('button', { name: 'Clear local data' })).toBeNull();
 
     await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
@@ -63,7 +65,7 @@ describe('Settings: clear local data', () => {
     expect(await rowCounts(world.db)).toEqual(before);
 
     const second = await screen.findByRole('alertdialog');
-    expect(second).toHaveAccessibleName('Delete 3 items that are not uploaded?');
+    expect(second).toHaveAccessibleName('Delete 4 items that are not uploaded?');
     expect(within(second).getByRole('button', { name: 'Keep my data' })).toHaveFocus();
     expect(await rowCounts(world.db)).toEqual(before);
 
@@ -116,7 +118,7 @@ describe('Settings: clear local data', () => {
     const world = await createSignedInWorld();
     await seedLocalData(world.db);
     await world.files.write('/p', new Uint8Array([1]));
-    const { dialog, user } = await ask(world);
+    const { dialog, user, onCleared } = await ask(world);
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(notify).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Clear local data' }));
@@ -125,6 +127,9 @@ describe('Settings: clear local data', () => {
     await user.click(within(again).getByRole('button', { name: 'Continue' }));
     await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete everything' }));
     await waitFor(() => expect(notify).toHaveBeenCalledWith('warning'));
+    await waitFor(() => expect(onCleared).toHaveBeenCalledTimes(1));
+    // One vibration for the whole flow: the warning on the confirmation, no second one when it finishes.
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('a file that cannot be removed is reported and onCleared waits for the person to close that message', async () => {

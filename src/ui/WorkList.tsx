@@ -1,4 +1,4 @@
-import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useId, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { setPinned } from '../offline/pins';
 import type { Network } from '../platform/network';
@@ -42,6 +42,10 @@ export interface WorkListProps {
   pollMs?: number;
   /** The timers that end a short-lived note. Defaults to the real ones. */
   timers?: TimerPort;
+  /** Opens Settings, from a button in the header. Without it the header offers none. */
+  onSettings?: () => void;
+  /** The header's Settings button, so focus can return to it. */
+  settingsRef?: Ref<HTMLButtonElement>;
   /** Shown right under the page heading, so that notices with their own headings come after the first-level one. */
   notices?: ReactNode;
 }
@@ -75,7 +79,7 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
  * The home of a signed-in device: today's work, what is on the device, and what has not reached the server. Everything
  * shown is read from the database through the stack; the screen remembers only what it is in the middle of doing.
  */
-export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices }: WorkListProps) {
+export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices, onSettings, settingsRef }: WorkListProps) {
   const language = locale ?? (typeof navigator === 'undefined' ? undefined : navigator.language);
   const model = useWorkListModel(stack, { now, pollMs });
   const status = useSyncExternalStore(stack.status.subscribe, stack.status.get);
@@ -150,6 +154,8 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
           onDownload={() => void latch(download)}
           onExport={onExportAll}
           headingRef={headingRef}
+          onSettings={onSettings}
+          settingsRef={settingsRef}
         />
         {notices}
         <StatusStrip status={status} />
@@ -164,7 +170,7 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
             onReview={snapshot.repair.rows.length > 0 ? review : null}
           />
         )}
-        <QuarantineSummary count={quarantined} />
+        <QuarantineSummary count={quarantined} company={snapshot?.company ?? null} exportOffered={onExport !== undefined} />
         {note !== null && <Notice tone="info">{note}</Notice>}
   
         {model.state.phase === 'loading' && <Skeleton />}
@@ -187,7 +193,6 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
                   <InspectionRow
                     row={row}
                     locale={language}
-                    company={snapshot?.company ?? null}
                     onOpen={(r) => onOpenInspection?.(r.id)}
                     onTogglePin={(r) => void latch(() => togglePin(r))}
                     onRemove={(r) => {

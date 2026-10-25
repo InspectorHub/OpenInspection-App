@@ -1,7 +1,7 @@
 import type { Files } from '../platform/files';
 import { EXPORT_FILE_PATTERN, EXPORT_RETAIN_MS } from './format';
 
-/** The age from which a sweep at start, on return to the foreground and on sign-out removes an archive: the bound the export itself keeps. */
+/** The age from which a sweep at start and on return to the foreground removes an archive: the bound the export itself keeps. Signing out and clearing the device sweep with an age of zero. */
 export const SWEEP_AGE_MS = EXPORT_RETAIN_MS;
 
 export interface SweepResult {

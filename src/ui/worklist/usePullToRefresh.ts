@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 
 /** How far a downward drag must go, in CSS pixels, to count as a pull. */
 export const PULL_DISTANCE_PX = 80;
+/** A finger must travel this far before its direction is judged: a small wobble at the start decides nothing. */
+export const TOUCH_SLOP_PX = 10;
 
 function atTop(): boolean {
   const scroller = document.scrollingElement ?? document.documentElement;
@@ -26,10 +28,12 @@ export function usePullToRefresh(onRefresh: () => void, enabled: boolean): void 
     if (!enabled) return undefined;
     let start: { x: number; y: number } | null = null;
     let pulled = 0;
+    let vertical = false;
 
     const reset = (): void => {
       start = null;
       pulled = 0;
+      vertical = false;
     };
     const onStart = (event: TouchEvent): void => {
       const first = event.touches[0];
@@ -39,19 +43,26 @@ export function usePullToRefresh(onRefresh: () => void, enabled: boolean): void 
       }
       start = { x: first.clientX, y: first.clientY };
       pulled = 0;
+      vertical = false;
     };
     const onMove = (event: TouchEvent): void => {
       const first = event.touches[0];
       if (start === null || first === undefined) return;
-      if (event.touches.length !== 1 || !atTop()) {
+      if (event.touches.length !== 1 || !atTop() || modalOpen()) {
         reset();
         return;
       }
       const dy = first.clientY - start.y;
       const dx = first.clientX - start.x;
-      if (dy < 0 || Math.abs(dx) > Math.abs(dy)) {
-        reset();
-        return;
+      if (!vertical) {
+        // The direction is judged once, when the finger has clearly moved: a downward, mostly vertical start is a pull; anything
+        // else is a scroll or a swipe and ends the gesture for good.
+        if (Math.max(Math.abs(dx), Math.abs(dy)) <= TOUCH_SLOP_PX) return;
+        if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) {
+          reset();
+          return;
+        }
+        vertical = true;
       }
       pulled = dy;
     };

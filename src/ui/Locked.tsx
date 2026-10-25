@@ -122,7 +122,7 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
     setClearError(null);
     setClearing(true);
     try {
-      const result = await clearLocalData(services.db, services.files);
+      const result = await clearLocalData(services.db, services.files, services.clock.now());
       await services.tokens.signOut(origin).catch(() => undefined);
       if (result.filesFailed.length > 0) {
         setConfirming(false);

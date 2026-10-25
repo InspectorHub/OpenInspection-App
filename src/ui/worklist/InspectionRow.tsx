@@ -3,7 +3,7 @@ import { Badge } from './Badge';
 import { REFRESH_ERROR_TEXT, plural } from './copy';
 import { shortTitle, whenLabel } from './format';
 import type { WorkListRow } from './model';
-import { ExportBlock, RowQuarantineBanner } from './QuarantineBanner';
+import { ExportButton, RowQuarantineBanner } from './QuarantineBanner';
 
 export const SUSPICIOUS_REMOVE_LABEL = 'No longer on the server — remove from this device';
 export const REMOVE_LABEL = 'Remove from this device';
@@ -11,7 +11,6 @@ export const REMOVE_LABEL = 'Remove from this device';
 export interface InspectionRowProps {
   row: WorkListRow;
   locale: string | undefined;
-  company: string | null;
   onOpen(row: WorkListRow): void;
   onTogglePin(row: WorkListRow): void;
   onRemove(row: WorkListRow): void;
@@ -27,7 +26,7 @@ function edgeOf(row: WorkListRow): string {
   return row.downloaded ? 'border-l-ih-ok' : 'border-l-ih-border-strong';
 }
 
-export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRemove, onExport }: InspectionRowProps) {
+export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onExport }: InspectionRowProps) {
   const title = shortTitle(row);
   const inert = row.blocked !== 'none';
   const when = whenLabel(row.scheduledAt, row.group, locale);
@@ -85,10 +84,10 @@ export function InspectionRow({ row, locale, company, onOpen, onTogglePin, onRem
       {row.blocked === 'purging' && <p className="text-sm text-ih-fg-3">Removing from this device…</p>}
 
       {(row.removable || (quarantined && onExport !== undefined)) && (
-        <div className="relative z-10 flex flex-col gap-3">
-          {quarantined && onExport !== undefined && <ExportBlock company={company} onExport={() => onExport(row.id)} />}
+        <div className="relative z-10 flex flex-col gap-3 sm:flex-row">
+          {quarantined && onExport !== undefined && <ExportButton onExport={() => onExport(row.id)} />}
           {row.removable && (
-            <Button variant="secondary" aria-label={row.namedByPlan ? `No longer on the server — remove ${title} from this device` : `Remove ${title} from this device`} onClick={() => onRemove(row)}>
+            <Button variant="secondary" className="sm:flex-1" aria-label={row.namedByPlan ? `No longer on the server — remove ${title} from this device` : `Remove ${title} from this device`} onClick={() => onRemove(row)}>
               {row.namedByPlan ? SUSPICIOUS_REMOVE_LABEL : REMOVE_LABEL}
             </Button>
           )}

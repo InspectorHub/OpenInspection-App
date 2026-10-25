@@ -7,6 +7,12 @@ function port(check: NotificationState, request: NotificationState = check): Not
   return { check: vi.fn(() => Promise.resolve(check)), request: vi.fn(() => Promise.resolve(request)) } as never;
 }
 
+describe('the memory of the question', () => {
+  it('lives under this exact key; renaming it would ask every existing device again', () => {
+    expect(ASK_KEY).toBe('oi.notification-ask');
+  });
+});
+
 describe('notification ask', () => {
   it('explains once on Android when the permission is still open and the person was never asked', async () => {
     const ask = createNotificationAsk({ kv: createMemoryKeyValue(), permission: port('prompt') });

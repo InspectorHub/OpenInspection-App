@@ -173,6 +173,36 @@ describe('pressBack', () => {
   });
 });
 
+describe('several guards', () => {
+  it('the most recently registered guard is asked first and, when it keeps the person in the app, the others are not asked', () => {
+    const { registry, exit, press } = setup();
+    const lower = vi.fn(() => true);
+    const upper = vi.fn(() => true);
+    registry.registerGuard(lower);
+    registry.registerGuard(upper);
+    press();
+    expect(upper).toHaveBeenCalledTimes(1);
+    expect(lower).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it('a guard that declines passes the press to the guard below it, and when all decline the app exits', () => {
+    const { registry, exit, press } = setup();
+    const order: string[] = [];
+    registry.registerGuard(() => {
+      order.push('lower');
+      return false;
+    });
+    registry.registerGuard(() => {
+      order.push('upper');
+      return false;
+    });
+    press();
+    expect(order).toEqual(['upper', 'lower']);
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('registration', () => {
   it('unregistering removes the handler (no leak), and unregistering twice is harmless', () => {
     const { registry, exit, press } = setup();
@@ -259,6 +289,18 @@ describe('registerBackButton', () => {
     };
     expect(() => registerBackButton(throwing, createBackRegistry())).not.toThrow();
     await Promise.resolve();
+  });
+
+  it('an exit that the plugin rejects is handled: a rejection handler is attached to what exitApp returns', async () => {
+    const { app, press } = fakeApp();
+    const result = Promise.reject(new Error('no activity'));
+    const handled = vi.spyOn(result, 'catch');
+    (app.exitApp as ReturnType<typeof vi.fn>).mockImplementation(() => result);
+    registerBackButton(app, createBackRegistry());
+    press();
+    expect(app.exitApp).toHaveBeenCalledTimes(1);
+    expect(handled).toHaveBeenCalledTimes(1);
+    await result.catch(() => undefined);
   });
 
   it('stop removes the plugin listener', async () => {

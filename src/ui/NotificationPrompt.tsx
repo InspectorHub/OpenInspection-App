@@ -78,6 +78,7 @@ export function NotificationPrompt({ services, exportsClosed, suspended, timers 
           busy={busy}
           error={null}
           onConfirm={() => void latch(() => answer(true))}
+          // Cancel, Escape and the Back key are all "Not now": each is remembered, and none of them asks again.
           onCancel={() => void latch(() => answer(false))}
         />
       )}

@@ -11,7 +11,7 @@ import { compat, open, stackWith } from './test-support/settings-world';
 import { Settings } from './Settings';
 import { LICENSE_URL, SOURCE_URL } from './settings/AboutSection';
 import { LINK_FAILED } from './settings/ExternalLink';
-import { SAVED_OFFLINE_WORK } from './settings/SyncSection';
+import { SAVED_OFFLINE_WORK, SYNC_LEGEND, UNFINISHED_ALWAYS } from './settings/SyncSection';
 
 afterEach(cleanup);
 
@@ -53,11 +53,29 @@ describe('Settings structure', () => {
   });
 });
 
+describe('Back to the list', () => {
+  it('is a left-aligned affordance with a decorative arrow and the visible words Work list, 44 px tall', async () => {
+    const world = await createSignedInWorld();
+    await open(world);
+    const back = screen.getByRole('button', { name: 'Back to work list' });
+    expect(back).toHaveTextContent('Work list');
+    expect(back.className).toContain('self-start');
+    expect(back.className).toContain('min-h-11');
+    expect(back.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(back.className).not.toContain('w-full');
+  });
+});
+
 describe('Sync window', () => {
   it('offers 7, 14 and 30 days, with 14 chosen by default', async () => {
     const world = await createSignedInWorld();
     await open(world);
-    expect(screen.getByRole('group', { name: 'Download work scheduled in the next' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: SYNC_LEGEND })).toBeInTheDocument();
+    // The setting only bounds finished work; the screen says so, and says that unfinished work is always downloaded.
+    expect(SYNC_LEGEND).toBe('Also keep finished work from around today, up to this many days ahead');
+    expect(screen.getByText(UNFINISHED_ALWAYS)).toBeInTheDocument();
+    expect(UNFINISHED_ALWAYS).toBe('Inspections that are not finished are always downloaded.');
+    expect(screen.queryByText(/scheduled in the next/i)).toBeNull();
     await waitFor(() => expect(screen.getByRole('radio', { name: '14 days' })).toBeChecked());
     expect(screen.getByRole('radio', { name: '7 days' })).not.toBeChecked();
     expect(screen.getByRole('radio', { name: '30 days' })).not.toBeChecked();
@@ -238,9 +256,16 @@ describe('Delete account', () => {
     world.services.clientState.applyCompat(world.server.origin, compat({ accountUrl: 'https://accounts.example.test/privacy' }));
     const { services } = await open(world);
     expect(services.openExternal).not.toHaveBeenCalled();
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Delete account, opens in your browser' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Delete account, opens accounts.example.test in your browser' }));
     expect(services.openExternal).toHaveBeenCalledTimes(1);
     expect(services.openExternal).toHaveBeenCalledWith('https://accounts.example.test/privacy');
+  });
+
+  it('shows the host the tap will go to on a visible line, because the label is chosen by the server', async () => {
+    const world = await createSignedInWorld();
+    world.services.clientState.applyCompat(world.server.origin, compat({ accountUrl: 'https://accounts.example.test/privacy' }));
+    await open(world);
+    expect(screen.getByText('Opens accounts.example.test in your browser')).toBeVisible();
   });
 
   it('an address from another server does not appear for this one', async () => {

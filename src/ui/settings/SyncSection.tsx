@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { AppServices } from '../../app/compose';
 import type { OfflineStack } from '../../app/offline-stack';
 import { SYNC_WINDOW_CHOICES, syncWindowChoice, writeSyncDays, type SyncWindowChoice } from '../../offline/sync-window';
@@ -9,6 +9,8 @@ import { REFRESH_THREW_TEXT, refreshSummaryText } from '../worklist/copy';
 import { LiveNote } from '../worklist/LiveNote';
 
 export const SAVE_FAILED = 'The setting could not be saved. Try again.';
+export const SYNC_LEGEND = 'Also keep finished work from around today, up to this many days ahead';
+export const UNFINISHED_ALWAYS = 'Inspections that are not finished are always downloaded.';
 export const SAVED_OFFLINE_WORK = 'Saved. The next download uses this window.';
 
 export interface SyncSectionProps {
@@ -30,6 +32,10 @@ export function SyncSection({ services, stack, canSync }: SyncSectionProps) {
   const [note, setNote] = useState('');
   const [failed, setFailed] = useState(false);
   const latch = useActionLatch();
+  // One download at a time from this screen. The refresher joins a run already in flight, and that run read the window before the
+  // latest choice, so a choice made meanwhile queues exactly one more download after it.
+  const running = useRef(false);
+  const again = useRef(false);
 
   useEffect(() => {
     let current = true;
@@ -69,11 +75,23 @@ export function SyncSection({ services, stack, canSync }: SyncSectionProps) {
       setNote(SAVED_OFFLINE_WORK);
       return;
     }
-    setNote('Saved. Downloading…');
+    if (running.current) {
+      again.current = true;
+      return;
+    }
+    running.current = true;
     try {
-      setNote(refreshSummaryText(await stack.refresher.refresh({ reason: 'manual' })));
-    } catch {
-      setNote(REFRESH_THREW_TEXT);
+      do {
+        again.current = false;
+        setNote('Saved. Downloading…');
+        try {
+          setNote(refreshSummaryText(await stack.refresher.refresh({ reason: 'manual' })));
+        } catch {
+          setNote(REFRESH_THREW_TEXT);
+        }
+      } while (again.current);
+    } finally {
+      running.current = false;
     }
   }
 
@@ -84,7 +102,7 @@ export function SyncSection({ services, stack, canSync }: SyncSectionProps) {
         Sync
       </h2>
       <fieldset className="flex flex-col gap-1">
-        <legend className="text-base text-ih-fg-2">Download work scheduled in the next</legend>
+        <legend className="text-base text-ih-fg-2">{SYNC_LEGEND}</legend>
         {SYNC_WINDOW_CHOICES.map((choice) => (
           <label key={choice} className="flex min-h-11 items-center gap-3 text-base text-ih-fg-1">
             <input type="radio" name={name} className="size-5 shrink-0 accent-ih-primary" value={choice} checked={selected === choice} disabled={days === null} onChange={() => void choose(choice)} />
@@ -92,6 +110,7 @@ export function SyncSection({ services, stack, canSync }: SyncSectionProps) {
           </label>
         ))}
       </fieldset>
+      <p className="text-sm leading-relaxed text-ih-fg-3">{UNFINISHED_ALWAYS}</p>
       {failed && <Notice tone="bad">{SAVE_FAILED}</Notice>}
       <LiveNote testId="sync-note" className="text-sm leading-relaxed text-ih-fg-2" text={note} />
     </section>

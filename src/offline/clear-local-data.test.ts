@@ -6,6 +6,7 @@ import { createSqlJsDb } from '../platform/db-sqljs';
 import { DEVICE_STATE_KEYS, migrate } from '../platform/schema';
 import { clearLocalData, DEVICE_STATE_SURVIVORS, DEVICE_STATE_SURVIVOR_PREFIXES } from './clear-local-data';
 
+const NOW = 1_800_000_000_000;
 const DATA_TABLES = ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package'] as const;
 let db: Db;
 
@@ -39,16 +40,17 @@ describe('clearLocalData', () => {
   it('deletes every data table and the native files, and reports nothing failed', async () => {
     await seed();
     const files = createMemoryFiles({ 'media/m1.jpg': new Uint8Array([1]), 'media/m2.jpg': new Uint8Array([2]), 'media/m3.mp4': new Uint8Array([3]), 'media/unrelated.jpg': new Uint8Array([4]) });
-    const result = await clearLocalData(db, files);
+    const result = await clearLocalData(db, files, NOW);
     const counts = await rowCounts(db);
     for (const table of DATA_TABLES) expect(counts[table]).toBe(0);
-    expect(files.paths()).toEqual(['media/unrelated.jpg']);
-    expect(result).toEqual({ filesRemoved: 3, filesFailed: [] });
+    // A file the store would have written with no row is an orphan and goes too (an intended change: it used to stay).
+    expect(files.paths()).toEqual([]);
+    expect(result).toEqual({ filesRemoved: 4, filesFailed: [] });
   });
 
   it('keeps exactly server_url, device_id, install_marker and the client_id:* registrations', async () => {
     await seed();
-    await clearLocalData(db, createMemoryFiles());
+    await clearLocalData(db, createMemoryFiles(), NOW);
     expect(await stateKeys()).toEqual(['client_id:https://oi.example.test', 'client_id:https://other.example.test', 'device_id', 'install_marker', 'server_url']);
   });
 
@@ -66,7 +68,7 @@ describe('clearLocalData', () => {
     await seed();
     const files = createMemoryFiles({ 'media/m1.jpg': new Uint8Array([1]), 'media/m2.jpg': new Uint8Array([2]), 'media/m3.mp4': new Uint8Array([3]) });
     files.failRemoveFor('media/m2.jpg');
-    const result = await clearLocalData(db, files);
+    const result = await clearLocalData(db, files, NOW);
     expect(files.paths()).toEqual(['media/m2.jpg']);
     expect(result).toEqual({ filesRemoved: 2, filesFailed: ['media/m2.jpg'] });
     expect((await rowCounts(db)).media).toBe(0);
@@ -74,27 +76,27 @@ describe('clearLocalData', () => {
 
   it('control: with no failure the same call reports an empty failure list', async () => {
     await seed();
-    const result = await clearLocalData(db, createMemoryFiles({ 'media/m1.jpg': new Uint8Array([1]), 'media/m2.jpg': new Uint8Array([2]), 'media/m3.mp4': new Uint8Array([3]) }));
+    const result = await clearLocalData(db, createMemoryFiles({ 'media/m1.jpg': new Uint8Array([1]), 'media/m2.jpg': new Uint8Array([2]), 'media/m3.mp4': new Uint8Array([3]) }), NOW);
     expect(result.filesFailed).toEqual([]);
   });
 
   it('a file that is already missing is reported but never blocks the rest', async () => {
     await seed();
     const files = createMemoryFiles({ 'media/m1.jpg': new Uint8Array([1]), 'media/m3.mp4': new Uint8Array([3]) });
-    const result = await clearLocalData(db, files);
+    const result = await clearLocalData(db, files, NOW);
     expect(result).toEqual({ filesRemoved: 2, filesFailed: ['media/m2.jpg'] });
     expect(files.removeCalls()).toEqual(['media/m1.jpg', 'media/m2.jpg', 'media/m3.mp4']);
   });
 
   it('an empty device clears to an empty device', async () => {
-    expect(await clearLocalData(db, createMemoryFiles())).toEqual({ filesRemoved: 0, filesFailed: [] });
+    expect(await clearLocalData(db, createMemoryFiles(), NOW)).toEqual({ filesRemoved: 0, filesFailed: [] });
   });
 
   it('is repeatable: a second run changes nothing', async () => {
     await seed();
-    await clearLocalData(db, createMemoryFiles());
+    await clearLocalData(db, createMemoryFiles(), NOW);
     const keys = await stateKeys();
-    await clearLocalData(db, createMemoryFiles());
+    await clearLocalData(db, createMemoryFiles(), NOW);
     expect(await stateKeys()).toEqual(keys);
   });
 
@@ -104,7 +106,7 @@ describe('clearLocalData', () => {
       ...db,
       run: (sql, params) => (sql.includes('FROM outbox') ? Promise.reject(new Error('disk I/O error')) : db.run(sql, params)),
     };
-    await expect(clearLocalData(failing, createMemoryFiles())).rejects.toThrow('disk I/O error');
+    await expect(clearLocalData(failing, createMemoryFiles(), NOW)).rejects.toThrow('disk I/O error');
     expect(await stateKeys()).toContain('locked_reason');
     expect(await stateKeys()).toContain('user_id');
   });

@@ -68,9 +68,15 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
 
   return (
     <Screen wide>
-      <Button variant="quiet" onClick={onBack}>
-        Back to work list
-      </Button>
+      <button
+        type="button"
+        aria-label="Back to work list"
+        className="inline-flex min-h-11 items-center gap-1 self-start text-base font-semibold text-ih-primary-text focus-visible:outline-none focus-visible:shadow-ih-focus"
+        onClick={onBack}
+      >
+        <span aria-hidden="true">&lsaquo;</span>
+        <span>Work list</span>
+      </button>
       <h1 ref={heading} tabIndex={-1} className="font-ih-display text-2xl font-bold tracking-tight text-ih-fg-1 focus-visible:outline-none">
         Settings
       </h1>
@@ -85,7 +91,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
       </Section>
       <Section title="Account">
         <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
-        {accountUrl !== null && <ExternalLink services={services} url={accountUrl} label="Delete account" accessibleName="Delete account, opens in your browser" />}
+        {accountUrl !== null && <ExternalLink services={services} url={accountUrl} label="Delete account" showHost />}
       </Section>
       <AboutSection services={services} locale={language} />
     </Screen>

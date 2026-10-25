@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
+import { sweepStaleExports } from '../export/sweep';
 import { haptic } from '../platform/haptics';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Button } from './kit';
@@ -7,7 +8,7 @@ import { useActionLatch } from './latch';
 import { messageFor } from './messages';
 
 export interface SignOutControlProps {
-  services: Pick<AppServices, 'tokens'>;
+  services: Pick<AppServices, 'tokens' | 'files' | 'clock'>;
   origin: string;
   onSignedOut(): void;
 }
@@ -29,6 +30,8 @@ export function SignOutControl({ services, origin, onSignedOut }: SignOutControl
     setBusy(true);
     try {
       await services.tokens.signOut(origin);
+      // An export archive holds customers' data in the clear: none is left behind once the person has signed out.
+      await sweepStaleExports(services.files, services.clock.now(), 0);
       haptic('success');
       onSignedOut();
     } catch (err) {

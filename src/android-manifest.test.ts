@@ -37,13 +37,41 @@ describe('the Android manifest permissions', () => {
     ]);
   });
 
-  it('removes the permissions the notification plugin would add on its own (boot restore and exact alarms)', () => {
+  it('removes the permissions that arrive through plugins and that the app never uses (boot restore, exact alarms, biometrics)', () => {
     const removed = permissions(manifest)
       .filter((p) => p.remove)
       .map((p) => p.name)
       .sort();
-    expect(removed).toEqual(['android.permission.RECEIVE_BOOT_COMPLETED', 'android.permission.SCHEDULE_EXACT_ALARM']);
+    expect(removed).toEqual([
+      'android.permission.RECEIVE_BOOT_COMPLETED',
+      'android.permission.SCHEDULE_EXACT_ALARM',
+      'android.permission.USE_BIOMETRIC',
+      'android.permission.USE_FINGERPRINT',
+    ]);
     expect(manifest).toMatch(/xmlns:tools="http:\/\/schemas\.android\.com\/tools"/);
+  });
+
+  it('keeps READ_EXTERNAL_STORAGE out of the source manifest on purpose: it is transitive and stays until an upload test on Android 9 to 12 allows removing it', () => {
+    expect(permissions(manifest).map((p) => p.name)).not.toContain('android.permission.READ_EXTERNAL_STORAGE');
+    expect(manifest).toContain('READ_EXTERNAL_STORAGE');
+  });
+
+  it('removes the notification plugin components that only serve scheduled notifications, by their exact names', () => {
+    const removedComponents = [...manifest.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<(receiver|provider|service|activity)\b([^>]*?)\/?>/g)]
+      .filter((m) => /tools:node="remove"/.test(m[2] ?? ''))
+      .map((m) => `${m[1] ?? ''} ${/android:name="([^"]+)"/.exec(m[2] ?? '')?.[1] ?? ''}`)
+      .sort();
+    expect(removedComponents).toEqual([
+      'provider com.capacitorjs.plugins.localnotifications.LocalNotificationsAssetProvider',
+      'receiver com.capacitorjs.plugins.localnotifications.LocalNotificationRestoreReceiver',
+      'receiver com.capacitorjs.plugins.localnotifications.NotificationDismissReceiver',
+      'receiver com.capacitorjs.plugins.localnotifications.TimedNotificationPublisher',
+    ]);
+  });
+
+  it('removes nothing that the upload service or the camera need (control: the app own provider and activity are untouched)', () => {
+    expect(manifest).toMatch(/<provider\s+android:name="androidx\.core\.content\.FileProvider"(?![^>]*tools:node)/);
+    expect(manifest).toMatch(/<activity[^>]*android:name="\.MainActivity"(?![^>]*tools:node)/);
   });
 
   it('declares the notification permission once', () => {

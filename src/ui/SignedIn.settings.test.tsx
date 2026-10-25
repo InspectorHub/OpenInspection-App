@@ -9,6 +9,8 @@ import { createManualTimers } from '../collab/test-support/manual-timers';
 import { createMemoryKeyValue } from '../platform/kv';
 import type { NotificationPermissionPort, NotificationState } from '../platform/notifications';
 import { backRegistry, pressBack } from './back-button';
+import { OfflineStackContext } from '../app/stack-context';
+import { createListWorld } from './test-support/worklist-world';
 import { SignedIn } from './SignedIn';
 
 afterEach(cleanup);
@@ -82,6 +84,31 @@ describe('SignedIn and Settings', () => {
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Sign out' }));
     await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('where the Settings button is', () => {
+  it('with a work list there is one, in the list header, and focus returns to it; without a work list the page has its own', async () => {
+    const world = await createSignedInWorld();
+    const list = await createListWorld();
+    render(
+      <OfflineStackContext.Provider value={list.stack}>
+        <SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} timers={createManualTimers()} />
+      </OfflineStackContext.Provider>,
+    );
+    const user = userEvent.setup();
+    const buttons = await screen.findAllByRole('button', { name: 'Settings' });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.closest('header')).not.toBeNull();
+    await user.click(buttons[0] as HTMLElement);
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Back to work list' }));
+    expect(await screen.findByRole('button', { name: 'Settings' })).toHaveFocus();
+    cleanup();
+    render(<SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} timers={createManualTimers()} />);
+    const fallback = screen.getAllByRole('button', { name: 'Settings' });
+    expect(fallback).toHaveLength(1);
+    expect(fallback[0]?.closest('header')).toBeNull();
   });
 });
 

@@ -1,7 +1,10 @@
 import type { KeyValue } from '../platform/kv';
 import type { NotificationPermissionPort, NotificationState } from '../platform/notifications';
 
-/** The memory of the question: `asked` (the system prompt was shown) or `declined` (the person said "Not now"). Either ends the asking. */
+/**
+ * The memory of the question: `asked` (the system prompt was shown) or `declined` (the person said "Not now"). Either ends the asking.
+ * Do not rename this key: devices already hold an answer under it, and a new name would ask all of them again.
+ */
 export const ASK_KEY = 'oi.notification-ask';
 
 export interface NotificationAsk {

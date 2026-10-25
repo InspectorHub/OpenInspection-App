@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { markOrphaned } from '../offline/outbox';
 import { renderList, withStatus } from './test-support/worklist-render';
-import { ALICE, at, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, seedTenantName, type ListWorld } from './test-support/worklist-world';
+import { ALICE, at, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, type ListWorld } from './test-support/worklist-world';
 
 let w: ListWorld;
 
@@ -304,23 +304,6 @@ describe('WorkList: quarantined rows and their wording', () => {
     expect(within(row).getByRole('button', { name: /^Remove .+ from this device$/ })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /export/i })).toBeNull();
     expect(row).not.toHaveTextContent('not encrypted');
-  });
-
-  it('with an export handler the export button and the responsibility wording appear together, naming the company', async () => {
-    await quarantined();
-    await seedTenantName(w.db, 'Acme Inspections');
-    const onExport = vi.fn();
-    renderList(w.stack, { onExport });
-    const row = await rowOf('q1');
-    expect(row).toHaveTextContent('This file contains customer personal information and is not encrypted. Keeping and deleting it is the responsibility of Acme Inspections.');
-    await userEvent.setup().click(within(row).getByRole('button', { name: 'Export unsent data' }));
-    expect(onExport).toHaveBeenCalledExactlyOnceWith('q1');
-  });
-
-  it('without a company name the wording says your company', async () => {
-    await quarantined();
-    renderList(w.stack, { onExport: vi.fn() });
-    expect(await rowOf('q1')).toHaveTextContent('responsibility of your company.');
   });
 
   it('a healthy row has no Remove action and no export', async () => {

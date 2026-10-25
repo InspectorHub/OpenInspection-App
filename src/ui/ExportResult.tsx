@@ -28,7 +28,7 @@ export function ExportResult({ title, children, onClose }: ExportResultProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ih-bg-app/80 p-4 md:items-center" onKeyDown={onKeyDown}>
+    <div className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center" onKeyDown={onKeyDown}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="flex max-h-[90dvh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-ih-modal border border-ih-border bg-ih-bg-card p-6 shadow-ih-popover">
         <h2 id={titleId} className="font-ih-display text-xl font-bold tracking-tight text-ih-fg-1">
           {title}

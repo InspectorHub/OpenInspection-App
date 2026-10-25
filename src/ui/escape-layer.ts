@@ -5,14 +5,14 @@ import { useEffect, useRef } from 'react';
  * An Escape key event (a keyboard, or the one the back key sends before it does anything else, see `back-button.ts`) is
  * answered by the topmost layer alone, which marks the event as used up.
  */
-const layers: Array<{ current: () => void }> = [];
+const layers: Array<{ current: () => void | boolean }> = [];
 
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || event.defaultPrevented) return;
   const top = layers[layers.length - 1];
   if (top === undefined) return;
-  event.preventDefault();
-  top.current();
+  // A layer that returns false declines: the press is not used up and goes on down the back chain.
+  if (top.current() !== false) event.preventDefault();
 }
 
 /** How many layers are open. For tests and leak checks. */
@@ -20,8 +20,8 @@ export function escapeLayerCount(): number {
   return layers.length;
 }
 
-/** Registers a layer that closes itself with `onEscape` when Escape reaches the window. The layer stays registered while mounted. */
-export function useEscapeLayer(onEscape: () => void): void {
+/** Registers a layer that closes itself with `onEscape` when Escape reaches the window (`false` declines the press). The layer stays registered while mounted. */
+export function useEscapeLayer(onEscape: () => void | boolean): void {
   const latest = useRef(onEscape);
   latest.current = onEscape;
   useEffect(() => {

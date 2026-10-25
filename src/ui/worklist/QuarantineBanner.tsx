@@ -4,9 +4,14 @@ import { Button, Notice } from '../kit';
  * The server cannot tell a deleted inspection from one reassigned to somebody else or one that never existed, so the
  * words keep the "or" and never say "deleted" alone. They say what is true on this device: the data is still here.
  */
-export function QuarantineSummary({ count }: { count: number }) {
+export function QuarantineSummary({ count, company, exportOffered }: { count: number; company: string | null; exportOffered: boolean }) {
   if (count === 0) return null;
-  return <Notice tone="watch">{count === 1 ? '1 inspection is no longer on your list. If anything on it was not sent, it is still on this device.' : `${String(count)} inspections are no longer on your list. If anything on them was not sent, it is still on this device.`}</Notice>;
+  return (
+    <Notice tone="watch">
+      <p>{count === 1 ? '1 inspection is no longer on your list. If anything on it was not sent, it is still on this device.' : `${String(count)} inspections are no longer on your list. If anything on them was not sent, it is still on this device.`}</p>
+      {exportOffered && <p className="mt-2">{`Exported files contain customer information and are not encrypted; ${company ?? 'your company'} is responsible for storing and deleting them.`}</p>}
+    </Notice>
+  );
 }
 
 export function RowQuarantineBanner() {
@@ -17,14 +22,11 @@ export function RowQuarantineBanner() {
   );
 }
 
-/** Offered wherever an export is: the file is not encrypted and its keeping is the company's responsibility. */
-export function ExportBlock({ company, onExport }: { company: string | null; onExport(): void }) {
+/** The row's export button. The responsibility wording is said once, in the summary above the list, and in full in the export question. */
+export function ExportButton({ onExport }: { onExport(): void }) {
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-sm leading-relaxed text-ih-fg-2">This file contains customer personal information and is not encrypted. Keeping and deleting it is the responsibility of {company ?? 'your company'}.</p>
-      <Button variant="secondary" onClick={onExport}>
-        Export unsent data
-      </Button>
-    </div>
+    <Button variant="secondary" className="sm:flex-1" onClick={onExport}>
+      Export unsent data
+    </Button>
   );
 }
