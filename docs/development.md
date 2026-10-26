@@ -66,11 +66,37 @@ When you are done, stop the dev servers first, then run `adb reverse --remove-al
 
 ## Windows (Electron)
 
+The desktop client lives in `electron/` (main process, preload script, shared IPC types) and reuses the same `src/` app as Android.
+
 ```
-npm run dev:electron
+npm run build:electron
+npx electron dist-electron/main/index.cjs
 ```
 
+`build:electron` bundles the main process and preload script to CommonJS with esbuild. `npm run typecheck` checks `src/` and `electron/` with separate tsconfigs, so Node and DOM types never mix.
+
+Import boundaries, enforced by `src/electron-boundaries.test.ts`:
+
+- Code in `src/` outside `src/desktop/` never imports `electron`.
+- `src/desktop/` reaches the main-process directory only through `electron/shared/`.
+- `electron/` imports only a short allowlist of pure `src` modules (database, schema, path helpers, callback constants, media types).
+
 The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt binaries for Electron's N-API ABI; no native compiler is needed.
+
+### Measured facts (2026-10-27)
+
+| Item | Value | How it was checked |
+|---|---|---|
+| Electron (pinned, no `^`) | 44.7.0 | `npm view electron@44.7.0 version`; the registry's latest was 45.0.0 |
+| Runtime inside Electron 44.7.0 | Node 24.21.0, Chromium 152.0.7977.130, `NODE_MODULE_VERSION` 149, N-API 10 | `process.versions` printed from the main process |
+| esbuild (pinned) | 0.28.2 | `npm view esbuild version`; `target` is `node24`, the Node major above |
+| `better-sqlite3-multiple-ciphers` | 13.0.3, engines `node >=22` | `npm view`; tarball unpacked with `npm pack` |
+| Its prebuilds | `win32-x64.node` and `win32-arm64.node` are both present, plus darwin, linux and linuxmusl | `prebuilds/` listing in the tarball |
+| `electron-builder` / `electron-updater` | 26.15.3 and 6.8.9 exist; the registry's latest is 26.18.0 and 6.8.11 | `npm view`; neither is a dependency yet |
+| `@playwright/test`, `@electron/fuses` | latest 1.64.1 and 2.1.3 | `npm view`; not dependencies yet |
+| Minimum Windows | Windows 10 and later, `x64` and `arm64` binaries | `node_modules/electron/README.md` of the pinned package |
+
+This client is only tested on Windows 11 and on the `windows-latest` CI image. The first release targets `x64`; an `arm64` machine runs it under Windows 11's x64 emulation. A native `arm64` build is possible later because the database module ships a `win32-arm64` prebuild.
 
 ## Memory
 

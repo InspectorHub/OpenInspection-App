@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -24,6 +24,7 @@ function hasCjk(text: string): boolean {
 }
 
 function walk(dir: string, out: string[]): string[] {
+  if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) walk(full, out);
@@ -44,10 +45,16 @@ function offenders(files: string[]): string[] {
 }
 
 describe('the public repository stays English-only', () => {
-  const files = [...walk(join(ROOT, 'src'), []), ...walk(join(ROOT, 'scripts'), [])];
+  const files = ['src', 'scripts', 'electron', 'e2e-electron'].flatMap((dir) => walk(join(ROOT, dir), []));
 
   it('scans a real set of files (the scan is not vacuously empty)', () => {
     expect(files.length).toBeGreaterThan(100);
+  });
+
+  it('english-only scan visits electron/ and e2e-electron/', () => {
+    const visited = new Set(files.map((file) => relative(ROOT, file).split(sep)[0]));
+    expect(visited.has('electron')).toBe(true);
+    expect(visited.has('e2e-electron')).toBe(true);
   });
 
   it('positive control: the first and last code point of every range is recognised', () => {

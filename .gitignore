@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-electron/
 .env*
 scripts/dev-env.local.ps1
 android/app/build/
