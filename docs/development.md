@@ -8,7 +8,7 @@ This page covers the local setup for Android and Windows (Electron). iOS is docu
 |---|---|---|
 | Node.js | 22+ | Capacitor 8 requires it |
 | JDK | 21 | Used only through `scripts/dev-env.ps1`; your global `JAVA_HOME` is not changed |
-| Maestro | 2.11+ | End-to-end flows; unzip the release to a directory of your choice and put its `bin` on PATH (`dev-env.ps1` does this for `D:\DevTools\maestro`) |
+| Maestro | 2.11+ | End-to-end flows; unzip the release to a directory of your choice and put its `bin` on PATH (`dev-env.ps1` does this when `MAESTRO_HOME` is set) |
 | Android SDK | platform 36, build-tools 36.0.0, platform-tools | Command-line tools are enough; Android Studio is optional |
 
 Set two user-level variables once: `ANDROID_HOME` and `GRADLE_USER_HOME` (Gradle's cache is large; keep it off the system drive).
