@@ -260,3 +260,12 @@ export function photoRecord(pendingId: string, overrides: { inspectionId?: strin
     meta: { targetType: 'item' as const, findingKey: '_default:s1:i1', itemId: 'i1' },
   };
 }
+
+/** A photo taken for one defect row of an item (`customId` is the defect's id, canned or custom). */
+export function defectPhotoRecord(pendingId: string, overrides: { inspectionId?: string; createdAt?: number; seed?: number; customId?: string; defectKind?: 'canned' | 'custom'; findingKey?: string; itemId?: string } = {}) {
+  const { customId, defectKind, findingKey, itemId, ...rest } = overrides;
+  return {
+    ...photoRecord(pendingId, rest),
+    meta: { targetType: 'defect' as const, findingKey: findingKey ?? '_default:s1:i1', itemId: itemId ?? 'i1', customId: customId ?? 'd1', defectKind: defectKind ?? ('custom' as const) },
+  };
+}

@@ -368,3 +368,23 @@ describe('the device store cannot keep the photo', () => {
     expect(await w.factory(INSPECTION, null).upload(photo('p2', { blob: jpegBlob(2) }))).toMatchObject({ kept: true });
   });
 });
+
+describe('a shut sync gate (the real background uploader, not a stub)', () => {
+  it('stores the bytes, keeps the row and the entry, and makes no network request at all (control: with the gate open the same photo goes out)', async () => {
+    const w = await createUploaderWorld();
+    w.locked.value = true;
+    const result = await w.factory(INSPECTION, null).upload(photo('p1'));
+    expect(result).toStrictEqual({ ok: false, error: MESSAGES.deviceLocked, kept: true });
+    expect(w.world.files.paths()).toEqual(['media/p1.jpg']);
+    expect(await rowStates(w)).toEqual([['p1', 'pending', 0]]);
+    expect(photosOf(w.doc, FK)).toEqual([PENDING('p1')]);
+    expect(w.world.engine.http.calls).toEqual([]);
+    expect(w.plugin.starts).toHaveLength(0);
+    expect(w.api.calls).toEqual([]);
+
+    w.locked.value = false;
+    expect(await w.native.uploadDetailed({ pendingId: 'p1', inspectionId: INSPECTION })).toMatchObject({ ok: true });
+    expect(w.world.engine.http.calls.length).toBeGreaterThan(0);
+    expect(w.plugin.starts).toHaveLength(1);
+  });
+});

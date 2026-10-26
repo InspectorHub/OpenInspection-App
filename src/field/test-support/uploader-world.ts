@@ -16,6 +16,8 @@ export interface UploaderWorld {
   api: ScriptedApi;
   /** Inspections the guard reports as blocked. */
   blocked: Set<string>;
+  /** True while the stack's sync gate is shut (the device is locked): the real uploader then sends nothing. */
+  locked: { value: boolean };
   /** What the document handle reports: false while the editor's document is ahead of the server. */
   sync: { value: boolean };
   errors: unknown[];
@@ -38,6 +40,7 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
   const world = await createMediaWorld();
   const plugin = createFakePlugin({ engine: world.engine, files: world.files });
   const timers = createManualTimers();
+  const locked = { value: false };
   const native = createNativeUploader({
     isBlocked: () => Promise.resolve(false),
     store: world.store,
@@ -45,7 +48,7 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
     tokens: { getAccessToken: () => Promise.resolve('access-token'), checkSession: () => Promise.resolve(SESSION_OK) },
     plugin,
     origin: ORIGIN,
-    isLocked: () => false,
+    isLocked: () => locked.value,
     clientHeaders: {},
     timers,
     clock: createManualClock(1_000_000),
@@ -78,5 +81,5 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
     foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(world.store, world.files), isSynced: () => sync.value }),
     onError: (error) => errors.push(error),
   };
-  return { world, plugin, native, api, blocked, sync, errors, doc, docCalls, docFailure, docTimers, deps, factory: createUploaderFactory(deps), nativeCalls };
+  return { world, plugin, native, api, blocked, locked, sync, errors, doc, docCalls, docFailure, docTimers, deps, factory: createUploaderFactory(deps), nativeCalls };
 }

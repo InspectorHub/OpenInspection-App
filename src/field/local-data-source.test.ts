@@ -171,7 +171,7 @@ describe('collaboration and media', () => {
     expect(w.registry.getHandle(INSPECTION)).toBeNull();
   });
 
-  it('an item photo goes to the background uploader, a defect photo to the foreground request', async () => {
+  it('an item photo and a defect photo both go to the background uploader, neither to the foreground request', async () => {
     const w = await world();
     w.api.calls.length = 0;
     const uploader = w.source.media.uploader(INSPECTION, null);
@@ -179,9 +179,9 @@ describe('collaboration and media', () => {
     expect(w.nativeCalls).toEqual(['p1']);
     expect(w.api.calls).toHaveLength(0);
     const defect: PendingMediaRecord = { ...photoRecord('p2'), meta: { targetType: 'defect', findingKey: '_default:s1:i1', itemId: 'i1', customId: 'c1', defectKind: 'custom' } };
-    await uploader.upload(defect);
-    expect(w.nativeCalls).toEqual(['p1']);
-    expect(w.api.calls).toHaveLength(1);
+    expect((await uploader.upload(defect)).ok).toBe(true);
+    expect(w.nativeCalls).toEqual(['p1', 'p2']);
+    expect(w.api.calls).toHaveLength(0);
   });
 
   it('binds the clip document step of the stack to the real one: unbound it keeps every file, bound it resolves a finished clip', async () => {

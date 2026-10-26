@@ -6,13 +6,14 @@ import type { TokenManager } from '../auth/tokens';
 import { CollabIssue, createCollabConnector, type CollabStatus, type NativeCollabConnector, type SocketFactory } from '../collab/connector';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { createNativeUploader, type NativeUploader } from '../media/native-uploader';
-import { createWithDoc, createPendingResolver, type WithDoc } from '../media/pending-doc';
+import { createDefectResolver, createWithDoc, createPendingResolver, type WithDoc } from '../media/pending-doc';
 import { createMediaReconciler, type MediaReconciler } from '../media/reconcile';
 import { createMediaStore, type MediaStore } from '../media/store';
 import { sweepOrphanFiles } from '../media/sweep';
 import { sweepUploaderTempFiles } from '../media/uploader-temp';
 import { createVideoStrategy, type ResolveVideo } from '../media/video';
 import { createBlockedGuard } from '../offline/blocked';
+import { createOtherAccountGuard } from '../offline/package-owner';
 import { evaluateLock } from '../offline/lock';
 import { loadLockState } from '../offline/lock-state';
 import type { AppStatePort } from '../offline/lock-monitor';
@@ -413,6 +414,8 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     store,
     uploader,
     resolvePending: createPendingResolver({ withDoc }),
+    resolveDefectPhoto: createDefectResolver({ withDoc }),
+    isOtherAccount: createOtherAccountGuard(db, account),
     resolveVideo: deps.resolveVideo ?? placeholderResolveVideo,
     isLocked: syncBlocked,
     onUnlocked: subscribeUnlocked,

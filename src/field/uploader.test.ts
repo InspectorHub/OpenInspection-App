@@ -132,12 +132,12 @@ describe('a blocked inspection', () => {
     expect(w.plugin.starts).toHaveLength(0);
   });
 
-  it('control: the same calls go out when the inspection is not blocked', async () => {
+  it('control: the same calls go out when the inspection is not blocked (both photos through the background uploader)', async () => {
     const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { key: 'k' } })) });
     expect((await w.factory(INSPECTION, null).upload(itemPhoto('p1'))).ok).toBe(true);
     expect((await w.factory(INSPECTION, null).upload(defectRecord('p2'))).ok).toBe(true);
-    expect(w.nativeCalls).toEqual(['p1']);
-    expect(w.api.calls).toHaveLength(1);
+    expect(w.nativeCalls).toEqual(['p1', 'p2']);
+    expect(w.api.calls).toHaveLength(0);
   });
 
   it('keeps the row when the block begins during the upload: quarantine owns it then', async () => {
@@ -155,13 +155,13 @@ describe('a blocked inspection', () => {
 });
 
 describe('defect photo', () => {
-  it('goes to the foreground upload and never touches the device store or the background uploader', async () => {
+  it('goes through the device store and the background uploader, never through the foreground multipart request (kept-on-failure behaviour: uploader-defect.test.ts)', async () => {
     const w = await createUploaderWorld({ api: scriptedApi(reply(200, { success: true, data: { key: 'defect-key' } })) });
-    expect(await w.factory(INSPECTION, null).upload(defectRecord('p1'))).toEqual({ ok: true, key: 'defect-key' });
-    expect(w.nativeCalls).toEqual([]);
+    expect(await w.factory(INSPECTION, null).upload(defectRecord('p1'))).toEqual({ ok: true, key: keyFor('p1') });
+    expect(w.nativeCalls).toEqual(['p1']);
+    expect(w.api.calls).toEqual([]);
+    expect(w.world.engine.objects.has(keyFor('p1'))).toBe(true);
     expect(await w.world.store.listRows()).toEqual([]);
-    expect(w.api.calls).toHaveLength(1);
-    expect(w.api.calls[0]?.path).toBe(`/api/inspections/${INSPECTION}/upload`);
   });
 });
 

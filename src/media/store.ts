@@ -9,6 +9,7 @@ import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
 import { assertMediaState, type MediaState } from '../platform/schema';
 import { isValidMediaId, MediaError } from './errors';
+import { defectTargetOfMeta } from './defect-target';
 
 /**
  * Content types the store accepts and the file extension each is stored under. The extension comes from
@@ -244,10 +245,13 @@ function isAnnotateMeta(value: unknown): value is PhotoAnnotateMeta {
   return isRecord(value) && isDerivativeBase(value) && typeof value.nodesJson === 'string';
 }
 
-/** The meta of `rec` as JSON, or throws INVALID_RECORD. A defect photo is refused, as the web store refuses it. */
+/**
+ * The meta of `rec` as JSON, or throws INVALID_RECORD. A photo of a defect row is stored like any photo (the web store
+ * refuses it, because the web editor has its own online route for it); `recordFromRow` keeps such a row out of the
+ * editor's own queue.
+ */
 function serializeMeta(rec: PendingMediaRecord): string {
-  const valid =
-    rec.kind === 'photo' ? isPhotoMeta(rec.meta) && rec.meta.targetType === 'item' : rec.kind === 'crop' ? isCropMeta(rec.meta) : isAnnotateMeta(rec.meta);
+  const valid = rec.kind === 'photo' ? isPhotoMeta(rec.meta) : rec.kind === 'crop' ? isCropMeta(rec.meta) : isAnnotateMeta(rec.meta);
   if (!valid) throw new MediaError('INVALID_RECORD');
   const json = JSON.stringify(rec.meta);
   if (json.length > MAX_META_CHARS) throw new MediaError('INVALID_RECORD');
@@ -320,7 +324,13 @@ function recordFromRow(row: MediaRow): PendingMediaRecord | null {
   const base = { pendingId: row.pendingId, inspectionId: row.inspectionId, blob: new Blob([], { type: row.contentType }), createdAt: row.createdAt };
   // The editor's store contract has no clip record: a clip is reached through `getRow` and the uploader only.
   if (row.kind === 'video') return null;
-  if (row.kind === 'photo') return isPhotoMeta(meta) ? { ...base, kind: 'photo', meta } : null;
+  if (row.kind === 'photo') {
+    // A photo of a defect row is invisible here, on purpose. The editor's drain would send it again under a new key, find no
+    // pending entry to swap (a defect row has none) and then delete the row: the photo would be uploaded, never attached and
+    // gone. Such a row is reached through `getRow` / `listRows` only, which the reconciler and the export use.
+    if (defectTargetOfMeta(meta) !== null) return null;
+    return isPhotoMeta(meta) ? { ...base, kind: 'photo', meta } : null;
+  }
   if (row.kind === 'crop') return isCropMeta(meta) ? { ...base, kind: 'crop', meta } : null;
   return isAnnotateMeta(meta) ? { ...base, kind: 'annotate', meta } : null;
 }

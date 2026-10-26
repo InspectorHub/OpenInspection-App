@@ -3,7 +3,9 @@ import { resultsDocName } from '../collab/connector';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { SqlitePersistence } from '../collab/y-sqlite';
 import type { Db } from '../platform/db';
+import type { DefectTarget } from './defect-target';
 import { isValidMediaId, MediaError } from './errors';
+import { isItemKey } from './pending-doc-append';
 import { isValidUploadedKey } from './store';
 
 /**
@@ -62,6 +64,44 @@ export function resolvePendingInDoc(doc: Y.Doc, pendingId: string, uploadedKey: 
     }
   });
   return result;
+}
+
+/** The photos of a defect row as plain entries, or null when the field holds something that is neither absent nor a list. */
+function defectPhotos(value: unknown): unknown[] | null {
+  if (value === undefined) return [];
+  if (value instanceof Y.Array) return value.toJSON() as unknown[];
+  return Array.isArray(value) ? [...(value as unknown[])] : null;
+}
+
+/**
+ * Attaches the key of an uploaded photo to the defect row it was taken for: `{ key }` is added to that defect's `photos`.
+ *
+ * This mirrors `addPhotoToCannedDefect` / `addPhotoToCustomDefect` of the editor package: the defect is found in
+ * `tabs.defects` (by `cannedId`) or in `customComments.defects` (by `id`), its `photos` is a plain list that is replaced as a
+ * whole (last write wins, not a CRDT list), and a key that is already in the list is not added twice. Unlike the package
+ * function it reports what happened. `missing`: the item or the defect is not in the document (it may have been deleted
+ * before the photo finished uploading, or a version restore may bring it back), nothing was written and the caller keeps
+ * the file. Nothing is ever created here: a defect that is not in the document is not made up for a photo.
+ */
+export function resolveDefectInDoc(doc: Y.Doc, target: DefectTarget, uploadedKey: string): ResolveResult {
+  if (!isItemKey(target.findingKey, target.itemId)) return 'missing';
+  const item = doc.getMap<unknown>('results').get(target.findingKey);
+  if (!(item instanceof Y.Map)) return 'missing';
+  const canned = target.defectKind === 'canned';
+  const group = item.get(canned ? 'tabs' : 'customComments');
+  if (!(group instanceof Y.Map)) return 'missing';
+  const defects = group.get('defects');
+  if (!(defects instanceof Y.Array)) return 'missing';
+  const identity = canned ? 'cannedId' : 'id';
+  const defect = defects.toArray().find((entry) => entry instanceof Y.Map && entry.get(identity) === target.customId);
+  if (!(defect instanceof Y.Map)) return 'missing';
+  const photos = defectPhotos(defect.get('photos'));
+  if (photos === null) return 'missing';
+  if (photos.some((photo) => typeof photo === 'object' && photo !== null && (photo as { key?: unknown }).key === uploadedKey)) return 'already';
+  doc.transact(() => {
+    defect.set('photos', [...photos, { key: uploadedKey }]);
+  });
+  return 'resolved';
 }
 
 /** Runs `fn` against the results document of an inspection and settles once its changes are stored. */
@@ -183,5 +223,14 @@ export function createPendingResolver(deps: PendingResolverDeps): (inspectionId:
     if (!isValidMediaId(inspectionId) || !isValidMediaId(pendingId)) return Promise.reject(new MediaError('INVALID_ID'));
     if (!isValidUploadedKey(uploadedKey)) return Promise.reject(new MediaError('INVALID_RECORD'));
     return deps.withDoc(inspectionId, (doc) => resolvePendingInDoc(doc, pendingId, uploadedKey));
+  };
+}
+
+/** `resolveDefectPhoto(inspectionId, pendingId, uploadedKey, target)` for the reconciler, over a `WithDoc`. */
+export function createDefectResolver(deps: PendingResolverDeps): (inspectionId: string, pendingId: string, uploadedKey: string, target: DefectTarget) => Promise<ResolveResult> {
+  return (inspectionId, pendingId, uploadedKey, target) => {
+    if (!isValidMediaId(inspectionId) || !isValidMediaId(pendingId)) return Promise.reject(new MediaError('INVALID_ID'));
+    if (!isValidUploadedKey(uploadedKey)) return Promise.reject(new MediaError('INVALID_RECORD'));
+    return deps.withDoc(inspectionId, (doc) => resolveDefectInDoc(doc, target, uploadedKey));
   };
 }

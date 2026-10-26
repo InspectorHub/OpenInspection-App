@@ -9,7 +9,9 @@ import { MESSAGES } from './messages';
 /**
  * The uploads that go straight to the engine with the app's Bearer token, in the foreground:
  *
- *  - a photo for a custom defect row (the device store only holds photos of an item, so it never enters the queue);
+ *  - a photo that the device store could not take (disk or database trouble), sent once, straight away: an item photo
+ *    (`itemPhotoDirect`) or a photo for a defect row (`defectPhoto`, the editor then attaches the key it answers). Photos
+ *    the store did take go through the background uploader instead;
  *  - a baked crop and a baked annotation of an existing photo. They never reach the background uploader: that one
  *    answers `UNSUPPORTED_KIND` for anything but a photo or a clip and would mark the row failed for good.
  *
@@ -40,6 +42,7 @@ export interface ForegroundDeps {
 }
 
 export interface ForegroundUploads {
+  /** A photo of a defect row sent straight to the engine: the last resort when the device store cannot keep it. */
   defectPhoto(rec: PhotoRecord): Promise<UploadResult>;
   /** A photo of an item sent straight to the engine: the last resort when the device store cannot keep it. */
   itemPhotoDirect(rec: PhotoRecord): Promise<UploadResult>;

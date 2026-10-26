@@ -2,6 +2,7 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import type { AppStatePort } from '../offline/lock-monitor';
 import type { Clock } from '../platform/clock';
 import type { Network } from '../platform/network';
+import { defectTargetOf, type DefectTarget } from './defect-target';
 import { isMediaError, MediaError } from './errors';
 import { isExpectedKey, MAX_UPLOAD_ATTEMPTS, type NativeUploader, type UploadFailureCode } from './native-uploader';
 import type { ResolveResult } from './pending-doc';
@@ -9,6 +10,13 @@ import type { MediaKind, MediaRow, MediaStore } from './store';
 import { videoRefFromKey, type ResolveVideo } from './video';
 
 export type { ResolveResult };
+
+/**
+ * Attaches the uploaded key of a photo of a defect row to that defect in the inspection's document. A defect photo has no
+ * pending entry to swap (the defect is referenced by the media record, not by an item), so the key is added to the
+ * defect's `photos`. See `createDefectResolver`.
+ */
+export type ResolveDefectPhoto = (inspectionId: string, pendingId: string, uploadedKey: string, target: DefectTarget) => Promise<ResolveResult>;
 
 /** Replaces the pending entry of an uploaded photo in the inspection's document. See `createPendingResolver`. */
 export type ResolvePending = (inspectionId: string, pendingId: string, uploadedKey: string) => Promise<ResolveResult>;
@@ -43,6 +51,13 @@ export interface ReconcileDeps {
   uploader: Pick<NativeUploader, 'uploadDetailed' | 'attach' | 'isActive' | 'retryAt' | 'forgetExcept' | 'handlesVideo'>;
   resolvePending: ResolvePending;
   /**
+   * The document step of a photo of a defect row. REQUIRED, with no default: a photo row can be a defect photo, and one
+   * that finished uploading with nothing attaching it would be deleted from the device with the photo on the server and
+   * in no defect. `missing` (the defect is not in the document) keeps the file and the row and asks again with the same
+   * growing wait as for any photo; a throw keeps them and retries with the document-step wait.
+   */
+  resolveDefectPhoto: ResolveDefectPhoto;
+  /**
    * The document step of a clip. Required whenever clips are handled: without a placement step a finalized clip would
    * be deleted from the device with nothing resolving its placeholder, so construction throws. A throw keeps the
    * file and the row and is retried with a growing wait. `missing` is treated exactly as for a photo: the file and the
@@ -75,6 +90,14 @@ export interface ReconcileDeps {
    * forgets it does not compile.
    */
   isBlocked: (inspectionId: string) => Promise<boolean>;
+  /**
+   * True when the package of an inspection belongs to ANOTHER account than the one this reconciler works for. The device
+   * can hold the packages of several accounts, and a token of this account cannot mint an upload for another's photo: the
+   * server would answer not found and the row would be marked failed for good. Rows of such an inspection are left exactly as
+   * they are (not started, not finished, not failed, not counted, not waited for). A guard that rejects counts as true, and
+   * the run then looks again after the slow fallback wait. Omitted: every row is this account's.
+   */
+  isOtherAccount?: (inspectionId: string) => Promise<boolean>;
   timers?: TimerPort;
   /**
    * The slow fallback timer, armed only while the reconciler is started and the last run was cut short (signed
@@ -142,6 +165,8 @@ interface RunReport {
   seen: Set<string> | null;
   /** The guard's answer per inspection, for this run only. */
   blockedAnswers: Map<string, Promise<boolean>>;
+  /** The owner guard's answer per inspection, for this run only. */
+  otherAccountAnswers: Map<string, Promise<boolean>>;
 }
 
 export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
@@ -218,6 +243,25 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
     return asked;
   }
 
+  /** True when the package of the inspection belongs to another account (or the guard cannot say). Asked once per inspection per run. */
+  function isOtherAccountFor(inspectionId: string, run: RunReport): Promise<boolean> {
+    if (deps.isOtherAccount === undefined) return Promise.resolve(false);
+    const known = run.otherAccountAnswers.get(inspectionId);
+    if (known !== undefined) return known;
+    const guard = deps.isOtherAccount;
+    const asked = (async (): Promise<boolean> => {
+      try {
+        return (await guard(inspectionId)) !== false;
+      } catch (error) {
+        report(error);
+        run.outstanding = true;
+        return true;
+      }
+    })();
+    run.otherAccountAnswers.set(inspectionId, asked);
+    return asked;
+  }
+
   /** A failed document step or local delete: the row stays `uploaded` with its file, and wakes itself with a growing wait. */
   function noteDocFailure(row: MediaRow, run: RunReport, error: unknown): void {
     report(error);
@@ -228,6 +272,8 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
 
   /** The document step of the row's kind. */
   function resolveDocument(row: MediaRow, key: string): Promise<ResolveResult> {
+    const defect = defectTargetOf(row);
+    if (defect !== null) return deps.resolveDefectPhoto(row.inspectionId, row.pendingId, key, defect);
     if (row.kind !== 'video') return deps.resolvePending(row.inspectionId, row.pendingId, key);
     const ref = videoRefFromKey(key, row.inspectionId);
     if (ref === null) return Promise.reject(new MediaError('INVALID_RECORD'));
@@ -281,6 +327,8 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
       }
       // A blocked inspection's rows are left exactly as they are: no upload, no document step, no failure, no wait.
       if (await isBlockedFor(row.inspectionId, run)) return false;
+      // Another account's package is neither uploaded nor marked failed by this one.
+      if (await isOtherAccountFor(row.inspectionId, run)) return false;
       // A stored key that is not this photo's own is never resolved into a document: the uploader sends the photo again.
       if (row.state === 'uploaded' && isExpectedKey(row.uploadedKey, row)) {
         const wait = missing.get(row.pendingId);
@@ -363,7 +411,7 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
   }
 
   async function runOnce(): Promise<RunReport> {
-    const run: RunReport = { total: { retried: 0, confirmed: 0 }, blocked: false, incomplete: false, outstanding: false, wake: null, seen: null, blockedAnswers: new Map() };
+    const run: RunReport = { total: { retried: 0, confirmed: 0 }, blocked: false, incomplete: false, outstanding: false, wake: null, seen: null, blockedAnswers: new Map(), otherAccountAnswers: new Map() };
     if (!(await allowed())) {
       run.blocked = true;
       return run;

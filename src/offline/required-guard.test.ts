@@ -10,6 +10,7 @@ declare const connectorDeps: Omit<CollabConnectorDeps, 'isBlocked'>;
 declare const storeDeps: Omit<MediaStoreDeps, 'isBlocked'>;
 declare const uploaderDeps: Omit<NativeUploaderDeps, 'isBlocked'>;
 declare const reconcilerDeps: Omit<ReconcileDeps, 'isBlocked'>;
+declare const reconcilerWithoutDefectStep: Omit<ReconcileDeps, 'resolveDefectPhoto'>;
 declare const withDocDeps: Omit<WithDocDeps, 'isBlocked'>;
 declare const replayDeps: Omit<ReplayDeps, 'isBlocked'>;
 
@@ -27,6 +28,8 @@ export function omittingTheGuardDoesNotCompile(): void {
   createNativeUploader(uploaderDeps);
   // @ts-expect-error isBlocked is required
   createMediaReconciler(reconcilerDeps);
+  // @ts-expect-error a photo row can be a defect photo, so its document step is required
+  createMediaReconciler(reconcilerWithoutDefectStep);
   // @ts-expect-error isBlocked is required
   createWithDoc(withDocDeps);
   // @ts-expect-error isBlocked is required

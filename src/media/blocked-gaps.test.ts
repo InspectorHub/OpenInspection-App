@@ -52,6 +52,7 @@ async function setup(): Promise<Setup> {
   const rec = createMediaReconciler({
     store: world.store,
     uploader,
+    resolveDefectPhoto: () => Promise.resolve('missing'),
     resolvePending: resolve,
     resolveVideo: () => Promise.resolve('resolved'),
     isLocked: () => false,

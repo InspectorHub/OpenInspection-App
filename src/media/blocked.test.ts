@@ -68,6 +68,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
   const rec = createMediaReconciler({
     store: world.store,
     uploader,
+    resolveDefectPhoto: () => Promise.resolve('missing'),
     resolvePending: resolve,
     isLocked: () => false,
     network: { online: () => Promise.resolve(true), onChange: () => () => undefined },
@@ -316,6 +317,7 @@ describe('the reconciler and the uploader each answer for themselves', () => {
     const rec = createMediaReconciler({
       store: world.store,
       uploader,
+      resolveDefectPhoto: () => Promise.resolve('missing'),
       resolvePending: resolve,
       isLocked: () => false,
       network: { online: () => Promise.resolve(true), onChange: () => () => undefined },

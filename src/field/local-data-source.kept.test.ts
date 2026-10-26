@@ -1,7 +1,7 @@
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
 import { describe, expect, it } from 'vitest';
 import type { ManualTimers } from '../collab/test-support/manual-timers';
-import { INSPECTION, photoRecord } from '../media/test-support/fakes';
+import { defectPhotoRecord, INSPECTION, photoRecord } from '../media/test-support/fakes';
 import { KEPT_WINDOW_MS } from './kept-notice';
 import { MESSAGES, photosKeptMessage } from './messages';
 import { photosOf } from './test-support/doc-seed';
@@ -25,6 +25,7 @@ async function failingWorld(over: { canEdit?: () => boolean; serverTooOld?: () =
 
 const entries = (w: World) => w.stack.withDoc(INSPECTION, (doc) => photosOf(doc, FK));
 const kept = (w: World, id: string) => w.source.media.uploader(INSPECTION, null).upload(photo(id));
+const keptDefect = (w: World, id: string) => w.source.media.uploader(INSPECTION, null).upload(defectPhotoRecord(id) as PendingMediaRecord);
 const toasts = (w: World): string[] => w.notes.map(([message]) => message);
 
 describe('the notice for photos kept after a failed upload', () => {
@@ -90,7 +91,38 @@ describe('the notice for photos kept after a failed upload', () => {
   });
 });
 
-describe('a server too old still keeps an item photo; editing turned off still refuses', () => {
+describe('the notice for a kept defect photo', () => {
+  it('defect photos are counted apart from item photos and say the defect sentence (control: item photos in the same window keep the item sentence)', async () => {
+    const { w, timers } = await failingWorld();
+    await Promise.all([keptDefect(w, 'd1'), keptDefect(w, 'd2'), kept(w, 'p1')]);
+    timers.fireWithDelay(KEPT_WINDOW_MS);
+    timers.fireWithDelay(KEPT_WINDOW_MS);
+    expect(toasts(w).sort()).toEqual([MESSAGES.photoKept, photosKeptMessage('defect', 2)].sort());
+    expect(photosKeptMessage('defect', 2)).not.toBe(photosKeptMessage('item', 2));
+  });
+
+  it('a kept defect photo leaves a row and NO document entry', async () => {
+    const { base, w } = await failingWorld();
+    expect(await keptDefect(w, 'd1')).toStrictEqual({ ok: false, error: MESSAGES.unreachable, kept: true });
+    expect((await base.store.listRows()).map((r) => r.pendingId)).toEqual(['d1']);
+    expect(await entries(base)).toEqual([]);
+    expect(w.api.calls).toHaveLength(0);
+  });
+});
+
+describe('a server too old still keeps an item photo and a defect photo; editing turned off still refuses', () => {
+  it('too old: a defect photo is kept like an item photo (a row, no entry, kept answer naming the server) and nothing goes to the old server', async () => {
+    const { base, w } = await failingWorld({ serverTooOld: () => true });
+    const result = await keptDefect(w, 'd1');
+    expect(result).toStrictEqual({ ok: false, error: MESSAGES.serverTooOld, kept: true });
+    expect((await base.store.listRows()).map((r) => r.pendingId)).toEqual(['d1']);
+    expect(await entries(base)).toEqual([]);
+    expect(w.api.calls).toHaveLength(0);
+    // Control: an item photo beside it also gets its entry.
+    expect(await kept(w, 'p1')).toMatchObject({ kept: true });
+    expect((await entries(base)).map((e) => e.pendingId)).toEqual(['p1']);
+  });
+
   it('too old: the row, the document entry and the kept answer, saying the server is too old', async () => {
     const { base, w } = await failingWorld({ serverTooOld: () => true });
     const result = await kept(w, 'p1');

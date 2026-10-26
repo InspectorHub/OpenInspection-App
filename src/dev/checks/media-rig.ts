@@ -118,6 +118,7 @@ export function buildRig(ctx: DiagContext, options: { concurrency: number }): Me
   const reconciler = createMediaReconciler({
     store,
     uploader,
+    resolveDefectPhoto: () => Promise.resolve('missing'),
     resolvePending: () => Promise.resolve('resolved'),
     isLocked,
     network: deps.network,

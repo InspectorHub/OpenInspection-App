@@ -183,8 +183,8 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       // updated; the sentence it answers with names that, not the lock.
       upload: async (rec) => {
         if (!canEdit()) return { ok: false, error: MESSAGES.editingOff };
-        // The other kinds (a defect photo, a crop, an annotation) keep nothing yet, so they still stop before a request.
-        const keepsPhoto = rec.kind === 'photo' && rec.meta.targetType !== 'defect';
+        // A photo (of an item or of a defect row) is kept; a crop and an annotation keep nothing, so they still stop before a request.
+        const keepsPhoto = rec.kind === 'photo';
         if (!keepsPhoto && stack.serverTooOld?.() === true) return { ok: false, error: MESSAGES.serverTooOld };
         const result = await inner.upload(rec);
         return !result.ok && 'kept' in result && result.kept === true && stack.serverTooOld?.() === true ? { ...result, error: MESSAGES.serverTooOld } : result;

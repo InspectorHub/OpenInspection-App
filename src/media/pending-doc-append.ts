@@ -31,7 +31,7 @@ function newItemMap(): Y.Map<unknown> {
  * underscore is an item key only with all three parts (`_default:s1:i1`); `_inspector_signature` and the like are
  * meta keys of the results blob, never items, and have fewer parts.
  */
-function isItemKey(findingKey: unknown, itemId: unknown): findingKey is string {
+export function isItemKey(findingKey: unknown, itemId: unknown): findingKey is string {
   if (typeof findingKey !== 'string' || typeof itemId !== 'string' || itemId === '') return false;
   if (findingKey.length === 0 || findingKey.length > MAX_FINDING_KEY_LENGTH) return false;
   const parts = findingKey.split(':');

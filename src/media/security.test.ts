@@ -325,6 +325,7 @@ describe('SECURITY 7: the file outlives the document update by construction', ()
     const rec = createMediaReconciler({
       isBlocked: neverBlocked,
       store: s.world.store, uploader: s.uploader,
+      resolveDefectPhoto: () => Promise.resolve('missing'),
       resolvePending: () => {
         order.push('resolve');
         return Promise.resolve('resolved');
@@ -346,7 +347,7 @@ describe('SECURITY 7: the file outlives the document update by construction', ()
     await s.world.store.put(photoRecord('p1'));
     const rec = createMediaReconciler({
       isBlocked: neverBlocked,
-      store: s.world.store, uploader: s.uploader, resolvePending: () => Promise.reject(new Error('doc unavailable')),
+      store: s.world.store, uploader: s.uploader, resolveDefectPhoto: () => Promise.resolve('missing'), resolvePending: () => Promise.reject(new Error('doc unavailable')),
       isLocked: () => false, network: { online: () => Promise.resolve(true), onChange: () => () => undefined }, clock: createManualClock(5), timers: s.timers,
       onError: (e) => s.errors.push(e),
     });
@@ -399,7 +400,7 @@ describe('SECURITY 9: hostile database content does not break the loop', () => {
     await s.world.db.run(insert, ['neg-attempts', INSPECTION, 'photo', 'media/neg-attempts.jpg', 'image/jpeg', meta, 'failed', -5, 1]);
     const rec = createMediaReconciler({
       isBlocked: neverBlocked,
-      store: s.world.store, uploader: s.uploader, resolvePending: () => Promise.resolve('resolved'),
+      store: s.world.store, uploader: s.uploader, resolveDefectPhoto: () => Promise.resolve('missing'), resolvePending: () => Promise.resolve('resolved'),
       isLocked: () => false, network: { online: () => Promise.resolve(true), onChange: () => () => undefined }, clock: createManualClock(5), timers: s.timers,
     });
     await expect(rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });

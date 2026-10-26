@@ -24,12 +24,14 @@ export function createKeptNotice(deps: KeptNoticeDeps): (inspectionId: string, k
   return (_inspectionId, kind) => {
     counts[kind] += 1;
     if (open[kind]) return;
-    open[kind] = true;
+    // The window counts as open only once the timer exists: when scheduling throws, nothing would ever close it, and every
+    // later photo would be counted into a notice that is never shown.
     deps.timers.setTimeout(() => {
       const count = counts[kind];
       counts[kind] = 0;
       open[kind] = false;
       deps.say(photosKeptMessage(kind, count));
     }, KEPT_WINDOW_MS);
+    open[kind] = true;
   };
 }

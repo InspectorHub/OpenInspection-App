@@ -1,6 +1,7 @@
 import type * as Y from 'yjs';
 import type { MediaFileResult, MediaUploader, PendingMediaRecord } from '@inspectorhub/field-ui';
 import { realTimers, type TimerPort } from '../collab/timers';
+import { defectTargetOf } from '../media/defect-target';
 import { isMediaError, MediaError } from '../media/errors';
 import type { NativeUploader, UploadFailureCode } from '../media/native-uploader';
 import { appendPendingInDoc, hasPendingEntryInDoc } from '../media/pending-doc-append';
@@ -15,24 +16,25 @@ import type { ForegroundUploads } from './uploader-foreground';
  * `FieldDataSource.media.uploader(inspectionId, doc)`: the one object the editor uploads a photo through, whatever the
  * photo is. Where each kind goes:
  *
- *  - a photo of an item is written to the device store and sent by the background uploader (`uploadDetailed` joins an
- *    upload of the same photo that is already running, so the editor's own drain and the app's reconciler never send it
- *    twice);
- *  - a photo of a custom defect row cannot enter the store, and a crop or an annotation must not reach the background
- *    uploader (it refuses those kinds for good and would mark the row failed): all three are foreground Bearer
- *    requests (`uploader-foreground.ts`).
+ *  - a photo, of an item or of a defect row, is written to the device store and sent by the background uploader
+ *    (`uploadDetailed` joins an upload of the same photo that is already running, so the editor's own drain and the
+ *    app's reconciler never send it twice);
+ *  - a crop or an annotation must not reach the background uploader (it refuses those kinds for good and would mark the
+ *    row failed): both are foreground Bearer requests (`uploader-foreground.ts`).
  *
- * What happens to the bytes when an online upload fails (item photos):
- *  - the row this call created is KEPT, and a pending entry is appended to the results document (through `withDoc`,
- *    after the row exists, never before), exactly the state the editor's own offline path leaves. The reconciler or the
- *    editor's drain sends it later under the same `pendingId`, hence the same key, so a repeat never makes a second file.
- *    The answer is `{ ok: false, error, kept: true }`;
+ * What happens to the bytes when an online upload fails (photos):
+ *  - the row this call created is KEPT. For an item photo a pending entry is appended to the results document (through
+ *    `withDoc`, after the row exists, never before), exactly the state the editor's own offline path leaves. The reconciler
+ *    or the editor's drain sends it later under the same `pendingId`, hence the same key, so a repeat never makes a second
+ *    file. A photo of a defect row has NO entry in the document (the defect is named by the row's meta, not by an item), so
+ *    nothing is appended: the row is invisible to the editor's own queue (`store.ts`), and when the reconciler has
+ *    uploaded it, it adds `{ key }` to the defect's `photos`. The answer is `{ ok: false, error, kept: true }`;
  *  - a failure that no retry can mend and that leaves no bytes to keep (the file is gone, the row is not ours) deletes
  *    the row this call created, as before; a blocked inspection's row is the quarantine's or the purge's;
  *  - when the entry cannot be written the bytes still stay and the answer says so, without `kept`: the person is never
  *    told the photo is in the inspection when it is not;
  *  - when the device store cannot even take the bytes (disk or database trouble) the photo is sent once, straight to the
- *    engine. A policy refusal (too large, wrong type, empty, blocked) is never kept or retried that way.
+ *    engine (a defect photo with its defect, the editor then attaches the key). A policy refusal (too large, wrong type, empty, blocked) is never kept or retried that way.
  *
  * Who removes the device row after a SUCCESS:
  *  - a row THIS call created is removed when the call ends;
@@ -41,8 +43,7 @@ import type { ForegroundUploads } from './uploader-foreground';
  *    would come before that swap and a stop in between would lose the key. Its entry is the editor's, so a failure
  *    appends nothing for it.
  *
- * A photo of a custom defect row cannot enter the store, and a crop or an annotation must not reach the background
- * uploader: they are foreground Bearer requests and keep nothing when they fail.
+ * A crop or an annotation is a foreground Bearer request and keeps nothing when it fails.
  *
  * It never throws: every failure is `{ ok: false, error }` (plus `kept` when the bytes were kept) with one of the fixed sentences.
  */
@@ -158,7 +159,12 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     return 'failed';
   }
 
-  /** A read-only look for the entry of a row that was already queued. A document that cannot be read counts as no entry. */
+  /**
+   * A read-only look for the entry of a row that was already queued. A document that cannot be read counts as no entry.
+   * A second call for a row whose first call is still on its way to writing the entry can answer a plain failure here,
+   * before that entry lands: it only ever under-claims (the person is told less than is true), it never claims `kept`
+   * falsely, and it never writes.
+   */
   async function entryExists(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<boolean> {
     try {
       return await deps.withDoc(inspectionId, (doc) => hasPendingEntryInDoc(doc, rec.meta.findingKey, rec.meta.itemId, rec.pendingId));
@@ -179,11 +185,12 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
   /** The device store refused the bytes. Disk or database trouble gets one direct upload; a policy refusal does not. */
   async function afterStoreFailure(rec: Extract<PendingMediaRecord, { kind: 'photo' }>, error: unknown): Promise<Result> {
     if (!isStoreTrouble(error)) return fail(storeFailureMessage(error));
-    const direct = await deps.foreground.itemPhotoDirect(rec);
+    const direct = await (rec.meta.targetType === 'defect' ? deps.foreground.defectPhoto(rec) : deps.foreground.itemPhotoDirect(rec));
     return direct.ok ? direct : fail(storeFailureMessage(error));
   }
 
-  async function itemPhoto(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<Result> {
+  async function storedPhoto(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<Result> {
+    const isDefect = rec.meta.targetType === 'defect';
     const existing = await deps.store.getRow(rec.pendingId);
     const created = existing === null;
     if (created) {
@@ -192,8 +199,8 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       } catch (error) {
         return await afterStoreFailure(rec, error);
       }
-    } else if (existing.inspectionId !== inspectionId || existing.kind !== 'photo') {
-      // The id belongs to another record: nothing here may be sent or removed under it.
+    } else if (existing.inspectionId !== inspectionId || existing.kind !== 'photo' || (defectTargetOf(existing) !== null) !== isDefect) {
+      // The id belongs to another record (or to a photo of the other sort): nothing here may be sent or removed under it.
       return fail(MESSAGES.photoNotPrepared);
     }
     let outcome: Awaited<ReturnType<NativeUploader['uploadDetailed']>>;
@@ -217,6 +224,8 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     }
     // A kept refusal that no retry can mend (a native TOO_LARGE or a permanent 4xx) is a `failed` row at the maximum
     // attempts: it never retries on its own, so no notice about it may promise an automatic upload.
+    // A defect photo's row is the whole record: there is no entry to write, and the reconciler attaches the key.
+    if (isDefect) return { ok: false, error, kept: true };
     // A queued row's entry is the editor's, and is never written or repaired here (a version restore may have removed
     // it on purpose): `kept` is claimed only when the document really holds it.
     if (!created) return (await entryExists(inspectionId, rec)) ? { ok: false, error, kept: true } : fail(error);
@@ -233,7 +242,7 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
   async function route(inspectionId: string, doc: Y.Doc | null, rec: PendingMediaRecord): Promise<Result> {
     switch (rec.kind) {
       case 'photo':
-        return rec.meta.targetType === 'defect' ? deps.foreground.defectPhoto(rec) : itemPhoto(inspectionId, rec);
+        return storedPhoto(inspectionId, rec);
       case 'crop':
         return deps.foreground.crop(rec, doc);
       case 'annotate':

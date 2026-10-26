@@ -99,13 +99,30 @@ describe('a server too old: the editor uploader says so instead of pretending th
     expect(MESSAGES.serverTooOld).toBe(OLD);
   });
 
-  it('refuses a kind that keeps nothing before anything is stored or sent (control: a sufficient server uploads; item photos are kept, see local-data-source.kept.test.ts)', async () => {
+  it('refuses a kind that keeps nothing (a crop, an annotation) before anything is stored or sent (control: a sufficient server uploads; photos of an item or of a defect row are kept, see local-data-source.kept.test.ts)', async () => {
     const base = await world();
     const old = await world({ stack: { ...base.stack, serverTooOld: () => true } });
     const uploader = old.source.media.uploader(INSPECTION, null);
-    const defect: PendingMediaRecord = { ...photoRecord('p1'), meta: { targetType: 'defect', findingKey: '_default:s1:i1', itemId: 'i1', customId: 'c1', defectKind: 'custom' } };
-    expect(await uploader.upload(defect)).toEqual({ ok: false, error: OLD });
+    const crop: PendingMediaRecord = {
+      kind: 'crop',
+      pendingId: 'c1',
+      inspectionId: INSPECTION,
+      blob: photoRecord('c1').blob,
+      createdAt: 3,
+      meta: { findingKey: '_default:s1:i1', itemId: 'i1', photoIndex: 0, photoKey: 'photo-a', crop: { aspect: 'free', orientation: 'landscape', x: 0, y: 0, width: 4, height: 4 } },
+    };
+    const annotation: PendingMediaRecord = {
+      kind: 'annotate',
+      pendingId: 'a1',
+      inspectionId: INSPECTION,
+      blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+      createdAt: 4,
+      meta: { findingKey: '_default:s1:i1', itemId: 'i1', photoIndex: 0, photoKey: 'photo-a', nodesJson: '[]' },
+    };
+    expect(await uploader.upload(crop)).toEqual({ ok: false, error: OLD });
+    expect(await uploader.upload(annotation)).toEqual({ ok: false, error: OLD });
     expect(base.nativeCalls).toEqual([]);
+    expect(old.api.calls).toHaveLength(0);
     expect(await base.store.listRows()).toEqual([]);
     const fine = await world({ stack: { ...base.stack, serverTooOld: () => false } });
     expect((await fine.source.media.uploader(INSPECTION, null).upload(photoRecord('p1') as PendingMediaRecord)).ok).toBe(true);

@@ -130,11 +130,14 @@ describe('media store: put', () => {
     expect(world.files.writeCalls()).toEqual([]);
   });
 
-  it('refuses a defect photo, as the web store does', async () => {
+  it('stores a defect photo (it is kept on the device, unlike on the web), and refuses a defect meta that does not name its defect', async () => {
     const world = await createMediaWorld();
     const defect = { ...photoRecord(ID), meta: { targetType: 'defect' as const, findingKey: 'k', itemId: 'i', customId: 'c', defectKind: 'custom' as const } };
-    await expect(world.store.put(defect)).rejects.toMatchObject({ code: 'INVALID_RECORD' });
-    expect(world.files.writeCalls()).toEqual([]);
+    await world.store.put(defect);
+    expect(world.files.paths()).toEqual([`media/${ID}.jpg`]);
+    const incomplete = { ...photoRecord('other-id'), meta: { targetType: 'defect', findingKey: 'k', itemId: 'i', defectKind: 'custom' } } as unknown as Parameters<typeof world.store.put>[0];
+    await expect(world.store.put(incomplete)).rejects.toMatchObject({ code: 'INVALID_RECORD' });
+    expect(world.files.paths()).toEqual([`media/${ID}.jpg`]);
   });
 
   it('a second put for an existing pending id keeps the first file and row (idempotent)', async () => {

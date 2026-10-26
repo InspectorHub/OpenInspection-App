@@ -86,6 +86,7 @@ async function setup(options: { concurrency?: number; maxRowsPerPass?: number; f
     isBlocked: neverBlocked,
     store: world.store,
     uploader,
+    resolveDefectPhoto: () => Promise.resolve('missing'),
     resolvePending: resolve,
     isLocked: () => state.locked,
     network,
@@ -433,7 +434,7 @@ describe('reconcile: never while locked, revoked, signed out or offline', () => 
         store: world.store, http: world.engine.http, tokens: { getAccessToken: () => Promise.resolve('t'), checkSession: () => Promise.resolve(SESSION_OK) },
         plugin: s.plugin, origin: ORIGIN, isLocked: () => { throw new Error('storage'); }, clientHeaders: {}, timers: s.timers,
       }),
-      resolvePending: s.resolve, isLocked: () => { throw new Error('storage'); }, network: s.network, clock: s.clock, timers: s.timers,
+      resolveDefectPhoto: () => Promise.resolve('missing'), resolvePending: s.resolve, isLocked: () => { throw new Error('storage'); }, network: s.network, clock: s.clock, timers: s.timers,
     });
     await expect(throwing.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 0 });
     expect(s.plugin.starts).toHaveLength(0);
@@ -936,6 +937,7 @@ async function scripted(options: {
       forgetExcept: () => undefined,
       handlesVideo: () => false,
     },
+    resolveDefectPhoto: () => Promise.resolve('missing'),
     resolvePending: () => Promise.resolve('resolved'),
     isLocked: () => false,
     network: fakeNetwork(),
@@ -1012,6 +1014,7 @@ describe('reconcile: a scan that failed or did not finish still arms the fallbac
       isBlocked: neverBlocked,
       store: world.store,
       uploader: { uploadDetailed: () => Promise.resolve(SOFT), attach: () => Promise.resolve(), isActive: () => false, retryAt: () => null, forgetExcept: () => undefined, handlesVideo: () => false },
+      resolveDefectPhoto: () => Promise.resolve('missing'),
       resolvePending: () => Promise.resolve('resolved'),
       isLocked: () => false,
       network: fakeNetwork(),
