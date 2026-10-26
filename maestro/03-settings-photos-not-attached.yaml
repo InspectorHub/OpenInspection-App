@@ -1,0 +1,32 @@
+# Settings, including the "Photos not attached" section for the one uploaded demo photo that no defect holds.
+# Run after 02-seed-and-needs-attention.yaml (the device stays offline).
+appId: io.inspectorhub.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 60000
+- tapOn: "Settings"
+- extendedWaitUntil:
+    visible: "Your data"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "Photos not attached"
+- extendedWaitUntil:
+    visible: ".*on the server but not attached to an inspection yet.*"
+    timeout: 30000
+- tapOn: "Check again"
+- extendedWaitUntil:
+    visible: ".*on the server but not attached to an inspection yet.*"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "Export unsent data"
+- assertVisible: "Clear local data"
+- assertVisible: "Sign out"
+- scrollUntilVisible:
+    element: "Back to work list"
+    direction: UP
+- tapOn: "Back to work list"
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 30000

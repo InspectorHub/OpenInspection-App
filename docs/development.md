@@ -103,3 +103,37 @@ Open Settings from the work list. Check each of these in the light and the dark 
 | Haptics | A short vibration on the destructive confirmations, on a finished export and on signing out. |
 | Open source | "Source code" and "Read the licence" open in the browser; the version and build date are shown. |
 | Delete account | The row appears only when the server's compat answer carries an `accountUrl` (https). |
+
+## End-to-end flows with Maestro
+
+`maestro/` holds the device flows. They cover the screens that exist in this build: server setup and sign-in, the work list and its "Needs attention" panel, Settings (including "Photos not attached"), and the lock screen's two-step clear. They do not yet cover the inspection editor or the import entry; add flows for those when the screens land.
+
+| Flow | What it does |
+|---|---|
+| `01-sign-in.yaml` | Fresh install: enters the server address, allows plain http (debug builds only), connects, signs in on the engine's login page. |
+| `02-seed-and-needs-attention.yaml` | Seeds demo rows from the development Diagnostics screen ("Seed demo data"), turns the network off, restarts the app and checks the work list and "Needs attention". |
+| `03-settings-photos-not-attached.yaml` | Opens Settings and checks the "Photos not attached" section and its "Check again" button. |
+| `04-lock-two-step-clear.yaml` | With the clock moved past the offline limit: the lock screen, then "Clear local data" asked twice, cancelled once and confirmed once. |
+
+The flows depend on each other and must run in this order. `maestro/run-emulator.ps1` runs them and moves the emulator's clock for the last one (an emulator image without Play Store, so `adb root` works; the script always switches automatic date and time back on).
+
+Run them against the emulator and a local engine:
+
+1. Start the engine from your OpenInspection checkout with `NATIVE_CLIENT_ENABLED=1` in `.dev.vars` (port 8787) and have an account that can sign in without two-step verification.
+2. Start the emulator (one at a time; it needs 2-4 GB, so never together with a Gradle build or an engine type-check) and install the debug build: `cap sync android`, `assembleDebug`, `adb install -r`.
+3. In a PowerShell session:
+
+```powershell
+. .\scripts\dev-env.ps1
+$env:OI_E2E_EMAIL = '<account on the local engine>'
+$env:OI_E2E_PASSWORD = '<its password>'
+.\maestro\run-emulator.ps1
+```
+
+The script runs `adb reverse tcp:8787 tcp:8787`, checks `http://localhost:8787/status`, and passes the account to Maestro as `-e` values. The account is read from the environment only; never put it in a flow or a file. A single flow can be run by hand with `maestro test -e SERVER_URL=http://localhost:8787 -e E2E_EMAIL=... -e E2E_PASSWORD=... maestro/01-sign-in.yaml`.
+
+Notes from running them on the emulator: the runner pins adb and Maestro to the emulator, so a phone plugged in at the same time is left alone. The first sign-in after wiping the browser's data shows Chrome's first-run screen; dismiss it once by hand ("Use without an account"). The browser keeps the engine session between runs, so on later runs sign-in goes straight to the "Allow" page. In the Diagnostics page the WebView's accessibility bounds for elements far down the page do not match where they are drawn, so flow 02 brings "Seed demo data" into view with one slow swipe from the top of the page and taps it by screen position. If the emulator shows "System UI isn't responding" (low host memory), tap Wait and run the flow again.
+
+The flows wait for elements to appear (`extendedWaitUntil`, `scrollUntilVisible`); none sleeps. A full run takes a few minutes once the emulator is up. Maestro needs JDK 21 (set by `dev-env.ps1`).
+
+These flows are not run in CI: the CI jobs have no emulator. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.

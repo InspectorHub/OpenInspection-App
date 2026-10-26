@@ -1,0 +1,46 @@
+# The lock screen and its two-step clear. Run only after the device clock was moved past the offline limit
+# (maestro/run-emulator.ps1 does that); with the demo rows present, clearing asks twice.
+appId: io.inspectorhub.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Verification needed"
+    timeout: 60000
+- assertVisible: ".*waiting to upload.*"
+- assertVisible: "Verify online"
+- assertVisible: "Export unsent data"
+- tapOn: "Clear local data"
+- extendedWaitUntil:
+    visible: "Clear local data?"
+    timeout: 15000
+- tapOn:
+    text: "Clear local data"
+    index: 1
+- extendedWaitUntil:
+    visible: "Delete .* not uploaded\\?"
+    timeout: 30000
+- assertVisible: "Delete everything"
+- tapOn: "Keep my data"
+- assertNotVisible: "Delete everything"
+- assertVisible: "Verification needed"
+- tapOn: "Clear local data"
+- extendedWaitUntil:
+    visible: "Clear local data?"
+    timeout: 15000
+- tapOn:
+    text: "Clear local data"
+    index: 1
+- extendedWaitUntil:
+    visible: "Delete everything"
+    timeout: 30000
+- tapOn: "Delete everything"
+# The demo rows reference photo files that are not on the device, so the result screen may report leftover files.
+- extendedWaitUntil:
+    visible: "Local data cleared"
+    timeout: 60000
+- tapOn: "Continue"
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 60000
+- assertNotVisible: "Verification needed"
+- setAirplaneMode: disabled
