@@ -41,6 +41,8 @@ export interface ForegroundDeps {
 
 export interface ForegroundUploads {
   defectPhoto(rec: PhotoRecord): Promise<UploadResult>;
+  /** A photo of an item sent straight to the engine: the last resort when the device store cannot keep it. */
+  itemPhotoDirect(rec: PhotoRecord): Promise<UploadResult>;
   crop(rec: CropRecord, doc: Y.Doc | null): Promise<UploadResult>;
   annotate(rec: AnnotateRecord, doc: Y.Doc | null): Promise<UploadResult>;
 }
@@ -99,8 +101,8 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
     return index;
   }
 
-  async function defectPhoto(rec: PhotoRecord): Promise<UploadResult> {
-    if (rec.meta.targetType !== 'defect') return fail(MESSAGES.invalidValue);
+  /** One photo as a multipart request to the engine's upload route; `fields` say where it belongs. */
+  async function sendPhotoForm(rec: PhotoRecord, fields: Record<string, string>): Promise<UploadResult> {
     const blob = await bytesOf(deps, rec);
     if (blob === null) return fail(MESSAGES.photoNotPrepared);
     if (blob.size > MAX_MEDIA_BYTES) return fail(MESSAGES.photoTooLarge);
@@ -108,12 +110,20 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
     if (!Object.hasOwn(PHOTO_CONTENT_TYPES, type)) return fail(MESSAGES.photoTypeUnsupported);
     const form = new FormData();
     addFile(form, 'file', blob, `photo.${FILE_EXTENSION[type] ?? 'jpg'}`);
-    form.append('itemId', rec.meta.itemId);
-    form.append('targetType', 'defect');
-    form.append('customId', rec.meta.customId);
+    for (const [name, value] of Object.entries(fields)) form.append(name, value);
     // One id per photo: a repeat of a request whose answer was lost gets the first answer back, not a second file.
     const outcome = await deps.api.send({ method: 'POST', path: apiPath(rec.inspectionId, 'upload'), form, idempotencyKey: rec.pendingId });
     return keyOf(outcome, 'key');
+  }
+
+  async function defectPhoto(rec: PhotoRecord): Promise<UploadResult> {
+    if (rec.meta.targetType !== 'defect') return fail(MESSAGES.invalidValue);
+    return sendPhotoForm(rec, { itemId: rec.meta.itemId, targetType: 'defect', customId: rec.meta.customId });
+  }
+
+  async function itemPhotoDirect(rec: PhotoRecord): Promise<UploadResult> {
+    if (rec.meta.targetType === 'defect') return fail(MESSAGES.invalidValue);
+    return sendPhotoForm(rec, { itemId: rec.meta.itemId });
   }
 
   async function crop(rec: CropRecord, doc: Y.Doc | null): Promise<UploadResult> {
@@ -146,6 +156,7 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
 
   return {
     defectPhoto: (rec) => safely(() => defectPhoto(rec)),
+    itemPhotoDirect: (rec) => safely(() => itemPhotoDirect(rec)),
     crop: (rec, doc) => safely(() => crop(rec, doc)),
     annotate: (rec, doc) => safely(() => annotate(rec, doc)),
   };

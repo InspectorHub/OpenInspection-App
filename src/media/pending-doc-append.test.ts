@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
-import { appendPendingInDoc } from './pending-doc-append';
+import { appendPendingInDoc, hasPendingEntryInDoc } from './pending-doc-append';
+import { resolvePendingInDoc } from './pending-doc';
 
 const FK = '_default:s1:i1';
 
@@ -124,5 +125,32 @@ describe('appendPendingInDoc', () => {
     results(doc).set(FK, new Y.Map<unknown>());
     expect(appendPendingInDoc(doc, FK, 'i1', 'p1')).toBe('appended');
     expect(photosOf(doc)).toEqual([PENDING('p1')]);
+  });
+});
+
+describe('appendPendingInDoc then resolvePendingInDoc', () => {
+  it('the entry it writes is the one the resolver swaps for the uploaded key, in place', () => {
+    const doc = new Y.Doc();
+    expect(appendPendingInDoc(doc, FK, 'i1', 'p1')).toBe('appended');
+    expect(appendPendingInDoc(doc, FK, 'i1', 'p2')).toBe('appended');
+    const key = 'tenant-1/inspections/insp-1/photos/p1.jpg';
+    expect(resolvePendingInDoc(doc, 'p1', key)).toBe('resolved');
+    expect(photosOf(doc)).toEqual([{ key, mediaType: 'photo' }, PENDING('p2')]);
+    // The second resolution finds the key already there and no pending entry for it.
+    expect(resolvePendingInDoc(doc, 'p1', key)).toBe('already');
+    // Control: an id nobody appended is missing, not resolved.
+    expect(resolvePendingInDoc(doc, 'ghost', 'tenant-1/inspections/insp-1/photos/ghost.jpg')).toBe('missing');
+  });
+});
+
+describe('hasPendingEntryInDoc', () => {
+  it('finds an appended entry and never writes', () => {
+    const doc = new Y.Doc();
+    expect(hasPendingEntryInDoc(doc, FK, 'i1', 'p1')).toBe(false);
+    expect(doc.getMap('results').size).toBe(0);
+    appendPendingInDoc(doc, FK, 'i1', 'p1');
+    expect(hasPendingEntryInDoc(doc, FK, 'i1', 'p1')).toBe(true);
+    expect(hasPendingEntryInDoc(doc, FK, 'i1', 'p2')).toBe(false);
+    expect(hasPendingEntryInDoc(doc, '_default:s1:other', 'i1', 'p1')).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import { createManualTimers } from '../../collab/test-support/manual-timers';
+import { createManualTimers, type ManualTimers } from '../../collab/test-support/manual-timers';
 import { createNativeUploader, type NativeUploader } from '../../media/native-uploader';
 import { createFakePlugin, createMediaWorld, ORIGIN, type FakePlugin, type MediaWorld } from '../../media/test-support/fakes';
 import { createManualClock } from '../../platform/clock';
@@ -19,6 +19,14 @@ export interface UploaderWorld {
   /** What the document handle reports: false while the editor's document is ahead of the server. */
   sync: { value: boolean };
   errors: unknown[];
+  /** The one results document every `withDoc` call of this world works on, like the editor's live document. */
+  doc: Y.Doc;
+  /** Inspections each `withDoc` call was made for, in order. */
+  docCalls: string[];
+  /** What `withDoc` should throw instead of running its function; null runs it. */
+  docFailure: { error: unknown };
+  /** The timers that space the retries of a document that is not available. */
+  docTimers: ManualTimers;
   deps: UploaderDeps;
   factory: ReturnType<typeof createUploaderFactory>;
   /** `uploadDetailed` calls the composite made on the real uploader, in order. */
@@ -54,13 +62,21 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
       return native.uploadDetailed(ref, opts);
     },
   };
+  const doc = new Y.Doc();
+  const docCalls: string[] = [];
+  const docFailure: { error: unknown } = { error: null };
+  const docTimers = createManualTimers();
   const deps: UploaderDeps = {
     isBlocked: (id) => Promise.resolve(blocked.has(id)),
     store: world.store,
-    withDoc: (_inspectionId, fn) => Promise.resolve(fn(new Y.Doc())),
+    withDoc: (inspectionId, fn) => {
+      docCalls.push(inspectionId);
+      return docFailure.error === null ? Promise.resolve(fn(doc)) : Promise.reject(docFailure.error);
+    },
+    timers: docTimers,
     native: counted,
     foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(world.store, world.files), isSynced: () => sync.value }),
     onError: (error) => errors.push(error),
   };
-  return { world, plugin, native, api, blocked, sync, errors, deps, factory: createUploaderFactory(deps), nativeCalls };
+  return { world, plugin, native, api, blocked, sync, errors, doc, docCalls, docFailure, docTimers, deps, factory: createUploaderFactory(deps), nativeCalls };
 }

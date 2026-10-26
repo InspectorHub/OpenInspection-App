@@ -80,3 +80,16 @@ export function appendPendingInDoc(doc: Y.Doc, findingKey: string, itemId: strin
   });
   return result;
 }
+
+/**
+ * True when the item `findingKey` already holds an entry with `pendingId`. It only reads: the document is never changed,
+ * and a key that is not an item key (or an item that has no entry) answers false.
+ */
+export function hasPendingEntryInDoc(doc: Y.Doc, findingKey: string, itemId: string, pendingId: string): boolean {
+  if (!isItemKey(findingKey, itemId) || typeof pendingId !== 'string' || pendingId === '') return false;
+  const item = doc.getMap<unknown>('results').get(findingKey);
+  if (!(item instanceof Y.Map)) return false;
+  const photos = item.get('photos');
+  if (!(photos instanceof Y.Array)) return false;
+  return photos.toArray().some((entry) => entry instanceof Y.Map && entry.get('pendingId') === pendingId);
+}

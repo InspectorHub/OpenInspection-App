@@ -4,7 +4,7 @@ import type { PendingMediaRecord } from '@inspectorhub/field-ui';
 import { INSPECTION, jpegBlob, photoRecord } from '../media/test-support/fakes';
 import { MAX_MEDIA_BYTES } from '../media/store';
 import { MESSAGES } from './messages';
-import { seedPhotos } from './test-support/doc-seed';
+import { photosOf, seedPhotos } from './test-support/doc-seed';
 import { reply, scriptedApi } from './test-support/scripted-api';
 import { createUploaderWorld } from './test-support/uploader-world';
 import { createStoredBlobReader, createUploaderFactory, type UploaderDeps } from './uploader';
@@ -59,13 +59,13 @@ describe('item photo (the online path)', () => {
     expect(w.api.calls).toHaveLength(0);
   });
 
-  it('a failed upload answers a sentence and still removes the row: the person retries, the reconciler never sends it behind their back', async () => {
+  it('a failed upload answers a sentence and keeps the original on the device (see uploader-keep.test.ts for the entry and the cases)', async () => {
     const w = await createUploaderWorld();
     w.plugin.defaultBehavior = { kind: 'fail' };
     const result = await w.factory(INSPECTION, null).upload(itemPhoto('p1'));
-    expect(result).toEqual({ ok: false, error: MESSAGES.unreachable });
-    expect(await w.world.store.listRows()).toEqual([]);
-    expect(w.world.files.paths()).toEqual([]);
+    expect(result).toEqual({ ok: false, error: MESSAGES.unreachable, kept: true });
+    expect((await w.world.store.listRows()).map((row) => row.pendingId)).toEqual(['p1']);
+    expect(w.world.files.paths()).toEqual(['media/p1.jpg']);
   });
 
   it('control: a row the uploader did NOT create (the editor queued it) is neither created again nor deleted by a success', async () => {
@@ -255,7 +255,7 @@ describe('what the person is told for each way the background upload can end', (
   it.each(codes)('%s', async (code, sentence) => {
     const w = await createUploaderWorld();
     const factory = createUploaderFactory({ ...w.deps, native: { uploadDetailed: () => Promise.resolve(failedWith(code)) } });
-    expect(await factory(INSPECTION, null).upload(itemPhoto('p1'))).toEqual({ ok: false, error: sentence });
+    expect(await factory(INSPECTION, null).upload(itemPhoto('p1'))).toEqual({ ok: false, error: sentence, kept: true });
   });
 
   it('a record of a kind this build does not know is refused without anything being sent', async () => {
@@ -290,13 +290,15 @@ describe('the stored blob reader', () => {
 });
 
 describe('it never throws', () => {
-  it('a background uploader that throws becomes a sentence and does not leave the row behind', async () => {
+  it('a background uploader that throws is kept like any retryable failure and leaks nothing of the error', async () => {
     const w = await createUploaderWorld();
     const throwing: UploaderDeps['native'] = { uploadDetailed: () => Promise.reject(new Error('plugin exploded at /secret/path')) };
     const factory = createUploaderFactory({ ...w.deps, native: throwing });
     const result = await factory(INSPECTION, null).upload(itemPhoto('p1'));
-    expect(result).toEqual({ ok: false, error: MESSAGES.requestFailed });
+    expect(result).toEqual({ ok: false, error: MESSAGES.photoUploadFailed, kept: true });
     expect(JSON.stringify(result)).not.toContain('secret');
+    expect((await w.world.store.listRows()).map((row) => row.pendingId)).toEqual(['p1']);
+    expect(photosOf(w.doc, '_default:s1:i1')).toHaveLength(1);
   });
 
   it('a store that fails to write answers a sentence', async () => {
