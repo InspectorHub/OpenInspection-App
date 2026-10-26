@@ -1,7 +1,7 @@
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
 import * as Y from 'yjs';
 import { resultsDocName } from '../collab/connector';
-import { MAX_MEDIA_BYTES } from '../media/store';
+import { MAX_MEDIA_BYTES } from '../media/media-types';
 import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
 import type { ExportPlan } from './collect';

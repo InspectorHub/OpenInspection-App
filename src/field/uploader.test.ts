@@ -2,7 +2,7 @@ import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
 import { INSPECTION, jpegBlob, photoRecord } from '../media/test-support/fakes';
-import { MAX_MEDIA_BYTES } from '../media/store';
+import { MAX_MEDIA_BYTES } from '../media/media-types';
 import { MESSAGES } from './messages';
 import { photosOf, seedPhotos } from './test-support/doc-seed';
 import { reply, scriptedApi } from './test-support/scripted-api';

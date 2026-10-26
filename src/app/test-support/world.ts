@@ -8,7 +8,7 @@ import { createManualClock, type ManualClock } from '../../platform/clock';
 import type { Db } from '../../platform/db';
 import { createSqlJsDb } from '../../platform/db-sqljs';
 import { migrate } from '../../platform/schema';
-import { composeWith, type AppServices } from '../compose';
+import { composeWith, type AppServices, type ClientPlatform } from '../compose';
 import { createMemoryFiles, type MemoryFiles } from './memory-files';
 import { connectToServer } from '../connect';
 
@@ -53,6 +53,8 @@ export interface WorldOptions {
   /** Replaces the network entirely (a device with no connection). */
   fetch?: FetchLike;
   appVersion?: string;
+  /** The client platform the services report. Defaults to Android. */
+  platform?: ClientPlatform;
   /** The manual clock's first instant. Defaults to a small number; set a real epoch time where file names carry the time. */
   startMs?: number;
 }
@@ -77,7 +79,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     },
     authSession: options.authSession ? options.authSession(server) : server.authSession,
     clock,
-    platform: 'android',
+    platform: options.platform ?? 'android',
     appVersion: options.appVersion ?? '1.0.0',
   });
   return { services, server, db, files, store, clock, fetched };

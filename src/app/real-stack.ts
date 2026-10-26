@@ -1,9 +1,9 @@
-import { realSocketFactory } from '../collab/real';
+import type { SocketFactory } from '../collab/connector';
 import { realTimers } from '../collab/timers';
 import { editorRegistry } from '../field/editor-registry';
 import type { AppStatePort } from '../offline/lock-monitor';
-import { createRealNetwork } from '../platform/network';
-import { createRealUploaderPlugin } from '../platform/uploader';
+import type { Network } from '../platform/network';
+import type { UploaderPluginLike } from '../platform/uploader';
 import { factsFor, serverTooOldFor } from './client-state';
 import type { AppServices } from './compose';
 import { appDiagnostics } from './diagnostics';
@@ -29,13 +29,19 @@ export function contractPorts(
   };
 }
 
+/** The platform adapters the offline stack needs besides the services: what differs between the Android, iOS and desktop clients. */
+export interface StackAdapters {
+  network: Network;
+  uploaderPlugin: UploaderPluginLike;
+  socketFactory: SocketFactory;
+}
+
 /**
- * The device's adapters behind the stack: the Capacitor network and uploader plugins, the page's WebSocket and timers.
- * The origin and the identity come from the signed-in screen, which read them from the stored server url and identity.
+ * The platform's adapters behind the stack, with the page's timers. The origin and the identity come from the signed-in
+ * screen, which read them from the stored server url and identity.
  */
-export function createRealStackFactory(options: { appState: AppStatePort }): StackFactory {
-  const network = createRealNetwork();
-  const uploaderPlugin = createRealUploaderPlugin();
+export function createStackFactory(adapters: StackAdapters, options: { appState: AppStatePort }): StackFactory {
+  const { network, uploaderPlugin, socketFactory } = adapters;
   return ({ services, origin, identity, allowInsecureHttp, onUnlocked }) =>
     createOfflineStack({
       db: services.db,
@@ -49,7 +55,7 @@ export function createRealStackFactory(options: { appState: AppStatePort }): Sta
       network,
       appState: options.appState,
       uploaderPlugin,
-      openSocket: realSocketFactory,
+      openSocket: socketFactory,
       allowInsecureHttp,
       timers: realTimers,
       onUnlocked,

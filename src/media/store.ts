@@ -10,47 +10,8 @@ import type { Files } from '../platform/files';
 import { assertMediaState, type MediaState } from '../platform/schema';
 import { isValidMediaId, MediaError } from './errors';
 import { defectTargetOfMeta } from './defect-target';
+import { MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, MEDIA_CONTENT_TYPES, PHOTO_CONTENT_TYPES, VIDEO_CONTENT_TYPES, VIDEO_MAX_SECONDS, type MediaContentType, type VideoContentType } from './media-types';
 
-/**
- * Content types the store accepts and the file extension each is stored under. The extension comes from
- * these tables only, never from a file name. Photos are exactly the set the engine's signed photo upload accepts
- * (`image/jpeg`, `image/png`, `image/heic`); clips are the two of the engine's video upload types the app records
- * (`video/mp4`, and `video/quicktime`, which the engine stores as `.mov`). A type the server would refuse is not
- * stored, so nothing can sit on the device waiting for an upload that can never succeed.
- */
-export const PHOTO_CONTENT_TYPES = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/heic': 'heic',
-} as const;
-
-export const VIDEO_CONTENT_TYPES = {
-  'video/mp4': 'mp4',
-  'video/quicktime': 'mov',
-} as const;
-
-export const MEDIA_CONTENT_TYPES = { ...PHOTO_CONTENT_TYPES, ...VIDEO_CONTENT_TYPES } as const;
-
-export type MediaContentType = keyof typeof MEDIA_CONTENT_TYPES;
-export type VideoContentType = keyof typeof VIDEO_CONTENT_TYPES;
-
-/** The engine's photo ceiling (10 MiB), checked here so an oversized photo is refused before it is written. */
-export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
-/**
- * The engine's clip ceiling (`MAX_VIDEO_BYTES` of its video upload route, 200 MiB). A constant: nothing the user or a
- * server sends changes it, and it is the only REAL bound on a clip (the duration below is a claim by the caller).
- * It must stay aligned with the deployed engine plan: the engine buffers the whole file in memory (its video upload
- * parses the body and reads it into an array buffer), so the figure has to fit the Worker memory limit (128 MB) and
- * the request body limit of the plan the engine runs on (100 MB on the Free and Pro plans). If the deployed plan
- * cannot take this size, lower the value here together with the engine's own.
- */
-export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
-/**
- * The longest single clip, the same 30 seconds the engine asks Stream to enforce and the web capture sheet shows. It is
- * checked only against the duration the caller declares in `meta.durationSec`, which is a claim and not a measurement:
- * the size cap is the only bound that holds for whatever the file really contains.
- */
-export const VIDEO_MAX_SECONDS = 30;
 /** Bytes per piece when a Blob is streamed to disk. */
 export const VIDEO_CHUNK_BYTES = 1024 * 1024;
 

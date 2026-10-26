@@ -1,15 +1,9 @@
 import { isValidMediaId } from './errors';
 import type { ResolveResult } from './pending-doc';
-import {
-  isValidUploadedKey,
-  MAX_VIDEO_BYTES,
-  VIDEO_CHUNK_BYTES,
-  VIDEO_CONTENT_TYPES,
-  VIDEO_MAX_SECONDS,
-  type MediaRow,
-  type VideoSource,
-} from './store';
-import { clampRetryAfter, failure, isParseableUrlText, isRecord, resolveRelocatableUploadUrl, type KindContext, type KindStrategy, type TransferTarget } from './upload-kinds';
+import { MAX_VIDEO_BYTES, VIDEO_CONTENT_TYPES, VIDEO_MAX_SECONDS } from './media-types';
+import { isValidUploadedKey, VIDEO_CHUNK_BYTES, type MediaRow, type VideoSource } from './store';
+import { clampRetryAfter, failure, isParseableUrlText, isRecord, resolveRelocatableUploadUrl } from './upload-kinds';
+import type { KindContext, KindStrategy, TransferTarget } from './upload-strategy';
 
 export { MAX_VIDEO_BYTES, VIDEO_MAX_SECONDS };
 

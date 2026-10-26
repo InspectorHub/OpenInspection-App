@@ -21,7 +21,7 @@ export function UpdateRecommended({ platform, downloadUrl, openExternal, onDismi
       <div className="flex flex-col gap-2 sm:flex-row">
         {link.href !== null && (
           <Button variant="secondary" onClick={link.open}>
-            {platform === 'ios' ? 'Open TestFlight' : 'Update'}
+            {platform === 'ios' ? 'Open TestFlight' : platform === 'windows' ? 'Download update' : 'Update'}
           </Button>
         )}
         <Button variant="quiet" aria-label="Dismiss update notice" onClick={onDismiss}>

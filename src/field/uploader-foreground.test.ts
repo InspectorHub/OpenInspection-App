@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
-import { MAX_MEDIA_BYTES } from '../media/store';
+import { MAX_MEDIA_BYTES } from '../media/media-types';
 import { MESSAGES } from './messages';
 import { seedPhotos } from './test-support/doc-seed';
 import { formFields, reply, scriptedApi } from './test-support/scripted-api';

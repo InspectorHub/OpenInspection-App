@@ -1,5 +1,4 @@
 import type { Db } from './db';
-import type { DbUpgrade } from './db-capacitor';
 
 /**
  * One schema step. `statements` is the single source of truth for both paths:
@@ -123,6 +122,12 @@ export const MIGRATIONS: readonly Migration[] = [
 ];
 
 export const CURRENT_SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.toVersion ?? 0;
+
+/** One versioned step in the shape the SQLite plugin's `addUpgradeStatement` takes. */
+export interface DbUpgrade {
+  toVersion: number;
+  statements: string[];
+}
 
 /** The shape `openCapacitorDb` hands to the plugin's `addUpgradeStatement`. */
 export function toUpgradeStatements(migrations: readonly Migration[] = MIGRATIONS): DbUpgrade[] {

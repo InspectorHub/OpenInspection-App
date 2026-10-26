@@ -1,7 +1,8 @@
 import { Directory } from '@capacitor/filesystem';
 import { describe, expect, it } from 'vitest';
 import { base64ToBytes, bytesToBase64 } from './base64';
-import { assertSafeRelativePath, createFiles, type FilesystemLike, WRITE_SLICE_BYTES } from './files';
+import { createFiles, type FilesystemLike, WRITE_SLICE_BYTES } from './files-capacitor';
+import { assertSafeRelativePath } from './files-path';
 
 function fakeFs() {
   const store = new Map<string, Uint8Array>();

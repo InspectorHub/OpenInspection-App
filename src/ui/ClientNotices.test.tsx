@@ -74,6 +74,16 @@ describe('UpgradeRequired', () => {
     },
   );
 
+  it('Windows: no TestFlight wording; the button is Download update (control: iOS keeps TestFlight)', () => {
+    const { container } = render(<UpgradeRequired platform="windows" downloadUrl={APK} openExternal={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Download update' })).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/testflight/i);
+    render(<UpgradeRequired platform="windows" downloadUrl={null} openExternal={vi.fn()} />);
+    expect(screen.getAllByText(/ask your administrator/i).length).toBeGreaterThan(0);
+    const ios = render(<UpgradeRequired platform="ios" downloadUrl={null} openExternal={vi.fn()} />);
+    expect(ios.container).toHaveTextContent(/testflight/i);
+  });
+
   it('iOS: the button is named for TestFlight and opens the address the server gave', async () => {
     const openExternal = vi.fn(() => Promise.resolve());
     render(<UpgradeRequired platform="ios" downloadUrl="https://testflight.apple.com/join/abc123" openExternal={openExternal} />);
@@ -175,6 +185,15 @@ describe('UpdateRecommended', () => {
     expect(onDismiss).not.toHaveBeenCalled();
     await user.click(dismiss);
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('Windows: the button is Download update and TestFlight is never named (control: iOS)', () => {
+    const windows = render(<UpdateRecommended platform="windows" downloadUrl={APK} openExternal={vi.fn()} onDismiss={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Download update' })).toBeInTheDocument();
+    expect(windows.container).not.toHaveTextContent(/testflight/i);
+    windows.unmount();
+    render(<UpdateRecommended platform="ios" downloadUrl={APK} openExternal={vi.fn()} onDismiss={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Open TestFlight' })).toBeInTheDocument();
   });
 
   it('without a usable address only Dismiss is offered', () => {

@@ -13,7 +13,7 @@ export async function threeWithOneQuarantined(world: ExportWorld): Promise<void>
 
 export function view(world: ExportWorld, props: Partial<ExportFlowProps> = {}) {
   const onClose = vi.fn();
-  render(<ExportFlow services={{ db: world.db, files: world.files, clock: world.clock, platform: 'ios' }} sharer={world.sharer} reconcile={() => Promise.resolve(true)} onClose={onClose} {...props} />);
+  render(<ExportFlow services={{ db: world.db, files: world.files, clock: world.clock, platform: 'ios', sharer: world.sharer }} sharer={world.sharer} reconcile={() => Promise.resolve(true)} onClose={onClose} {...props} />);
   return { onClose };
 }
 

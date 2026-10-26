@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createNetwork, type NetworkPluginLike } from './network';
+import { createNetwork, type NetworkPluginLike } from './network-capacitor';
 
 function fakePlugin(connected: boolean) {
   const listeners = new Set<(s: { connected: boolean }) => void>();

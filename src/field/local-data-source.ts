@@ -3,6 +3,7 @@ import type { NativeUploader } from '../media/native-uploader';
 import type { MediaStore } from '../media/store';
 import { createBlockedGuard, type IsBlocked } from '../offline/blocked';
 import type { Account } from '../offline/outbox';
+import type { ClientPlatform } from '../app/compose';
 import type { ReconcilerHandle } from '../app/offline-stack';
 import type { WorkPackageRefresher } from '../offline/work-package';
 import type { Clock } from '../platform/clock';
@@ -14,6 +15,7 @@ import type { Api } from './api-client';
 import { createAfterWrite } from './after-write';
 import { wrapCollab } from './collab-wrapper';
 import { createExecutor } from './commands';
+import { fieldPlatformOf } from './field-platform';
 import { createEditorLoader } from './editor-data';
 import type { EditorRegistry } from './editor-registry';
 import { failureOf, MESSAGES } from './messages';
@@ -87,7 +89,7 @@ export interface LocalDataSourceDeps {
    * the replayer): captured work is always delivered. Omitted: editing is allowed.
    */
   canEdit?(): boolean;
-  platform: 'ios' | 'android';
+  platform: ClientPlatform;
   /** The time stamped on an inspector signature. It MUST be anchored to the server's clock: the device clock can be set to any time. */
   signedAtMs(): number;
   clock: Clock;
@@ -292,6 +294,6 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       editorPath: (inspectionId) => `/inspections/${encodeURIComponent(inspectionId)}/edit`,
     },
     resources: { ...resources, video: videoAdapter.video },
-    platform: deps.platform,
+    platform: fieldPlatformOf(deps.platform),
   };
 }
