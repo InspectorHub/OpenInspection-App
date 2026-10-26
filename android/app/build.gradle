@@ -1,0 +1,95 @@
+apply plugin: 'com.android.application'
+
+// The one source of the app version is package.json: the web bundle (and the X-Client-Version header and the Settings screen)
+// read it through vite.config.ts, and the native versionName reads it here (the whole string, so a pre-release such as
+// 1.2.3-beta.1 agrees with the web bundle), so the three can never disagree.
+def appPackage = new groovy.json.JsonSlurper().parse(file('../../package.json'))
+def appVersionText = appPackage instanceof Map ? appPackage.version : null
+if (!(appVersionText instanceof String)) {
+    throw new GradleException("package.json has no string 'version'")
+}
+def appVersionMatch = (appVersionText =~ /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/)
+if (!appVersionMatch.matches()) {
+    throw new GradleException("package.json version '${appVersionText}' is not major.minor.patch with an optional -prerelease")
+}
+def appMajor = appVersionMatch.group(1).toBigInteger()
+def appMinor = appVersionMatch.group(2).toBigInteger()
+def appPatch = appVersionMatch.group(3).toBigInteger()
+if (appMajor > 2100 || appMinor >= 1000 || appPatch >= 1000) {
+    throw new GradleException("package.json version '${appVersionText}' does not fit the version code: major up to 2100, minor and patch up to 999")
+}
+def appVersionName = appVersionText
+// versionCode for now: major * 1000000 + minor * 1000 + patch (a pre-release suffix is ignored), never below 1 (Android needs a
+// positive code) and never above 2100000000 (the largest a store takes). Every version with a minor and patch below 1000 gets its
+// own code, so a later version always has the higher one. The release workflow passes an explicit value with -PappVersionCode=N,
+// because the release rule is defined with the release workflow.
+int appVersionCodeValue
+if (project.hasProperty('appVersionCode')) {
+    def requested = project.property('appVersionCode').toString()
+    if (!(requested ==~ /[1-9][0-9]{0,9}/) || requested.toLong() > 2100000000L) {
+        throw new GradleException("-PappVersionCode must be a whole number from 1 to 2100000000 without leading zeros, got '${requested}'")
+    }
+    appVersionCodeValue = requested.toLong().intValue()
+} else {
+    def derived = appMajor * 1000000 + appMinor * 1000 + appPatch
+    if (derived > 2100000000) {
+        throw new GradleException("package.json version '${appVersionText}' gives the version code ${derived}, above 2100000000")
+    }
+    appVersionCodeValue = Math.max(1, derived.intValue())
+}
+
+android {
+    namespace = "io.inspectorhub.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "io.inspectorhub.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode appVersionCodeValue
+        versionName appVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    // The upload plugin's own dependency, declared here too because the app configures it (UploadShade). Keep it equal to the
+    // plugin's version; a test compares the two.
+    implementation 'net.gotev:uploadservice:4.9.4'
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
