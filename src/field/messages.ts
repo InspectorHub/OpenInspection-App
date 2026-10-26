@@ -42,6 +42,8 @@ export const MESSAGES = {
   photoUploadFailed: 'The photo could not be uploaded. Try again.',
   photoKeptNotAdded: 'The photo is saved on this device, but it has not been added to the inspection.',
   photoGone: 'The photo this change belongs to is no longer in the inspection.',
+  photoKept: 'The photo is saved on this device but has not been uploaded yet.',
+  photoKeptDefect: 'The photo is saved on this device but has not been uploaded or added to the defect yet.',
   unreachable: 'The app could not reach the server. Try again.',
   videoRemovalUnavailable: 'Removing a video is not available in the app yet.',
   videoTooLarge: 'This video is larger than 200 MB and cannot be uploaded.',
@@ -81,4 +83,12 @@ export function failure(error: string): CommandResult {
 /** True for a result that asks the person to connect. The one place that knows how such a result looks. */
 export function isNeedsConnection(result: CommandResult<unknown>): boolean {
   return !result.ok && result.error === MESSAGES.needsConnection;
+}
+
+/** The notice for photos kept on the device after an upload failed; the count is shown only when more than one was kept. */
+export function photosKeptMessage(kind: 'item' | 'defect', count: number): string {
+  if (count <= 1) return kind === 'defect' ? MESSAGES.photoKeptDefect : MESSAGES.photoKept;
+  return kind === 'defect'
+    ? `${count} photos are saved on this device but have not been uploaded or added to their defects yet.`
+    : `${count} photos are saved on this device but have not been uploaded yet.`;
 }

@@ -99,11 +99,12 @@ describe('a server too old: the editor uploader says so instead of pretending th
     expect(MESSAGES.serverTooOld).toBe(OLD);
   });
 
-  it('refuses an upload before anything is stored or sent (control: a sufficient server uploads)', async () => {
+  it('refuses a kind that keeps nothing before anything is stored or sent (control: a sufficient server uploads; item photos are kept, see local-data-source.kept.test.ts)', async () => {
     const base = await world();
     const old = await world({ stack: { ...base.stack, serverTooOld: () => true } });
     const uploader = old.source.media.uploader(INSPECTION, null);
-    expect(await uploader.upload(photoRecord('p1') as PendingMediaRecord)).toEqual({ ok: false, error: OLD });
+    const defect: PendingMediaRecord = { ...photoRecord('p1'), meta: { targetType: 'defect', findingKey: '_default:s1:i1', itemId: 'i1', customId: 'c1', defectKind: 'custom' } };
+    expect(await uploader.upload(defect)).toEqual({ ok: false, error: OLD });
     expect(base.nativeCalls).toEqual([]);
     expect(await base.store.listRows()).toEqual([]);
     const fine = await world({ stack: { ...base.stack, serverTooOld: () => false } });

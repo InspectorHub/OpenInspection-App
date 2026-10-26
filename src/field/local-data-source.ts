@@ -23,6 +23,7 @@ import { createMemoryPhotoIndex, createPhotoUrls, indexUploadedRows, type PhotoI
 import { hasQueuedWrites } from './queued-writes';
 import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
+import { createKeptNotice } from './kept-notice';
 import { createStoredBlobReader, createUploaderFactory } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
 import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
@@ -171,16 +172,22 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       isSynced: (inspectionId) => deps.registry.getHandle(inspectionId)?.synced() ?? false,
     }),
     onError: report,
+    onKept: createKeptNotice({ timers: deps.timers, say: (message) => say(message, 'info') }),
   });
 
   const uploader: typeof sendPhoto = (inspectionId, doc) => {
     const inner = sendPhoto(inspectionId, doc);
     return {
-      // Refused before anything is stored or sent. A server too old gets its own sentence, not the lock's.
+      // Refused before anything is stored or sent only when the app itself must be updated. A server that is too old
+      // does not refuse: the photo is kept like an offline one (row and document entry) and waits for the server to be
+      // updated; the sentence it answers with names that, not the lock.
       upload: async (rec) => {
         if (!canEdit()) return { ok: false, error: MESSAGES.editingOff };
-        if (stack.serverTooOld?.() === true) return { ok: false, error: MESSAGES.serverTooOld };
-        return inner.upload(rec);
+        // The other kinds (a defect photo, a crop, an annotation) keep nothing yet, so they still stop before a request.
+        const keepsPhoto = rec.kind === 'photo' && rec.meta.targetType !== 'defect';
+        if (!keepsPhoto && stack.serverTooOld?.() === true) return { ok: false, error: MESSAGES.serverTooOld };
+        const result = await inner.upload(rec);
+        return !result.ok && 'kept' in result && result.kept === true && stack.serverTooOld?.() === true ? { ...result, error: MESSAGES.serverTooOld } : result;
       },
     };
   };

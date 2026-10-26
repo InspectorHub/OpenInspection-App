@@ -54,6 +54,8 @@ export interface UploaderDeps {
   /** Runs a function against the results document of an inspection; rejects with `BLOCKED` for a blocked inspection. */
   withDoc: WithDoc;
   foreground: ForegroundUploads;
+  /** Called once for every answer that carries `kept`: the photo is on the device and the document names it. Never throws into the answer. */
+  onKept?(inspectionId: string, kind: 'item' | 'defect'): void;
   /** Something that did not stop the answer: a row that could not be removed, an entry that could not be written. */
   onError?(error: unknown): void;
   /** Spaces the tries to write the document entry while the editor's document is not available. */
@@ -242,12 +244,22 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     }
   }
 
+  function announceKept(inspectionId: string, rec: PendingMediaRecord): void {
+    try {
+      deps.onKept?.(inspectionId, rec.kind === 'photo' && rec.meta.targetType === 'defect' ? 'defect' : 'item');
+    } catch (error) {
+      deps.onError?.(error);
+    }
+  }
+
   return (inspectionId, doc) => ({
     upload: async (rec) => {
       try {
         if (rec.inspectionId !== inspectionId) return fail(MESSAGES.unavailable);
         if (await deps.isBlocked(inspectionId)) return fail(MESSAGES.blocked);
-        return await route(inspectionId, doc, rec);
+        const result = await route(inspectionId, doc, rec);
+        if (!result.ok && result.kept === true) announceKept(inspectionId, rec);
+        return result;
       } catch {
         // Nothing of the error is shown: it may carry a path or a server's words.
         return fail(MESSAGES.requestFailed);
