@@ -1,6 +1,8 @@
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
+import { defectTargetOf } from '../media/defect-target';
 import { isValidMediaId } from '../media/errors';
+import { MAX_UPLOAD_ATTEMPTS } from '../media/native-uploader';
 import { SYNC_LEASE, withLease } from './lease';
 import { sameAccount, type Account } from './outbox';
 import { isIssuedPlan } from './plan-brand';
@@ -139,8 +141,11 @@ const MEDIA_PATH = /^media\/([A-Za-z0-9_-]{1,64})\.(?:jpg|png|heic|mp4|mov)$/;
  *  - the photo's inspection has a package row owned by THIS account (both tenant and user; a row with one of them empty
  *    is nobody's here) AND is quarantined, or is being purged on the person's word (tombstone 2); or
  *  - the photo has no package row at all (an orphan row nothing else will ever look at).
+ *  - the photo is a defect photo that stopped for good (`failed` at the attempt limit, which only a permanent refusal
+ *    writes) in an inspection that is not being removed. A defect photo has no entry in the inspection's document, so
+ *    discarding it leaves nothing dangling; an item photo has one, and is removed only by removing it in the editor.
  * Anything else is refused as `not_removable`: another account's photo, and a photo of a healthy inspection that is still
- * uploading, are never deleted from here. A photo of an inspection that a purge decided on its own (tombstone 1) is
+ * uploading (or an item photo that stopped), are never deleted from here. A photo of an inspection that a purge decided on its own (tombstone 1) is
  * `purging`: the person-confirmed removal of the inspection takes it. A file that is already gone is fine; a file that
  * cannot be removed keeps the row. The file touched is only ever `media/<this row's id>.<ext>`. Refused while locked.
  */
@@ -157,7 +162,7 @@ export async function discardMedia(deps: Pick<UserActionDeps, 'db' | 'files' | '
   if (account === null) return { kind: 'refused', reason: 'no_account' };
   const who = account;
   try {
-    const rows = await deps.db.query<{ pending_id: string; inspection_id: string; path: string }>('SELECT pending_id, inspection_id, path FROM media WHERE pending_id = ?', [pendingId]);
+    const rows = await deps.db.query<{ pending_id: string; inspection_id: string; path: string; kind: string; meta: string; state: string; attempts: number }>('SELECT pending_id, inspection_id, path, kind, meta, state, attempts FROM media WHERE pending_id = ?', [pendingId]);
     const row = rows[0];
     if (row === undefined) return { kind: 'not_found' };
     const packages = await deps.db.query<{ tenant_id: string | null; user_id: string | null; purging: number; quarantine_source: string | null }>('SELECT tenant_id, user_id, purging, quarantine_source FROM work_package WHERE inspection_id = ?', [row.inspection_id]);
@@ -166,7 +171,9 @@ export async function discardMedia(deps: Pick<UserActionDeps, 'db' | 'files' | '
       if (!sameAccount(who, owner.tenant_id, owner.user_id)) return { kind: 'refused', reason: 'not_removable' };
       const flag = Number(owner.purging);
       if (flag === TOMBSTONE_AUTO) return { kind: 'refused', reason: 'purging' };
-      if (flag !== TOMBSTONE_USER && owner.quarantine_source === null) return { kind: 'refused', reason: 'not_removable' };
+      // `row.kind === 'photo'` is redundant with `defectTargetOf` (it returns null for any other kind); kept so the rule reads on its own.
+      const stuckDefectPhoto = row.state === 'failed' && Number(row.attempts) >= MAX_UPLOAD_ATTEMPTS && row.kind === 'photo' && defectTargetOf({ kind: 'photo', meta: row.meta }) !== null;
+      if (flag !== TOMBSTONE_USER && owner.quarantine_source === null && !stuckDefectPhoto) return { kind: 'refused', reason: 'not_removable' };
     }
     const match = MEDIA_PATH.exec(row.path);
     if (match !== null && match[1] === row.pending_id) {

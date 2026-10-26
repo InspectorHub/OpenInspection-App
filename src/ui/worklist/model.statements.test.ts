@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import { accountKey } from '../../offline/outbox';
 import { ALICE, at, createListWorld, NOW, type ListWorld } from '../test-support/worklist-world';
 import { readWorkListSnapshot, type TitleMemo } from './model';
@@ -9,7 +10,7 @@ beforeEach(async () => {
   w = await createListWorld();
 });
 
-/** N packages, each with a cached title, a queued write, a failed write and two photos, so every grouped query has work to do. */
+/** N packages, each with a cached title, a queued write, a failed write and two photos (one stuck for good), so every grouped query has work to do. */
 async function seed(n: number): Promise<void> {
   const key = accountKey(ALICE);
   await w.db.transaction(async (tx) => {
@@ -21,7 +22,7 @@ async function seed(n: number): Promise<void> {
       await tx.run("INSERT INTO outbox (idempotency_key, seq, op, payload, state, created_at, inspection_id, tenant_id, user_id) VALUES (?, ?, 'inspection.update', '{}', 'pending', ?, ?, ?, ?)", [`k${id}a`, i * 2 + 1, NOW, id, ALICE.tenantId, ALICE.userId]);
       await tx.run("INSERT INTO outbox (idempotency_key, seq, op, payload, state, last_error, created_at, inspection_id, tenant_id, user_id) VALUES (?, ?, 'inspection.update', '{}', 'failed', 'rejected', ?, ?, ?, ?)", [`k${id}b`, i * 2 + 2, NOW, id, ALICE.tenantId, ALICE.userId]);
       await tx.run("INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, created_at) VALUES (?, ?, 'photo', ?, 'image/jpeg', '{}', 'pending', ?)", [`m${id}a`, id, `media/m${id}a.jpg`, NOW]);
-      await tx.run("INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, created_at) VALUES (?, ?, 'photo', ?, 'image/jpeg', '{}', 'failed', ?)", [`m${id}b`, id, `media/m${id}b.jpg`, NOW]);
+      await tx.run("INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, created_at) VALUES (?, ?, 'photo', ?, 'image/jpeg', '{}', 'failed', ?, ?)", [`m${id}b`, id, `media/m${id}b.jpg`, MAX_UPLOAD_ATTEMPTS, NOW]);
     }
   });
 }

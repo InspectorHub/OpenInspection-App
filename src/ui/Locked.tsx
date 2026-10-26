@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
+import { countAtRisk, type AtRisk } from '../offline/at-risk';
 import { clearLocalData } from '../offline/clear-local-data';
 import type { LockReason } from '../offline/lock';
 import { loadTenantName, type LockOutcome } from '../offline/lock-state';
 import { verifyOnline } from '../offline/verify-online';
 import { countWaitingUploads } from '../offline/waiting';
+import { atRiskLines, COUNT_UNKNOWN } from './ClearLocalDataControl';
 import { ConfirmDialog } from './ConfirmDialog';
 import { BuildExpiry } from './BuildExpiry';
 import { Body, Button, Heading, Notice, Screen } from './kit';
@@ -41,6 +43,8 @@ const FALLBACK_COMPANY = 'your company';
 const CLEAR_DESCRIPTION =
   'This permanently removes the inspections, photos and changes that have not been uploaded from this device. This cannot be undone.';
 
+const SECOND_DESCRIPTION = 'These items exist only on this device. Once removed they cannot be recovered. Export them first if you may need them.';
+
 const CLOCK_STILL_BEHIND =
   'Your date or time still looks wrong to the app or the server. Correct them in your device settings, then verify again.';
 
@@ -70,7 +74,9 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
   const [company, setCompany] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [step, setStep] = useState<'closed' | 'first' | 'second'>('closed');
+  /** What the count found when the first question was confirmed; null when the count failed. */
+  const [risk, setRisk] = useState<AtRisk | null>(null);
   const [clearing, setClearing] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [leftover, setLeftover] = useState<number | null>(null);
@@ -118,6 +124,28 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
     setVerifying(false);
   }
 
+  /**
+   * The first confirmation. What would be lost is counted right now; when anything has not reached the server (or the count
+   * cannot be made) the person is asked a second time with the count in front of them, and nothing is removed yet.
+   */
+  async function advance(): Promise<void> {
+    setClearError(null);
+    setClearing(true);
+    let fresh: AtRisk | null = null;
+    try {
+      fresh = await countAtRisk(services.db);
+    } catch {
+      fresh = null;
+    }
+    if (fresh === null || fresh.total > 0) {
+      setRisk(fresh);
+      setStep('second');
+      setClearing(false);
+      return;
+    }
+    await clear();
+  }
+
   async function clear(): Promise<void> {
     setClearError(null);
     setClearing(true);
@@ -125,7 +153,7 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
       const result = await clearLocalData(services.db, services.files, services.clock.now());
       await services.tokens.signOut(origin).catch(() => undefined);
       if (result.filesFailed.length > 0) {
-        setConfirming(false);
+        setStep('closed');
         setLeftover(result.filesFailed.length);
         setClearing(false);
         return;
@@ -138,7 +166,7 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
   }
 
   function closeDialog(): void {
-    setConfirming(false);
+    setStep('closed');
     setClearError(null);
     trigger.current?.focus();
   }
@@ -194,16 +222,40 @@ export function Locked({ services, origin, reason, onOutcome, onSignInRequired, 
             Export unsent data
           </Button>
         )}
-        <Button ref={trigger} variant="secondary" disabled={verifying} onClick={() => setConfirming(true)}>
+        <Button ref={trigger} variant="secondary" disabled={verifying} onClick={() => setStep('first')}>
           Clear local data
         </Button>
         {onSignedOut && <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />}
       </div>
-      {confirming && (
+      {step === 'first' && (
         <ConfirmDialog
           title="Clear local data?"
           description={CLEAR_DESCRIPTION}
           confirmLabel="Clear local data"
+          busy={clearing}
+          error={clearError}
+          onConfirm={() => void latch(advance)}
+          onCancel={closeDialog}
+        />
+      )}
+      {step === 'second' && (
+        <ConfirmDialog
+          title={risk === null ? 'Delete data that may not be uploaded?' : `Delete ${items(risk.total)} that ${risk.total === 1 ? 'is' : 'are'} not uploaded?`}
+          description={SECOND_DESCRIPTION}
+          details={
+            risk === null ? (
+              <Notice tone="watch">{COUNT_UNKNOWN}</Notice>
+            ) : (
+              <ul data-testid="at-risk" className="list-disc pl-5 text-base font-semibold text-ih-fg-1">
+                {atRiskLines(risk).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )
+          }
+          confirmLabel="Delete everything"
+          cancelLabel="Keep my data"
+          destructive
           busy={clearing}
           error={clearError}
           onConfirm={() => void latch(clear)}

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { accountKey, markOrphaned } from '../../offline/outbox';
+import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import { at, ALICE, BOB, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, seedTenantName, type ListWorld } from '../test-support/worklist-world';
 import { readWorkListSnapshot } from './model';
 
@@ -136,7 +137,7 @@ describe('readWorkListSnapshot: groups, failed items, repair list', () => {
     await seedMedia(w.db, 'm1', 'a', 'failed');
     const snap = await snapshot();
     expect(snap.failedOutbox).toEqual([{ key: 'k1', op: 'inspection.update', inspectionId: 'a', error: 'validation_failed', bytes: 17, isCreate: false }]);
-    expect(snap.failedMedia).toEqual([{ pendingId: 'm1', inspectionId: 'a', kind: 'photo' }]);
+    expect(snap.failedMedia).toEqual([{ pendingId: 'm1', inspectionId: 'a', kind: 'photo', target: 'item' }]);
   });
 
   it('an unknown error code on a failed write is read as no code', async () => {
@@ -177,7 +178,7 @@ describe('readWorkListSnapshot: stuck photos belong to the signed-in account', (
     await seedMedia(w.db, 'mine', 'a', 'failed');
     await seedMedia(w.db, 'theirs', 'bobs', 'failed');
     const snap = await snapshot();
-    expect(snap.failedMedia).toEqual([{ pendingId: 'mine', inspectionId: 'a', kind: 'photo' }]);
+    expect(snap.failedMedia).toEqual([{ pendingId: 'mine', inspectionId: 'a', kind: 'photo', target: 'item' }]);
     expect(snap.repair.orphanMedia).toEqual([]);
     expect(snap.repair.foreignMedia).toBe(1);
   });
@@ -207,7 +208,7 @@ describe('readWorkListSnapshot: stuck photos belong to the signed-in account', (
     await seedMedia(w.db, 'fine', 'ghost0000', 'uploaded');
     const snap = await snapshot();
     expect(snap.failedMedia).toEqual([]);
-    expect(snap.repair.orphanMedia).toEqual([{ pendingId: 'ghostly', inspectionId: 'ghost0000', kind: 'photo' }]);
+    expect(snap.repair.orphanMedia).toEqual([{ pendingId: 'ghostly', inspectionId: 'ghost0000', kind: 'photo', target: 'item' }]);
     expect(snap.repair.foreignMedia).toBe(0);
   });
 
@@ -285,5 +286,33 @@ describe('readWorkListSnapshot: never-sent inspections and creates', () => {
       ['c1', true],
       ['u1', false],
     ]);
+  });
+});
+
+describe('readWorkListSnapshot: a photo that failed but is still being retried is waiting, not stuck', () => {
+  const defectMeta = JSON.stringify({ targetType: 'defect', findingKey: '_default:s1:i1', itemId: 'i1', customId: 'd1', defectKind: 'custom' });
+
+  it('a failed row below the attempt limit counts as waiting and is not listed; one at the limit needs attention and is listed', async () => {
+    await seedPkg(w.db, { id: 'a' });
+    await seedMedia(w.db, 'transient', 'a', 'failed', { attempts: 3 });
+    expect(await row('a')).toMatchObject({ waiting: 1, needAttention: 0 });
+    expect((await snapshot()).failedMedia).toEqual([]);
+    await seedMedia(w.db, 'refused', 'a', 'failed', { attempts: MAX_UPLOAD_ATTEMPTS });
+    expect(await row('a')).toMatchObject({ waiting: 1, needAttention: 1 });
+    expect((await snapshot()).failedMedia.map((m) => m.pendingId)).toEqual(['refused']);
+  });
+
+  it('the last attempt below the limit is still waiting (the transient failures saturate one below it)', async () => {
+    await seedPkg(w.db, { id: 'a' });
+    await seedMedia(w.db, 'almost', 'a', 'failed', { attempts: MAX_UPLOAD_ATTEMPTS - 1 });
+    expect(await row('a')).toMatchObject({ waiting: 1, needAttention: 0 });
+  });
+
+  it('names what a stuck photo belongs to: a defect row is told from an item row by its meta', async () => {
+    await seedPkg(w.db, { id: 'a' });
+    await seedMedia(w.db, 'item', 'a', 'failed');
+    await seedMedia(w.db, 'defect', 'a', 'failed', { meta: defectMeta });
+    const listed = Object.fromEntries((await snapshot()).failedMedia.map((m) => [m.pendingId, m.target]));
+    expect(listed).toEqual({ item: 'item', defect: 'defect' });
   });
 });

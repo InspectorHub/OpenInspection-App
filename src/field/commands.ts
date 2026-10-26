@@ -5,6 +5,7 @@ import { RegistryError, UPDATE_FIELD_NAMES, isLocalId } from '../offline/registr
 import type { Api } from './api-client';
 import { executeOnline, saveSettingsOnline } from './commands-online';
 import { MESSAGES, blockedResult, failure, needsConnectionResult } from './messages';
+import type { UnsentPhotos } from './queued-writes';
 import { sanitizeSettingsPatch } from './settings-patch';
 
 /**
@@ -19,6 +20,8 @@ import { sanitizeSettingsPatch } from './settings-patch';
  *    same inspection is still queued: sending past it would apply the writes out of order, so an eligible change is
  *    queued behind it and any other asks the person to try again.
  *  - Everything else needs a connection offline, and online goes straight to the `/api/*` route.
+ *  - `publish` is refused, with no request, while the inspection has photos that are not on the server yet: the report
+ *    would leave them out without a word.
  *  - After an online write that succeeded, the cached copy the editor reloads from is refreshed (`afterWrite`), bounded
  *    in time. A refresh that cannot be done does not fail the write; it is reported through `onCacheStale`, because
  *    `CommandResult` is the package's fixed contract and has no place for it.
@@ -36,6 +39,8 @@ export interface CommandDeps {
   signedAtMs(): number;
   /** True while this inspection has a write queued or stopped for a person (`hasQueuedWrites`). */
   hasQueuedWrites(inspectionId: string): Promise<boolean>;
+  /** Whether this inspection has photos a report would leave out: none, still on their way, or stopped for good (`unsentPhotos`). */
+  unsentPhotos(inspectionId: string): Promise<UnsentPhotos>;
   /** Refreshes the cached copy of this inspection (`createAfterWrite`). True when the cache now holds the server's state. */
   afterWrite(inspectionId: string): Promise<boolean>;
   /** The write succeeded but the cache could not be brought up to date: a reload will show the old state. */
@@ -111,6 +116,11 @@ async function route(deps: CommandDeps, inspectionId: string, cmd: FieldCommand,
       return saveSettings(deps, inspectionId, cmd.payload);
     default: {
       if (!deps.isOnline()) return offlineAnswer(cmd);
+      // The command layer has no way to ask "publish anyway?", so a report that would silently lack photos is refused.
+      if (cmd.type === 'publish') {
+        const unsent = await deps.unsentPhotos(inspectionId);
+        if (unsent !== 'none') return failure(unsent === 'stuck' ? MESSAGES.publishStuckPhotos : MESSAGES.publishUnsentPhotos);
+      }
       const sent = await executeOnline({ api: deps.api, signedAtMs: () => deps.signedAtMs() }, inspectionId, cmd, opts?.idempotencyKey);
       // A lookup writes nothing, so there is nothing for the cache to catch up with.
       return cmd.type === 'autofill-property-facts' ? sent : refreshed(deps, inspectionId, sent);

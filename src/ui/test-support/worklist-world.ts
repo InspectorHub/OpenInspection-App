@@ -1,6 +1,7 @@
 import type { Db } from '../../platform/db';
 import { createStackWorld, type StackWorld } from '../../app/test-support/stack-world';
 import type { OfflineStack } from '../../app/offline-stack';
+import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import { accountKey } from '../../offline/outbox';
 import { ALICE, BOB } from '../../offline/test-support/replay-world';
 
@@ -58,8 +59,10 @@ export async function seedQueued(db: Db, q: Queued): Promise<void> {
   );
 }
 
-export async function seedMedia(db: Db, id: string, inspectionId: string, state: 'pending' | 'uploading' | 'uploaded' | 'failed'): Promise<void> {
-  await db.run('INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [id, inspectionId, 'photo', `media/${id}.jpg`, 'image/jpeg', '{}', state, NOW]);
+/** A `failed` row is by default a permanently refused one (at the attempt limit); pass `attempts` for one still being retried. */
+export async function seedMedia(db: Db, id: string, inspectionId: string, state: 'pending' | 'uploading' | 'uploaded' | 'failed', options: { attempts?: number; meta?: string } = {}): Promise<void> {
+  const attempts = options.attempts ?? (state === 'failed' ? MAX_UPLOAD_ATTEMPTS : 0);
+  await db.run('INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, inspectionId, 'photo', `media/${id}.jpg`, 'image/jpeg', options.meta ?? '{}', state, attempts, NOW]);
 }
 
 export async function seedTenantName(db: Db, name: string): Promise<void> {

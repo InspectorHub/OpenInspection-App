@@ -237,6 +237,7 @@ describe('leaving the locked screen', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByTestId('server-origin')).toHaveTextContent(world.server.origin);
     await waitFor(async () => expect((await rowCounts(world.db)).outbox).toBe(0));

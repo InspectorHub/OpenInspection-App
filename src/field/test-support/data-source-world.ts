@@ -25,6 +25,8 @@ export interface World {
   exits: number;
   reloads: number;
   triggers: string[];
+  /** The uploaded photos the stand-in reconciler reports as having no place in their document. */
+  unreferenced: Set<string>;
   opened: string[];
   nativeCalls: string[];
   handle: ResultsDocHandle;
@@ -45,6 +47,7 @@ export async function world(over: Partial<LocalDataSourceDeps> = {}): Promise<Wo
   const api = scriptedApi();
   const online = { value: true };
   const triggers: string[] = [];
+  const unreferenced = new Set<string>();
   const nativeCalls: string[] = [];
   const sync = { value: true };
   const doc = new Y.Doc();
@@ -59,6 +62,7 @@ export async function world(over: Partial<LocalDataSourceDeps> = {}): Promise<Wo
     connector,
     refresher: { refreshInspection: () => Promise.resolve({ kind: 'refreshed' } as never) },
     reconciler: { trigger: (reason) => void triggers.push(reason) },
+    mediaReconciler: { isUnreferenced: (pendingId) => unreferenced.has(pendingId) },
     enqueue: async (op, input) => {
       const { enqueue } = await import('../../offline/outbox');
       return enqueue({ db, clock }, op, input, { account: ALICE });
@@ -90,7 +94,7 @@ export async function world(over: Partial<LocalDataSourceDeps> = {}): Promise<Wo
   };
   const source = createLocalDataSource(deps);
   return {
-    db, files, store, api, stack, online, triggers, nativeCalls, handle, sync, source, deps, registry,
+    db, files, store, api, stack, online, triggers, unreferenced, nativeCalls, handle, sync, source, deps, registry,
     get notes() { return w.notes; },
     get exits() { return w.exits; },
     get reloads() { return w.reloads; },

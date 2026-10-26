@@ -12,7 +12,9 @@ export function compat(patch: Partial<CompatInfo> = {}): CompatInfo {
 }
 
 export function stackWith(refresh = vi.fn(() => Promise.resolve(refreshSummary({ refreshed: 1 })))): OfflineStack & { refresh: typeof refresh } {
-  return Object.assign({ refresher: { refresh } } as unknown as OfflineStack, { refresh });
+  const mediaReconciler = { idle: () => Promise.resolve(), recheckMissing: vi.fn(), countUnreferenced: () => 0, removeUnreferenced: () => Promise.resolve({ removed: 0, attached: 0, skipped: 0 }) };
+  const store = { listRows: () => Promise.resolve([]) };
+  return Object.assign({ refresher: { refresh }, mediaReconciler, store } as unknown as OfflineStack, { refresh });
 }
 
 export async function open(world: World, props: Partial<SettingsProps> = {}) {

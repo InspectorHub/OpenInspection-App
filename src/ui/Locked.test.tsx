@@ -214,6 +214,7 @@ describe('Clear local data', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
     await waitFor(() => expect(onCleared).toHaveBeenCalledTimes(1));
     const counts = await rowCounts(world.db);
     for (const table of ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package']) expect(counts[table]).toBe(0);
@@ -243,6 +244,7 @@ describe('Clear local data', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
     expect(await screen.findByRole('heading', { name: 'Local data cleared' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('1 item could not be removed');
     expect(onCleared).not.toHaveBeenCalled();
@@ -259,9 +261,100 @@ describe('Clear local data', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
     expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent('Local data could not be cleared. Try again.');
     expect(screen.queryByText(/SERVER-OR-DISK-TEXT/)).toBeNull();
     expect(onCleared).not.toHaveBeenCalled();
+  });
+});
+
+describe('Clear local data: a second question when something has not reached the server', () => {
+  async function startClear(world: World, reason: LockReason = 'expired') {
+    const handlers = view(world, reason);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    return { ...handlers, user };
+  }
+
+  it('unsent photos: the first confirmation only counts; the second dialog names what would be lost and nothing is removed yet', async () => {
+    const world = await createSignedInWorld();
+    await addMedia(world, 'm1', 'pending');
+    await addMedia(world, 'm2', 'failed');
+    const before = await rowCounts(world.db);
+    const { onCleared } = await startClear(world);
+    const dialog = await screen.findByRole('alertdialog', { name: 'Delete 2 items that are not uploaded?' });
+    expect(within(dialog).getByTestId('at-risk')).toHaveTextContent('2 photos, clips and changes not uploaded');
+    expect(dialog).toHaveAccessibleDescription(/exist only on this device/);
+    expect(onCleared).not.toHaveBeenCalled();
+    expect(await rowCounts(world.db)).toEqual(before);
+    expect(world.files.paths()).toHaveLength(2);
+  });
+
+  it('a photo kept after a failed upload counts as lost data, the same as one waiting', async () => {
+    const world = await createSignedInWorld();
+    await world.db.run('INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', ['kept', 'i1', 'photo', 'media/kept.jpg', 'image/jpeg', '{}', 'failed', 3, 1]);
+    await startClear(world);
+    expect(await screen.findByRole('alertdialog', { name: 'Delete 1 item that is not uploaded?' })).toBeInTheDocument();
+  });
+
+  it('"Keep my data" closes the second question and removes nothing', async () => {
+    const world = await createSignedInWorld();
+    await addMedia(world, 'm1', 'pending');
+    const before = await rowCounts(world.db);
+    const { onCleared, user } = await startClear(world);
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Keep my data' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(onCleared).not.toHaveBeenCalled();
+    expect(await rowCounts(world.db)).toEqual(before);
+  });
+
+  it('the second confirmation clears the data and files, signs the token out and ends on sign-in', async () => {
+    const world = await createSignedInWorld();
+    await addMedia(world, 'm1', 'pending');
+    const signOut = vi.spyOn(world.services.tokens, 'signOut');
+    const { onCleared, user } = await startClear(world, 'revoked');
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
+    await waitFor(() => expect(onCleared).toHaveBeenCalledTimes(1));
+    expect((await rowCounts(world.db)).media).toBe(0);
+    expect(world.files.paths()).toEqual([]);
+    expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('a double tap on the second confirmation clears once', async () => {
+    const world = await createSignedInWorld();
+    await addMedia(world, 'm1', 'pending');
+    const signOut = vi.spyOn(world.services.tokens, 'signOut');
+    const { onCleared } = await startClear(world);
+    const confirm = within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' });
+    confirm.click();
+    confirm.click();
+    await waitFor(() => expect(onCleared).toHaveBeenCalled());
+    expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('a count that cannot be made is treated as unsent data: the second question says so and still removes nothing', async () => {
+    const world = await createSignedInWorld();
+    await addMedia(world, 'm1', 'pending');
+    const before = await rowCounts(world.db);
+    const unreadable = { ...world.db, query: () => Promise.reject(new Error('SERVER-OR-DISK-TEXT')) };
+    const onCleared = vi.fn();
+    render(<Locked services={{ ...world.services, db: unreadable }} origin={world.server.origin} reason="expired" onOutcome={vi.fn()} onSignInRequired={vi.fn()} onCleared={onCleared} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Delete data that may not be uploaded?' });
+    expect(within(dialog).getByText(/could not count what has not been uploaded/)).toBeInTheDocument();
+    expect(screen.queryByText(/SERVER-OR-DISK-TEXT/)).toBeNull();
+    expect(onCleared).not.toHaveBeenCalled();
+    expect(await rowCounts(world.db)).toEqual(before);
+  });
+
+  it('control: with nothing unsent one confirmation clears', async () => {
+    const world = await createSignedInWorld();
+    const { onCleared } = await startClear(world);
+    await waitFor(() => expect(onCleared).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alertdialog', { name: /not uploaded\?$/ })).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
-import { INSPECTION, photoRecord } from '../media/test-support/fakes';
+import { defectPhotoRecord, INSPECTION, photoRecord } from '../media/test-support/fakes';
 import { watchRemovedPhotos } from './media-cleanup';
 import { photosOf, removePhotos } from './test-support/doc-seed';
 import { createUploaderWorld, type UploaderWorld } from './test-support/uploader-world';
@@ -115,5 +115,31 @@ describe('a kept photo and the removed-photo watcher', () => {
     removePhotos(w.doc, FK, () => true);
     await watcher.settled();
     expect(await rowStates(w)).toEqual([['done', 'uploaded']]);
+  });
+});
+
+describe('a defect photo row and the removed-photo watcher', () => {
+  it('no removal from the document touches it, whatever its state; control: the item photo removed in the same step is deleted', async () => {
+    const w = await failedWorld();
+    const watcher = watch(w, w.doc);
+    await w.factory(INSPECTION, null).upload(photo('item'));
+    await w.world.store.put(defectPhotoRecord('d-pending'));
+    await w.world.store.put(defectPhotoRecord('d-failed'));
+    expect(await w.world.store.markState('d-failed', 'failed', { attempts: 3 })).toBe(true);
+    removePhotos(w.doc, FK, () => true);
+    await watcher.settled();
+    expect(await rowStates(w)).toEqual([['d-failed', 'failed'], ['d-pending', 'pending']]);
+    expect(w.world.files.paths().sort()).toEqual(['media/d-failed.jpg', 'media/d-pending.jpg']);
+    expect(w.errors).toEqual([]);
+  });
+
+  it('a document that is replaced by an empty one deletes neither kind of row', async () => {
+    const w = await failedWorld();
+    const watcher = watch(w, w.doc);
+    await w.factory(INSPECTION, null).upload(photo('item'));
+    await w.world.store.put(defectPhotoRecord('d1'));
+    watcher.follow(new Y.Doc());
+    await watcher.settled();
+    expect(await rowStates(w)).toEqual([['d1', 'pending'], ['item', 'failed']]);
   });
 });

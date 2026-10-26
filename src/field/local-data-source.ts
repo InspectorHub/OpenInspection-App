@@ -20,7 +20,8 @@ import { failureOf, MESSAGES } from './messages';
 import { withMediaCleanup } from './media-cleanup';
 import type { NetworkFlag } from './network-flag';
 import { createMemoryPhotoIndex, createPhotoUrls, indexUploadedRows, type PhotoIndex } from './photo-urls';
-import { hasQueuedWrites } from './queued-writes';
+import type { MediaReconciler } from '../media/reconcile';
+import { hasQueuedWrites, unsentPhotos } from './queued-writes';
 import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
 import { createKeptNotice } from './kept-notice';
@@ -59,6 +60,8 @@ export interface LocalStack {
   readonly connector: CollabConnector;
   readonly refresher: Pick<WorkPackageRefresher, 'refreshInspection'>;
   readonly reconciler: Pick<ReconcilerHandle, 'trigger'>;
+  /** Which uploaded photos the last look found no place for (`OfflineStack.mediaReconciler`); they do not hold back a publish. */
+  readonly mediaReconciler: Pick<MediaReconciler, 'isUnreferenced'>;
   enqueue(op: string, input: unknown): Promise<unknown>;
   idle(): Promise<void>;
   /** True while the server speaks an older contract than this app needs (`OfflineStack.serverTooOld`). Omitted: never. */
@@ -153,6 +156,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     api: deps.api,
     signedAtMs: () => deps.signedAtMs(),
     hasQueuedWrites: (inspectionId) => hasQueuedWrites(stack.db, stack.account, inspectionId),
+    unsentPhotos: (inspectionId) => unsentPhotos(stack.store, inspectionId, (pendingId) => stack.mediaReconciler.isUnreferenced(pendingId)),
     afterWrite,
     ...(deps.onCacheStale === undefined ? {} : { onCacheStale: deps.onCacheStale }),
     loadScope: async (inspectionId, scope) => (await load(inspectionId, scope)).results,

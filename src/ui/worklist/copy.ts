@@ -156,6 +156,20 @@ export function removeFailureText(outcome: Exclude<RemoveOutcome, { kind: 'purge
 
 export { FAILED_REMOVE as REMOVE_THREW_TEXT };
 
+/**
+ * What the panel says about a photo or clip that stopped for good (the server or the file refused it). It never promises an
+ * upload on its own: nothing retries a row at this point until a person presses Retry. An item photo is also an entry in the
+ * inspection, which is why the way out for it is the editor; a defect photo has no entry, so it can be discarded alone.
+ */
+export function failedMediaText(item: { kind: string; target: 'item' | 'defect' }): string {
+  if (item.kind === 'video') return 'The clip could not be uploaded.';
+  if (item.target === 'defect') return 'The server refused this defect photo, so it will not upload by itself. It stays on this device until you retry it or discard it.';
+  return 'The server refused this photo, so it will not upload by itself. It stays on this device. Retry it, or remove it from the inspection in the editor.';
+}
+
+/** The dialog line for discarding a defect photo: it never reached the server and is not part of the inspection. */
+export const DISCARD_DEFECT_PHOTO_DESCRIPTION = 'This photo never reached the server and is not part of the inspection. The file will be permanently removed from this device. This cannot be undone.';
+
 export function discardMediaFailureText(outcome: Exclude<DiscardMediaOutcome, { kind: 'discarded' }>): string {
   switch (outcome.kind) {
     case 'locked':

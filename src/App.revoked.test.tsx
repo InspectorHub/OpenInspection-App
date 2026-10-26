@@ -85,6 +85,7 @@ describe('a revoked device signs in again', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Clear local data' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
+    await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
   });

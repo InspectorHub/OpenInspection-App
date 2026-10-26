@@ -25,6 +25,8 @@ export const MESSAGES = {
   cacheUnreadable: 'The copy of this inspection on this device could not be read. Connect to the internet and download it again.',
   stillSaving: 'The server is still saving your earlier attempt. Check the inspection before trying again; the change may already be there.',
   publishFailed: 'Could not publish the report. Try again.',
+  publishStuckPhotos: 'Some photos on this inspection could not be uploaded and will not upload by themselves, and a report published now would leave them out. Open Needs attention on the work list to retry or discard them, then publish.',
+  publishUnsentPhotos: 'Some photos on this inspection have not finished uploading, and a report published now would leave them out. Wait for them to upload, then publish.',
   structureNotSaved: 'The structure change was not saved. Try again.',
   syncNotConverged: 'Structure saved, but live sync did not converge. Reload to continue editing.',
   noSourceTemplate: 'There is no source template to update.',

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BoundUserActions, OfflineStack, ReconcilerHandle } from '../../app/offline-stack';
 import { appTimings } from '../../app/timings';
+import { defectTargetOf } from '../../media/defect-target';
+import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import type { MediaStore } from '../../media/store';
 import type { Db } from '../../platform/db';
 import { loadTenantName } from '../../offline/lock-state';
@@ -75,6 +77,8 @@ export interface FailedMediaItem {
   pendingId: string;
   inspectionId: string;
   kind: string;
+  /** What the photo belongs to: an item (it has an entry in the document) or a defect (it has none, so it can be discarded alone). */
+  target: 'item' | 'defect';
 }
 
 export interface RepairItem extends Omit<UnattributableRow, 'lastError'> {
@@ -164,13 +168,21 @@ interface MediaCounts {
   failed: number;
 }
 
+/**
+ * A photo that failed for a transient reason (no network, a timeout, a server hiccup) is kept and tried again by itself, for as
+ * long as it takes, so it is waiting like any other. Only a row at `MAX_UPLOAD_ATTEMPTS`, which a permanent refusal writes, needs
+ * a person.
+ */
 async function readMediaCounts(stack: SnapshotSource): Promise<Map<string, MediaCounts>> {
-  const rows = await stack.db.query<{ inspection_id: string; state: string; n: number }>('SELECT inspection_id, state, COUNT(*) AS n FROM media GROUP BY inspection_id, state');
+  const rows = await stack.db.query<{ inspection_id: string; state: string; stuck: number; n: number }>('SELECT inspection_id, state, attempts >= ? AS stuck, COUNT(*) AS n FROM media GROUP BY inspection_id, state, stuck', [MAX_UPLOAD_ATTEMPTS]);
   const out = new Map<string, MediaCounts>();
   for (const row of rows) {
     const counts = out.get(row.inspection_id) ?? { waiting: 0, failed: 0 };
     if (row.state === 'pending' || row.state === 'uploading') counts.waiting += Number(row.n);
-    else if (row.state === 'failed') counts.failed += Number(row.n);
+    else if (row.state === 'failed') {
+      if (Number(row.stuck) === 1) counts.failed += Number(row.n);
+      else counts.waiting += Number(row.n);
+    }
     out.set(row.inspection_id, counts);
   }
   return out;
@@ -263,11 +275,13 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
   const orphanMedia: FailedMediaItem[] = [];
   let foreignMedia = 0;
   for (const m of await stack.store.listRows({ states: ['failed'] })) {
-    const item: FailedMediaItem = { pendingId: m.pendingId, inspectionId: m.inspectionId, kind: m.kind };
+    const item: FailedMediaItem = { pendingId: m.pendingId, inspectionId: m.inspectionId, kind: m.kind, target: defectTargetOf(m) === null ? 'item' : 'defect' };
     const owner = packages.get(m.inspectionId);
     if (owner === undefined) orphanMedia.push(item);
-    else if (sameAccount(account, owner.tenant_id, owner.user_id)) failedMedia.push(item);
-    else foreignMedia += 1;
+    else if (sameAccount(account, owner.tenant_id, owner.user_id)) {
+      // Still being retried by itself: it is counted as waiting, and not listed as needing a person.
+      if (m.attempts >= MAX_UPLOAD_ATTEMPTS) failedMedia.push(item);
+    } else foreignMedia += 1;
   }
 
   let updatedAt: number | null = null;

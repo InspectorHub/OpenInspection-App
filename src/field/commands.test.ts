@@ -30,6 +30,7 @@ function deps(over: Partial<CommandDeps> = {}): CommandDeps {
     api,
     signedAtMs: () => 5000,
     hasQueuedWrites: (id) => hasQueuedWrites(db, ALICE, id),
+    unsentPhotos: () => Promise.resolve('none'),
     afterWrite,
     onCacheStale: (id) => stale.push(id),
     loadScope: async (id, scope) => (await load(id, scope)).results,

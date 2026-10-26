@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Button } from '../kit';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useActionLatch } from '../latch';
-import { DISCARD_THREW, discardChangeFailureText, OUTBOX_ERROR_TEXT, OUTBOX_ERROR_UNKNOWN, RETRY_THREW, bytesLabel, discardMediaFailureText, opConsequence, opLabel } from './copy';
+import { DISCARD_DEFECT_PHOTO_DESCRIPTION, DISCARD_THREW, discardChangeFailureText, OUTBOX_ERROR_TEXT, OUTBOX_ERROR_UNKNOWN, RETRY_THREW, bytesLabel, discardMediaFailureText, failedMediaText, opConsequence, opLabel } from './copy';
 import { shortTitle } from './format';
 import type { FailedMediaItem, FailedOutboxItem, WorkListRow, WorkListStack } from './model';
 import { DISCARD_AND_REMOVE_LABEL, RemoveDialog } from './RemoveDialog';
@@ -31,7 +31,7 @@ function titleOf(rows: readonly WorkListRow[], id: string | null): string {
 /**
  * Queued changes that the server refused for good, and photos and clips that stopped uploading, of this account only. Each
  * can be tried again; a change can be discarded after a confirmation that says what will not be sent; a stuck photo can be
- * discarded only when its inspection has left the list. A failed create has one exit that does not leave a half-made
+ * discarded only when its inspection has left the list, or, for a defect photo (which has no entry in the inspection), at any time. A failed create has one exit that does not leave a half-made
  * inspection behind: discarding it and removing the inspection together. Every line of explanation is ours, chosen by the
  * code, never the server's words, and a failing action shows a fixed line, never the error.
  */
@@ -89,6 +89,8 @@ export function FailedItemsPanel({ stack, rows, outbox, media, now, reload, noti
   }
 
   const quarantinedMedia = (item: FailedMediaItem): boolean => rows.find((r) => r.id === item.inspectionId)?.blocked === 'quarantined';
+  /** A defect photo has no entry in the document, so it can be discarded alone; an item photo only when its inspection is being removed. */
+  const discardable = (item: FailedMediaItem): boolean => quarantinedMedia(item) || item.target === 'defect';
   /** The package a failed create made, when it is still on the list: then discarding and removing go together. */
   const packageOf = (item: FailedOutboxItem): WorkListRow | undefined => (item.isCreate ? rows.find((r) => r.id === item.inspectionId) : undefined);
 
@@ -156,12 +158,12 @@ export function FailedItemsPanel({ stack, rows, outbox, media, now, reload, noti
               <li key={item.pendingId} className="flex flex-col gap-2 rounded-ih-card border border-l-4 border-ih-border border-l-ih-bad bg-ih-bg-card p-3">
                 <p className="font-semibold text-ih-fg-1">{isClip(item) ? 'Clip' : 'Photo'}</p>
                 <p className="break-words text-sm text-ih-fg-3 [overflow-wrap:anywhere]">{titleOf(rows, item.inspectionId)}</p>
-                <p className="text-sm leading-relaxed text-ih-fg-2">{isClip(item) ? 'The clip could not be uploaded.' : 'The photo could not be uploaded.'}</p>
+                <p className="text-sm leading-relaxed text-ih-fg-2">{failedMediaText(item)}</p>
                 <div className="flex gap-3">
                   <Button variant="secondary" aria-label={`Retry ${isClip(item) ? 'clip' : 'photo'}, ${titleOf(rows, item.inspectionId)}`} onClick={() => void latch(() => retry(() => stack.uploader.retry(item.pendingId)))}>
                     Retry
                   </Button>
-                  {quarantinedMedia(item) && (
+                  {discardable(item) && (
                     <Button variant="secondary" aria-label={`${isClip(item) ? 'Discard clip' : 'Discard photo'}, ${titleOf(rows, item.inspectionId)}`} onClick={() => setTarget({ kind: 'media', item })}>
                       {isClip(item) ? 'Discard clip' : 'Discard photo'}
                     </Button>
@@ -185,7 +187,7 @@ export function FailedItemsPanel({ stack, rows, outbox, media, now, reload, noti
           {target !== null && target.kind === 'media' && (
             <ConfirmDialog
               title={isClip(target.item) ? 'Discard this clip?' : 'Discard this photo?'}
-              description="The file will be permanently removed from this device. This cannot be undone."
+              description={target.item.target === 'defect' && !quarantinedMedia(target.item) ? DISCARD_DEFECT_PHOTO_DESCRIPTION : 'The file will be permanently removed from this device. This cannot be undone.'}
               confirmLabel={isClip(target.item) ? 'Discard clip' : 'Discard photo'}
               destructive
               busy={busy}

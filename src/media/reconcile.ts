@@ -118,6 +118,15 @@ export interface ReconcileDeps {
   onHalt?: (code: UploadFailureCode) => void;
 }
 
+export interface RemoveUnreferencedResult {
+  /** Photos with still no entry in the document, removed from the device. */
+  removed: number;
+  /** Photos whose entry had appeared: attached now, and their local copy finished as usual. */
+  attached: number;
+  /** Photos left as they were. */
+  skipped: number;
+}
+
 export interface MediaReconciler {
   /**
    * One run over the table: starts what is pending, restarts what a restart left in `uploading`, retries
@@ -146,6 +155,16 @@ export interface MediaReconciler {
   countUnreferenced(): number;
   /** Forgets the wait before those documents are looked at again and runs now (a new photo was stored, or the user asked). */
   recheckMissing(): void;
+  /** True when the last look found no entry for this photo in its inspection's document (memory only, this process). */
+  isUnreferenced(pendingId: string): boolean;
+  /**
+   * The one way out for those photos, for a person who has confirmed it. Each candidate's document step is run again right
+   * before anything is deleted: a photo that still has no entry is removed (file and row; the server keeps its copy); one whose
+   * entry has appeared since is attached by that same step and its local copy is then finished like any other (`attached`);
+   * one that cannot be decided is left (`skipped`). Also left: a locked device, a blocked inspection or another account's, and
+   * a row that is no longer `uploaded`. Never part of a run: nothing here is automatic.
+   */
+  removeUnreferenced(): Promise<RemoveUnreferencedResult>;
 }
 
 const LIVE_STATES = ['pending', 'uploading', 'failed', 'uploaded'] as const;
@@ -553,6 +572,41 @@ export function createMediaReconciler(deps: ReconcileDeps): MediaReconciler {
       while (running !== null) await running.catch(() => undefined);
     },
     countUnreferenced: () => missing.size,
+    isUnreferenced: (pendingId) => missing.has(pendingId),
+    removeUnreferenced: async () => {
+      const result: RemoveUnreferencedResult = { removed: 0, attached: 0, skipped: 0 };
+      try {
+        if (stopped || (await deps.isLocked()) !== false) return result;
+      } catch {
+        return result;
+      }
+      const run: RunReport = { total: { retried: 0, confirmed: 0 }, blocked: false, incomplete: false, outstanding: false, wake: null, seen: null, blockedAnswers: new Map(), otherAccountAnswers: new Map() };
+      for (const id of [...missing.keys()]) {
+        try {
+          const row = await deps.store.getRow(id);
+          if (row === null) {
+            missing.delete(id);
+            continue;
+          }
+          const key = row.uploadedKey;
+          if (row.state !== 'uploaded' || key === null || !isExpectedKey(key, row) || (await isBlockedFor(row.inspectionId, run)) || (await isOtherAccountFor(row.inspectionId, run))) {
+            result.skipped += 1;
+            continue;
+          }
+          // The answer that put it in `missing` may be old: ask the document again, now, and delete only on a fresh "missing".
+          const now = await resolveDocument(row, key);
+          await deps.store.delete(id);
+          missing.delete(id);
+          docFailures.delete(id);
+          if (now === 'missing') result.removed += 1;
+          else result.attached += 1;
+        } catch (error) {
+          report(error);
+          result.skipped += 1;
+        }
+      }
+      return result;
+    },
     recheckMissing: () => {
       missing.clear();
       trigger();

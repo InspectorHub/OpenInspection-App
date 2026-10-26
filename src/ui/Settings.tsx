@@ -12,6 +12,7 @@ import { DeviceSection } from './settings/DeviceSection';
 import { ExternalLink } from './settings/ExternalLink';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
+import { UnreferencedPhotosSection } from './settings/UnreferencedPhotosSection';
 import { SignOutControl } from './SignOutControl';
 import { useBackHandler } from './use-back-handler';
 import { useWaitingCount } from './use-waiting-count';
@@ -86,6 +87,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
       <SyncSection services={services} stack={stack} canSync={policy.canSync} />
       <DeviceSection services={services} origin={origin} waiting={waiting} locale={language} />
       <NotificationsSection services={services} />
+      {stack !== null && <UnreferencedPhotosSection store={stack.store} reconciler={stack.mediaReconciler} />}
       <Section title="Your data">
         <Button variant="secondary" onClick={onExport}>
           Export unsent data

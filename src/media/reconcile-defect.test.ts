@@ -226,3 +226,108 @@ describe('the reconciler leaves the rows of another account alone', () => {
     await expect(s.rec.reconcileUploads()).resolves.toEqual({ retried: 0, confirmed: 1 });
   });
 });
+
+describe('removeUnreferenced: the confirmed way out for photos whose defect is gone', () => {
+  async function strand(s: Setup, ids: string[], inspectionId = INSPECTION): Promise<void> {
+    for (const id of ids) await s.world.store.put(defectPhotoRecord(id, { customId: 'gone', defectKind: 'custom', inspectionId }));
+    await s.rec.reconcileUploads();
+  }
+
+  it('removes the file and the row of every stranded photo and nothing else (control: a photo that is still on its way stays)', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1', 'dp-2']);
+    await s.world.store.put(defectPhotoRecord('dp-3', { customId: 'd1', defectKind: 'canned' }));
+    expect(s.rec.countUnreferenced()).toBe(2);
+    await s.world.store.put(photoRecord('waiting', { inspectionId: OTHER }));
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 2, attached: 0, skipped: 0 });
+    expect(s.rec.countUnreferenced()).toBe(0);
+    expect((await s.world.store.listRows()).map((r) => r.pendingId).sort()).toEqual(['dp-3', 'waiting']);
+    expect(s.world.files.paths().sort()).toEqual(['media/dp-3.jpg', 'media/waiting.jpg']);
+    expect(s.world.engine.objects.has(keyFor('dp-1'))).toBe(true);
+  });
+
+  it('removes nothing while the device is locked; the same call works once it is unlocked', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1']);
+    s.flags.locked = true;
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 0, attached: 0, skipped: 0 });
+    expect(await rowStates(s)).toEqual([['dp-1', 'uploaded']]);
+    s.flags.locked = false;
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 1, attached: 0, skipped: 0 });
+    expect(await rowStates(s)).toEqual([]);
+  });
+
+  it('leaves a photo of a blocked inspection and one of another account', async () => {
+    const s = await setup({ isOtherAccount: (id) => Promise.resolve(id === OTHER) });
+    await strand(s, ['mine']);
+    await s.world.store.put(defectPhotoRecord('theirs', { customId: 'gone', defectKind: 'custom', inspectionId: OTHER }));
+    await s.world.store.markState('theirs', 'uploaded');
+    s.flags.blocked.add(INSPECTION);
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 0, attached: 0, skipped: 1 });
+    expect((await s.world.store.listRows()).map((r) => r.pendingId).sort()).toEqual(['mine', 'theirs']);
+    s.flags.blocked.delete(INSPECTION);
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 1, attached: 0, skipped: 0 });
+    expect((await s.world.store.listRows()).map((r) => r.pendingId)).toEqual(['theirs']);
+  });
+
+  it('a photo that attached in the meantime is not removed twice: the count only holds what the last look found missing', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1']);
+    seedDefects(s.doc, FK, { canned: [{ id: 'd1' }], custom: [{ id: 'gone' }] });
+    s.rec.recheckMissing();
+    await s.rec.idle();
+    expect(s.rec.countUnreferenced()).toBe(0);
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 0, attached: 0, skipped: 0 });
+    expect(defectPhotosOf(s.doc, FK, 'custom', 'gone')).toEqual([{ key: keyFor('dp-1') }]);
+  });
+
+  it('asks the document again right before deleting: a defect that reappeared since the look is attached, not deleted (no recheck in between)', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1', 'dp-2']);
+    expect(s.rec.countUnreferenced()).toBe(2);
+    seedDefects(s.doc, FK, { canned: [{ id: 'd1' }], custom: [{ id: 'gone' }] });
+    const calls = s.resolveDefect.mock.calls.length;
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 0, attached: 2, skipped: 0 });
+    expect(s.resolveDefect.mock.calls.length).toBe(calls + 2);
+    expect(defectPhotosOf(s.doc, FK, 'custom', 'gone')).toEqual([{ key: keyFor('dp-1') }, { key: keyFor('dp-2') }]);
+    expect(await rowStates(s)).toEqual([]);
+    expect(s.world.files.paths()).toEqual([]);
+  });
+
+  it('control: a defect that is still missing at that moment is removed after the fresh question', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1']);
+    const calls = s.resolveDefect.mock.calls.length;
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 1, attached: 0, skipped: 0 });
+    expect(s.resolveDefect.mock.calls.length).toBe(calls + 1);
+    expect(defectPhotosOf(s.doc, FK, 'custom', 'gone')).toBeUndefined();
+  });
+
+  it('a document step that fails leaves the photo and counts it as skipped', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1']);
+    s.flags.docFailure = new Error('busy');
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 0, attached: 0, skipped: 1 });
+    expect(await rowStates(s)).toEqual([['dp-1', 'uploaded']]);
+    expect(s.errors).toHaveLength(1);
+  });
+
+  it('a row that is no longer uploaded is left alone and not asked about (control: the uploaded one is removed)', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1', 'dp-2']);
+    await s.world.store.markState('dp-2', 'failed', { attempts: 2 });
+    const calls = s.resolveDefect.mock.calls.length;
+    expect(await s.rec.removeUnreferenced()).toEqual({ removed: 1, attached: 0, skipped: 1 });
+    expect(s.resolveDefect.mock.calls.length).toBe(calls + 1);
+    expect(await rowStates(s)).toEqual([['dp-2', 'failed']]);
+  });
+
+  it('isUnreferenced names the stranded photos only (control: false for others, and again false once removed)', async () => {
+    const s = await setup();
+    await strand(s, ['dp-1']);
+    expect(s.rec.isUnreferenced('dp-1')).toBe(true);
+    expect(s.rec.isUnreferenced('other')).toBe(false);
+    await s.rec.removeUnreferenced();
+    expect(s.rec.isUnreferenced('dp-1')).toBe(false);
+  });
+});
