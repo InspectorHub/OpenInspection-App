@@ -7,6 +7,8 @@ import { reconcileGateFor } from '../export/reconcile-gate';
 import type { Network } from '../platform/network';
 import { ClientNotices } from './ClientNotices';
 import { DevDiagnostics } from './dev-diagnostics';
+import { EditorBoundary } from './EditorBoundary';
+import { editorModule } from './editor-loader';
 import { ExportFlow } from './ExportFlow';
 import { Body, Button, Heading, Screen } from './kit';
 import { NotificationPrompt } from './NotificationPrompt';
@@ -16,7 +18,9 @@ import { WorkList } from './WorkList';
 
 // The editor and its libraries are a chunk of their own: the lock, sign-in and work-list screens do not load it. The chunk is part
 // of the app's assets, so opening it needs no network.
-const EditorScreen = lazy(() => import('./EditorScreen').then((module) => ({ default: module.EditorScreen })));
+// A load that failed is cached by React, so the lazy is rebuilt when the person goes back: the next tap tries the load again.
+const makeEditorScreen = () => lazy(() => editorModule.load().then((module) => ({ default: module.EditorScreen })));
+let EditorScreen = makeEditorScreen();
 
 export interface SignedInProps {
   services: AppServices;
@@ -86,7 +90,12 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
   const prompt = <NotificationPrompt services={services} exportsClosed={exportsClosed} suspended={exporting !== null} timers={timers} />;
 
   if (editing !== null && stack !== null) {
+    const back = (): void => {
+      EditorScreen = makeEditorScreen();
+      setEditing(null);
+    };
     return (
+      <EditorBoundary onBack={back}>
       <Suspense
         fallback={
           <Screen>
@@ -96,8 +105,9 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
           </Screen>
         }
       >
-        <EditorScreen services={services} stack={stack} origin={origin} inspectionId={editing} onExit={() => setEditing(null)} {...(network === undefined ? {} : { network })} />
+        <EditorScreen services={services} stack={stack} origin={origin} inspectionId={editing} onExit={back} {...(network === undefined ? {} : { network })} />
       </Suspense>
+      </EditorBoundary>
     );
   }
 
