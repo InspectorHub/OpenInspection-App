@@ -1,5 +1,4 @@
 import { Uploader } from '@capgo/capacitor-uploader';
-import { createRealUploadShade, type UploadShadePort } from './upload-shade';
 
 /** The options of `startUpload` that this app uses; a subset of the plugin's. */
 export interface UploaderStartOptions {
@@ -37,37 +36,12 @@ export interface UploaderPluginLike {
   acknowledgeEvent(options: { eventId: string }): Promise<void>;
 }
 
-/**
- * Keeps the shade to the one ongoing notice. The plugin's notification texts and per-file "Completed" notifications are fixed in
- * its native code, so the app removes the finished ones itself: once when the listener attaches (leftovers of an earlier run) and
- * after each terminal event has reached the app. A failing shade never touches the upload events.
- */
-export function withQuietShade(plugin: UploaderPluginLike, shade: UploadShadePort): UploaderPluginLike {
-  const tidy = (): void => {
-    shade.tidy().catch(() => undefined);
-  };
-  return {
-    ...plugin,
-    addListener: async (name, listener) => {
-      const handle = await plugin.addListener(name, (event) => {
-        listener(event);
-        if (event.name === 'completed' || event.name === 'failed') tidy();
-      });
-      tidy();
-      return handle;
-    },
-  };
-}
-
-/** Thin real-plugin wiring. */
+/** Thin real-plugin wiring. The notification shade is handled natively (`UploadShade.java`): one rate-limited notice, nothing per file. */
 export function createRealUploaderPlugin(): UploaderPluginLike {
-  return withQuietShade(
-    {
-      startUpload: (options) => Uploader.startUpload(options),
-      removeUpload: (options) => Uploader.removeUpload(options),
-      addListener: (name, listener) => Uploader.addListener(name, (event) => listener(event)),
-      acknowledgeEvent: (options) => Uploader.acknowledgeEvent(options),
-    },
-    createRealUploadShade(),
-  );
+  return {
+    startUpload: (options) => Uploader.startUpload(options),
+    removeUpload: (options) => Uploader.removeUpload(options),
+    addListener: (name, listener) => Uploader.addListener(name, (event) => listener(event)),
+    acknowledgeEvent: (options) => Uploader.acknowledgeEvent(options),
+  };
 }
