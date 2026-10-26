@@ -1,4 +1,6 @@
+import * as Y from 'yjs';
 import { loadIdentity } from '../../auth/server-config';
+import { resultsDocName } from '../../collab/connector';
 import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import { accountKey } from '../../offline/outbox';
 import type { Db } from '../../platform/db';
@@ -17,6 +19,14 @@ import { fail, guarded, needsSignIn, pass, type CheckResult, type ExtraDef } fro
 const PREFIX = 'diag-';
 const DAY_MS = 86_400_000;
 const HOLD_MS = 365 * DAY_MS;
+
+/** The item the defect photos below belong to, and the one defect that DOES exist in the demo results document. */
+const DEMO_FINDING_KEY = '_default:s1:i1';
+const DEMO_ITEM_ID = 'i1';
+const DEMO_PRESENT_DEFECT = 'diag-defect-present';
+/** The inspection whose stored results document the seed writes, and the defect the unattached photo names (it is not in that document). */
+const DEMO_DOC_INSPECTION = 'diag-today';
+const DEMO_ABSENT_DEFECT = 'diag-defect-removed';
 
 const seedDef = { id: 'seed-demo', title: '[diag] seed-demo: demo inspections, queued changes and photos for the work list' };
 const clearDef = { id: 'seed-demo-clear', title: '[diag] seed-demo-clear: remove the demo rows' };
@@ -56,12 +66,40 @@ async function clear(db: Db): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.run('DELETE FROM outbox WHERE substr(idempotency_key, 1, 5) = ?', [PREFIX]);
     await tx.run('DELETE FROM media WHERE substr(pending_id, 1, 5) = ?', [PREFIX]);
+    await tx.run('DELETE FROM ydoc_updates WHERE doc_name = ?', [resultsDocName(DEMO_DOC_INSPECTION)]);
     await tx.run('DELETE FROM resource_cache WHERE substr(package_id, 1, 5) = ?', [PREFIX]);
     await tx.run('DELETE FROM work_package WHERE substr(inspection_id, 1, 5) = ?', [PREFIX]);
   });
 }
 
 export { clear as clearDemo };
+
+/**
+ * A results document with one item holding a canned defect, as the editor shapes it. A photo naming any other defect finds
+ * the document but not its defect, so the document step answers `missing` rather than failing.
+ */
+function demoResultsUpdate(): Uint8Array {
+  const doc = new Y.Doc();
+  const defect = new Y.Map<unknown>();
+  defect.set('cannedId', DEMO_PRESENT_DEFECT);
+  defect.set('included', true);
+  const canned = new Y.Array<unknown>();
+  canned.push([defect]);
+  const custom = new Y.Array<unknown>();
+  const group = (list: Y.Array<unknown>): Y.Map<unknown> => {
+    const map = new Y.Map<unknown>();
+    map.set('defects', list);
+    return map;
+  };
+  const item = new Y.Map<unknown>();
+  item.set('tabs', group(canned));
+  item.set('customComments', group(custom));
+  item.set('photos', new Y.Array<unknown>());
+  doc.getMap<unknown>('results').set(DEMO_FINDING_KEY, item);
+  const update = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return update;
+}
 
 async function seed(db: Db, now: number): Promise<number> {
   const identity = await loadIdentity(db);
@@ -103,6 +141,20 @@ async function seed(db: Db, now: number): Promise<number> {
     };
     await media('photo-failed', 'diag-failed');
     await media('photo-quarantined', 'diag-quarantined');
+    const defectMeta = (customId: string, defectKind: 'canned' | 'custom'): string => JSON.stringify({ targetType: 'defect', findingKey: DEMO_FINDING_KEY, itemId: DEMO_ITEM_ID, customId, defectKind });
+    const defectMedia = async (name: string, inspectionId: string, meta: string, state: 'failed' | 'uploaded', uploadedKey: string | null): Promise<void> => {
+      await tx.run(
+        'INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, uploaded_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [`${PREFIX}${name}`, inspectionId, 'photo', `media/${PREFIX}${name}.jpg`, 'image/jpeg', meta, state, state === 'failed' ? MAX_UPLOAD_ATTEMPTS : 0, uploadedKey, now],
+      );
+    };
+    // A stuck photo of a defect row has no entry in the document, so the work list offers "Discard photo" for it at any time.
+    await defectMedia('photo-defect-canned', 'diag-failed', defectMeta('diag-defect-canned', 'canned'), 'failed', null);
+    await defectMedia('photo-defect-custom', 'diag-failed', defectMeta('diag-defect-custom', 'custom'), 'failed', null);
+    // On the server but named by no defect of the stored document: the reconciler's document step answers `missing`.
+    const unattachedName = 'photo-unattached';
+    await defectMedia(unattachedName, DEMO_DOC_INSPECTION, defectMeta(DEMO_ABSENT_DEFECT, 'custom'), 'uploaded', `${account.tenantId}/inspections/${DEMO_DOC_INSPECTION}/photos/${PREFIX}${unattachedName}.jpg`);
+    await tx.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [resultsDocName(DEMO_DOC_INSPECTION), demoResultsUpdate()]);
   });
   return DEMO.length;
 }
@@ -111,13 +163,13 @@ export const seedDemo: ExtraDef = {
   ...seedDef,
   parent: 'db-tx',
   label: 'Seed demo data',
-  hint: 'Adds demo inspections, queued changes and stuck photos (all named diag-) so every state of the work list can be seen. Look with the network off.',
+  hint: 'Adds demo inspections, queued changes, stuck photos (item and defect) and one uploaded photo that no defect holds (all named diag-) so every state of the work list can be seen. Look with the network off.',
   run: (ctx): Promise<CheckResult> =>
     guarded(seedDef, async () => {
       if (ctx.origin === null) return needsSignIn(seedDef);
       const count = await seed(ctx.services.db, ctx.services.clock.now());
       if (count < 0) return needsSignIn(seedDef);
-      return pass(seedDef, `inspections=${String(count)} queued=6 photos=2`);
+      return pass(seedDef, `inspections=${String(count)} queued=6 photos=5 (4 failed, 1 uploaded)`);
     }),
 };
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { defectTargetOf } from '../../media/defect-target';
+import { createDefectResolver, createPendingResolver, createWithDoc } from '../../media/pending-doc';
+import { createMediaReconciler, type MediaReconciler } from '../../media/reconcile';
+import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import { loadIdentity } from '../../auth/server-config';
-import { createMediaStore } from '../../media/store';
+import { createMediaStore, type MediaStore } from '../../media/store';
 import { listUnattributableOutbox } from '../../offline/user-actions';
 import { readWorkListSnapshot, type SnapshotSource } from '../../ui/worklist/model';
 import { createDiagRig, type DiagRig } from '../test-support';
@@ -19,6 +23,26 @@ async function sourceOf(rig: DiagRig): Promise<SnapshotSource> {
     reconciler: { last: { status: 'never', reason: null, at: null, massSuspicious: false, allMissing: false, candidateCount: 0, unavailableRole: false, refusedNullInspectionId: false, counts: null, resumed: 0, resumeFailed: false } },
     lastPlan: () => null,
   };
+}
+
+function storeOf(rig: DiagRig): MediaStore {
+  return createMediaStore({ db: rig.services.db, files: rig.world.files, isBlocked: () => Promise.resolve(false) });
+}
+
+/** The real document steps over the device's stored documents, with an uploader that has nothing to send: only the uploaded rows matter here. */
+function reconcilerOf(rig: DiagRig, store: MediaStore): MediaReconciler {
+  const { db, clock } = rig.services;
+  const withDoc = createWithDoc({ db, docs: { isOpen: () => false, liveDoc: () => null }, isBlocked: () => Promise.resolve(false), onError: () => undefined });
+  return createMediaReconciler({
+    store,
+    uploader: { uploadDetailed: () => Promise.reject(new Error('the seed has nothing to upload')), attach: () => Promise.resolve(), isActive: () => false, retryAt: () => null, forgetExcept: () => undefined, handlesVideo: () => false },
+    resolvePending: createPendingResolver({ withDoc }),
+    resolveDefectPhoto: createDefectResolver({ withDoc }),
+    isLocked: () => false,
+    network: { online: () => Promise.resolve(true), onChange: () => () => undefined },
+    clock,
+    isBlocked: () => Promise.resolve(false),
+  });
 }
 
 describe('seed-demo', () => {
@@ -86,5 +110,75 @@ describe('seed-demo', () => {
     expect((await db.query('SELECT 1 FROM outbox WHERE idempotency_key = ?', ['real-key'])).length).toBe(1);
     expect((await db.query("SELECT 1 FROM outbox WHERE idempotency_key LIKE 'diag-%'")).length).toBe(0);
     expect(clearDemo).toBeTypeOf('function');
+  });
+
+  it('seeds a defect photo at the attempt limit on an own, unblocked inspection, so the panel offers to discard it while an item photo at the limit only retries', async () => {
+    const rig = await createDiagRig({ signedIn: true });
+    await seedDemo.run(rig.ctx);
+    const snap = await readWorkListSnapshot(await sourceOf(rig), rig.services.clock.now());
+    const defects = snap.failedMedia.filter((m) => m.target === 'defect');
+    expect(defects.map((m) => m.pendingId).sort()).toEqual(['diag-photo-defect-canned', 'diag-photo-defect-custom']);
+    const row = snap.rows.find((r) => r.id === 'diag-failed');
+    expect(row).toMatchObject({ blocked: 'none' });
+    expect(row?.needAttention).toBeGreaterThanOrEqual(3);
+    expect(snap.failedMedia.find((m) => m.pendingId === 'diag-photo-failed')).toMatchObject({ target: 'item', inspectionId: 'diag-failed' });
+    for (const m of defects) expect(m.inspectionId).toBe('diag-failed');
+    const store = storeOf(rig);
+    const kinds: string[] = [];
+    for (const m of defects) {
+      const stored = await store.getRow(m.pendingId);
+      expect(stored).toMatchObject({ state: 'failed', attempts: MAX_UPLOAD_ATTEMPTS });
+      const target = stored === null ? null : defectTargetOf(stored);
+      expect(target).not.toBeNull();
+      kinds.push(target?.defectKind ?? 'none');
+    }
+    expect(kinds.sort()).toEqual(['canned', 'custom']);
+  });
+
+  it('seeds an uploaded photo whose defect is not in the stored document: a recheck counts it as unreferenced and removal takes it off the device', async () => {
+    const rig = await createDiagRig({ signedIn: true });
+    await seedDemo.run(rig.ctx);
+    const store = storeOf(rig);
+    const uploaded = await store.listRows({ states: ['uploaded'] });
+    expect(uploaded.map((r) => r.pendingId)).toEqual(['diag-photo-unattached']);
+    expect(uploaded[0]?.uploadedKey).not.toBeNull();
+    const reconciler = reconcilerOf(rig, store);
+    reconciler.recheckMissing();
+    await reconciler.idle();
+    expect(reconciler.countUnreferenced()).toBe(1);
+    expect(reconciler.isUnreferenced('diag-photo-unattached')).toBe(true);
+    expect(await store.getRow('diag-photo-unattached')).not.toBeNull();
+    expect(await reconciler.removeUnreferenced()).toEqual({ removed: 1, attached: 0, skipped: 0 });
+    expect(await store.getRow('diag-photo-unattached')).toBeNull();
+  });
+
+  it('control: an uploaded photo whose defect IS in the stored document is attached and removed, and is not counted', async () => {
+    const rig = await createDiagRig({ signedIn: true });
+    await seedDemo.run(rig.ctx);
+    const { db } = rig.services;
+    const store = storeOf(rig);
+    const seeded = await store.getRow('diag-photo-unattached');
+    if (seeded === null || seeded.uploadedKey === null) throw new Error('the seed wrote no uploaded photo');
+    const present = seeded.uploadedKey.replace('diag-photo-unattached', 'diag-photo-present');
+    const meta = JSON.stringify({ targetType: 'defect', findingKey: '_default:s1:i1', itemId: 'i1', customId: 'diag-defect-present', defectKind: 'canned' });
+    await db.run('INSERT INTO media (pending_id, inspection_id, kind, path, content_type, meta, state, attempts, uploaded_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', ['diag-photo-present', seeded.inspectionId, 'photo', 'media/diag-photo-present.jpg', 'image/jpeg', meta, 'uploaded', 0, present, 1]);
+    const reconciler = reconcilerOf(rig, store);
+    reconciler.recheckMissing();
+    await reconciler.idle();
+    expect(await store.getRow('diag-photo-present')).toBeNull();
+    expect(reconciler.isUnreferenced('diag-photo-present')).toBe(false);
+    expect(reconciler.countUnreferenced()).toBe(1);
+    expect(reconciler.isUnreferenced('diag-photo-unattached')).toBe(true);
+  });
+
+  it('clearing also removes the stored demo document, and leaves the document of another inspection alone', async () => {
+    const rig = await createDiagRig({ signedIn: true });
+    const { db } = rig.services;
+    await db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', ['results-real-1', new Uint8Array([0, 0])]);
+    await seedDemo.run(rig.ctx);
+    expect((await db.query("SELECT 1 FROM ydoc_updates WHERE doc_name = 'results-diag-today'")).length).toBeGreaterThan(0);
+    await seedDemoClear.run(rig.ctx);
+    expect((await db.query("SELECT 1 FROM ydoc_updates WHERE doc_name = 'results-diag-today'")).length).toBe(0);
+    expect((await db.query("SELECT 1 FROM ydoc_updates WHERE doc_name = 'results-real-1'")).length).toBe(1);
   });
 });

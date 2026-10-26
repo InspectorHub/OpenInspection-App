@@ -14,7 +14,7 @@ import { extname, join, resolve } from 'node:path';
 // be able to put demo inspections on itself.
 // Then the test support that bypasses the plan brand, the purge authority and the data-layer block: no production module imports
 // it (a source test pins that), and this catches what such an import would have put into the built files.
-const FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]', 'Seed demo data', 'Remove demo data', 'diag-quarantined', 'issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'];
+const FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]', 'Seed demo data', 'Remove demo data', 'diag-quarantined', 'diag-photo-unattached', 'issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'];
 const SCANNED = new Set(['.js', '.mjs', '.css', '.html']);
 
 function* walk(dir) {
