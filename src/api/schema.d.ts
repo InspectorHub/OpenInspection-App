@@ -188,6 +188,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inspections/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List inspection templates (paginated)
+         * @description Paginated list of inspection templates for the tenant. Available to owner, manager and inspector roles.
+         */
+        get: operations["listInspectionTemplates"];
+        put?: never;
+        /**
+         * Create inspection templates for current tenant
+         * @description Create a new inspection template. (POST /templates, inspections domain).
+         */
+        post: operations["createInspectionTemplates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get inspection template for current tenant
+         * @description Retrieve a single template with its full schema. The template row is returned under data.template (its name is data.template.name, not data.name). Responds 404 for an unknown template. Available to owner, manager and inspector roles.
+         */
+        get: operations["getInspectionTemplate"];
+        /**
+         * Update inspection template for current tenant
+         * @description Update a template's name, checklist schema or default report profile. Despite the PUT verb it is a partial update: only the fields sent change. The schema is validated, the property type columns are re-derived from it, the template version number goes up by one on every call even if nothing changed, and a template.update audit entry is written. Returns 404 for an unknown template and 403 when the template produces an official form supplied with the software (its structure is read-only; duplicate it instead) or the user lacks the template edit capability. Restricted to owners, managers and inspectors.
+         */
+        put: operations["updateInspectionTemplate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inspections/{id}": {
         parameters: {
             query?: never;
@@ -210,6 +258,110 @@ export interface paths {
          * @description Partially update an inspection record. Available to owner, manager and inspector roles; changing the assigned inspector requires the scheduleOthers capability (owner and manager have it by default), and so does changing the date of an inspection the caller is not on (lead or helper); an inspector on the inspection can change its date, and may edit other fields. Staff may change the order fields (date, assigned inspector, price, address, reference and referral fields, closing date, payment and agreement requirements, and a status of requested, scheduled or confirmed). They may switch the payment and agreement requirements on but not off, may not change the status of a completed inspection, and may change the property details only before the inspection starts. A body changing any report setting or other inspection field gets 403, and so do changes to the inspector, address or date after the inspection has started. Staff writes need scheduleOthers or being on the inspection.
          */
         patch: operations["patchInspection"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/collab/followup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the follow-up verdict of a carried item
+         * @description Records the follow-up verdict of one item carried into a re-inspection. The JSON body is {itemId, status, notes?}: status is a follow-up status key of the company, or null to clear the answer, and notes of at most 4000 characters replace the note when present. Callers on the inspection roster only.
+         */
+        post: operations["recordCollabFollowup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/collab/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a report document to a snapshot
+         * @description Replaces the live report document with a snapshot and makes every connected editor reload it. The JSON body is {seq}, the whole-number sequence number of the snapshot to restore. A sequence number the document has no snapshot for answers 404 from the Durable Object with a plain-text body. Callers on the inspection roster only.
+         */
+        post: operations["restoreCollabSnapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/collab/restructure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Converge a report document after a template change
+         * @description Called after the template snapshot of the inspection changed: the live document is diffed against the new snapshot, added items are seeded, removed ones are dropped, and every connected editor resyncs. No body. Callers on the inspection roster only.
+         */
+        post: operations["restructureCollabDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/collab/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the version history of a report document
+         * @description Lists the snapshots kept for the inspection report document, taken automatically and on demand, without their contents. Callers on the inspection roster only; the response is the Durable Object answer unchanged.
+         */
+        get: operations["listCollabSnapshots"];
+        put?: never;
+        /**
+         * Capture a snapshot of a report document
+         * @description Takes a snapshot of the inspection report document now, for the version history. No body. Callers on the inspection roster only.
+         */
+        post: operations["captureCollabSnapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/collab/snapshots/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one snapshot of a report document
+         * @description Returns one snapshot in full, including the projection of the report document, so two versions can be compared. A sequence number the document has no snapshot for answers 404 from the Durable Object with a plain-text body. Callers on the inspection roster only.
+         */
+        get: operations["getCollabSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/inspections/{id}/collab/ticket": {
@@ -272,6 +424,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inspections/{id}/compliance/doc-review/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed the Document Review checklist
+         * @description Seeds the Document Review checklist (ASTM §8.6) from the platform catalog. Idempotent — items already present for this inspection are left untouched. An unknown inspection id answers 404.
+         */
+        post: operations["seedInspectionComplianceDocReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/compliance/doc-review/{documentKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch a Document Review checklist item
+         * @description Patches requested/received/reviewed/na/notes on a single Document Review checklist item. An unknown inspection id answers 404; an unknown document key answers 200 and changes nothing.
+         */
+        patch: operations["patchInspectionComplianceDocReviewItem"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/compliance/psq": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upsert Pre-Survey Questionnaire responses
+         * @description Stores the Pre-Survey Questionnaire responses (ASTM §8.5) and transitions status to received. Requires report_tier=full_pca.
+         */
+        put: operations["upsertInspectionCompliancePsq"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/compliance/psq/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Pre-Survey Questionnaire status
+         * @description Sets the PSQ status (sent/received/declined). Declining automatically appends a Deviations disclosure (ASTM §11.4.3) so the omission is stated, not silently dropped. Requires report_tier=full_pca.
+         */
+        post: operations["setInspectionCompliancePsqStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/compliance/signoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a dual sign-off attestation
+         * @description Signs a dual sign-off attestation (field_observer or pcr_reviewer) with the tenant Ed25519 signing key. Re-signing the same role upserts and replaces the prior attestation. Requires report_tier=full_pca (409 otherwise); 404 when the inspection is not in this company. The person recorded is the signed-in user: the request needs only role, license and dualRole, and personId and name are filled from the session and the user record. An inspector (or any role other than owner or manager) who sends a different personId gets 400, and a name they send is ignored. An owner or manager may record another person by sending both personId and name, which are stored as given (sending only one answers 400).
+         */
+        post: operations["signInspectionCompliance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/compliance/signoff/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a dual sign-off attestation
+         * @description Removes the sign-off attestation for the given role. Requires report_tier=full_pca.
+         */
+        delete: operations["removeInspectionComplianceSignoff"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inspections/{id}/cost-items": {
         parameters: {
             query?: never;
@@ -318,6 +590,126 @@ export interface paths {
          * @description Patch any subset of fields on an existing commercial PCA cost line item, tenant-scoped and restricted to the inspection it already belongs to.
          */
         patch: operations["updateInspectionCostItem"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/cover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set cropped report cover (baked JPEG derivative + crop transform)
+         * @description Bake and store a cropped report-cover JPEG derivative for an inspection and record its re-editable crop transform (POST /{id}/cover, inspections domain). Responds 400 when the image is missing, storage is unavailable or sourceKey does not reference a photo of this inspection, and 404 when the inspection is not in this company. An image over 10 MiB is refused with 413.
+         */
+        post: operations["setInspectionCover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/inspector-signature": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record inspector signature on an inspection (authenticated)
+         * @description Stores the inspector's drawn signature image on the inspection's primary report. It is saved inside that report's results data, replacing any signature saved earlier, and a results row is created if the report has none yet. Safe to repeat: the last call wins. savedAt in the response simply echoes the signedAt the client sent, not a server time. Responds 404 if the inspection or its primary report is missing. Does not email anyone. Writes an inspection.inspector_signature.update audit record (actor only, never the image) and requires the editReports capability. Available to owner, manager and inspector roles.
+         */
+        post: operations["createInspectionInspectorSignature"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/items/{itemId}/photos/{photoIndex}/annotation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save photo annotation (composite PNG + Konva nodes JSON)
+         * @description Saves an annotated version of a checklist item photo from a multipart upload: image is the flattened PNG rendering and nodes is the JSON describing the drawn shapes, kept so the annotation can be edited again. The PNG is written to photo storage next to the original, which is kept untouched, and a repeat save overwrites the previous annotated image. Unless the company edits live in the collaborative editor, the photo entry in the report results also gains the annotated image key and the shapes JSON; with the collaborative editor on, only the image is stored and the returned key must be recorded by the client. Responds 400 when the image is missing or storage is unavailable, and 404 when there is no photo at that index. An image over 10 MiB is refused with 413. Available to owner, manager and inspector roles.
+         */
+        post: operations["createInspectionItemsPhotosAnnotation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/items/{itemId}/photos/{photoIndex}/crop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bake and store a cropped derivative for an inspection-item or defect photo
+         * @description Bake and store a cropped derivative for an inspection-item or per-defect photo and record its re-editable crop transform (POST /{id}/items/{itemId}/photos/{photoIndex}/crop, inspections domain). An image over 10 MiB is refused with 413.
+         */
+        post: operations["cropInspectionItemPhoto"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Media Center — all attached + pool photos
+         * @description Returns the photo library of one inspection in two lists. attached holds photos already placed on checklist items or defects, each with its item and section labels (taken from the inspection's own template snapshot, falling back to the item id when there is none), photoIndex, an annotated flag and the original key to revert to. pool holds loose photos uploaded to the inspection but not yet attached to any item, with upload time and optional taken-at time. Not paginated. Returns 404 when the inspection is not in this company. Read-only. Available to owner, manager and inspector roles.
+         */
+        get: operations["listInspectionMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/media/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload a photo to the inspection media pool (loose, unattached)
+         * @description Uploads one photo to the inspection's media pool, the holding area for photos not yet attached to a checklist item, and returns the pool entry with an authenticated URL to view it. The file is stored in photo storage (location data stripped where the image service is available) and a pool row is created; attach it to an item later with the attach route. Each call creates a new entry. A file over 10 MiB is refused with 413, and a file whose bytes are not a jpeg, png or heic image with 400 (the declared type is ignored: the stored type and key extension follow the bytes, and an empty declared type is fine). Responds 400 when storage is unavailable or the file is missing. Available to owner, manager and inspector roles.
+         */
+        post: operations["uploadInspectionMedia"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/inspections/{id}/media/upload-url": {
@@ -420,6 +812,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inspections/{id}/pca-narrative": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch inspection PCA report narrative
+         * @description Patches the PCA report narrative blocks. Omitted keys are unchanged; empty strings fall back to seed copy on render. A key that is not one of the narrative blocks answers 400 naming it.
+         */
+        patch: operations["patchInspectionPcaNarrative"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/photo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve an inspection photo (tenant-scoped)
+         * @description Streams an inspection item/pool photo from R2, scoped to the caller's tenant + inspection via the key prefix. Sets Content-Disposition from the stored original filename; ?download=1 forces an attachment.
+         */
+        get: operations["serveInspectionPhoto"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/property-facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch inspection property fact
+         * @description Patches the Property Facts strip plus the commercial subtype-preset `metadata` envelope. Omitted keys are unchanged; null clears a field.
+         */
+        patch: operations["patchInspectionPropertyFact"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/property-facts/autofill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Auto-fill property facts from public records (Estated.io)
+         * @description Returns mapped Property Facts payload or null + reason code. Inspector remains free to override fields manually after auto-fill. Available to owner, manager and inspector roles; an inspector is limited to the inspections they may see.
+         */
+        post: operations["autofillInspection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish inspection for current tenant
+         * @description Publish an inspection report: sets reportStatus to published and returns the report URL. Fires the workspace's report.published automation rules (report.amended when the report was published before), so any client or agent notification is decided by those rules, not by this request; a first publish close to a sibling report's delivery may be coalesced into that notification. Also applies the automatic signature if one is configured, saves a frozen version snapshot (best effort, recorded with the optional summary), writes an inspection.published audit entry, and in the background queues the Summary and Full PDFs (only when the PDF pipeline is enabled), produces the optional courtesy translation, and syncs the report link to an ISN connection if one exists (isnSync). The theme, requireSignature, requirePayment, recipients and sendAgreementCopy fields are accepted but not used. This call does not check publish readiness; read the readiness route first. Calling it again republishes and creates a new version, except when nothing has changed: if the results, the report status and the summary are the same as in the latest version and no translation is requested, the call answers 200 in the same shape without publishing again (no new version, automation, audit entry, translation, PDF or ISN sync; isnSync is null). Requires the publish capability on top of the owner, manager or inspector role. You must be on this inspection or hold the scheduleOthers permission; otherwise 403.
+         */
+        post: operations["publishInspection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/publish-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check whether an inspection is ready to publish (required defect fields filled)
+         * @description Returns ready=true when every included defect has its REQUIRED fields filled (configurable per tenant/inspection — Track H IA-7); non-required gaps surface as warningDefects.
+         */
+        get: operations["getInspectionPublishReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inspections/{id}/report-data": {
         parameters: {
             query?: never;
@@ -477,7 +989,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Record the inspection-level answers a statutory form asks for
+         * @description A field left out is left alone; a field sent empty is cleared.
+         */
+        patch: operations["updateInspectionStatutoryDetails"];
         trace?: never;
     };
     "/api/inspections/{id}/statutory-form/coverage": {
@@ -494,6 +1010,66 @@ export interface paths {
         get: operations["getInspectionStatutoryCoverage"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/statutory-form/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record an instance the statutory form has no slot for
+         * @description Stores one repeated-block instance past the printed capacity of the form. Printed slots are ordinary items and are not recorded here.
+         */
+        post: operations["addInspectionStatutoryFormInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/template-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Replace the per-inspection template snapshot
+         * @description Replaces the templateSnapshot JSON wholesale. Validated against TemplateSchemaV2. Used by the inspection editor for inline structural edits (rating system swap, add/remove section/item). Refused with 403 when the inspection was made from a template that produces an official form supplied with the software: its structure is read-only.
+         */
+        patch: operations["patchInspectionTemplateSnapshot"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/unit-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch an inspection between tagged and per-unit inspection mode
+         * @description Switches inspections.unit_inspection_mode. mode='per_unit' promotes location tags into unit rows and re-keys unambiguous findings; mode='tagged' is the lossy reverse (flattens unit findings back to the common scope, unions labels into location_options, deletes the promoted unit rows).
+         */
+        post: operations["switchInspectionUnitMode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -533,7 +1109,95 @@ export interface paths {
          */
         get: operations["listInspectionUnits"];
         put?: never;
+        /**
+         * Create a unit (Building / Floor / Unit) under an inspection
+         * @description Adds one node (building, floor or unit) to the inspection's unit tree and returns its id. The tree is at most three levels deep below the top, so a parent that is already at the deepest level is refused, and a name already used by a sibling under the same parent is refused; both come back as 400. The new node is sorted after its existing siblings. A parent that is not a unit of this inspection is refused with 400. The inspection id itself is not looked up first, so an unknown id simply produces a node no inspection shows. Available to owner, manager and inspector roles.
+         */
+        post: operations["createInspectionUnits"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/units/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk-create units under an inspection (floors×stacks or CSV)
+         * @description Creates many units at once under one parent (or at the top level) and returns their ids. Two input styles: a floors-by-stacks grid, or pasted CSV text, each expanded into labelled units. Every created node is a regular unit. Labels that collide with an existing sibling or repeat within the batch are skipped silently, so the returned ids can be fewer than requested, or empty. All rows are inserted together. Refused with 400 when the parent is not a unit of this inspection, is already at the deepest allowed level, or the input cannot be parsed. Available to owner, manager and inspector roles.
+         */
+        post: operations["bulkCreateInspectionUnits"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/units/{unitId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
         post?: never;
+        /**
+         * Delete a unit (cascades to children)
+         * @description Deletes a unit together with every unit nested beneath it. Findings recorded against the deleted units are not removed by this route. The unit is looked up by its id within this inspection, so an unknown unit id, or one that belongs to a different inspection, answers 404 and deletes nothing. Cannot be undone. Available to owner, manager and inspector roles.
+         */
+        delete: operations["deleteInspectionUnit"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename or re-sort a unit
+         * @description Renames a unit or changes its sort position; fields left out are unchanged. Sibling-name uniqueness is not re-checked on rename. The unit is looked up by its id within this inspection, so an unknown unit id, or one that belongs to a different inspection, answers 404 and changes nothing. Available to owner, manager and inspector roles.
+         */
+        patch: operations["patchInspectionUnit"];
+        trace?: never;
+    };
+    "/api/inspections/{id}/units/{unitId}/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Duplicate a unit (clone attributes into a new empty sibling)
+         * @description Makes a copy of a unit as a new sibling and returns the new id. The copy keeps the original's kind, type, parent and stored attributes, gets a derived copy name that avoids sibling collisions, and is sorted last among its siblings. Findings entered against the original are not copied, so the new unit starts empty. Children of the unit are not duplicated. Refused with 400 when the unit does not exist or belongs to a different inspection. Available to owner, manager and inspector roles.
+         */
+        post: operations["duplicateInspectionUnit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload inspection for current tenant
+         * @description Uploads one photo file (multipart) to the inspection's photo storage and returns its storage key. This route only stores the file: it does not add the photo to any checklist item or to the media pool, so the client must record the returned key itself. itemId must be present but is not used to place the file, and targetType and customId are only validated and echoed back (customId is required when targetType is defect). Location data is stripped from the image where the image service is available. Each call stores a new file. A file over 10 MiB is refused with 413, and a file whose bytes are not a jpeg, png or heic image with 400 (the declared type is ignored: the stored type and key extension follow the bytes, and an empty declared type is fine). Responds 400 when storage is unavailable or file or itemId is missing. Available to owner, manager and inspector roles.
+         */
+        post: operations["uploadInspection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -654,6 +1318,20 @@ export interface components {
             };
             /** @description Optional response metadata, such as pagination information. */
             meta?: unknown;
+        };
+        /** @description Either a floors-by-stacks grid or CSV text, plus the optional parent node to create the units under. */
+        BulkCreateUnits: {
+            /** @enum {string} */
+            mode: "floors_stacks";
+            floors: number[];
+            stacks: number;
+            startAt?: number;
+            parentUnitId?: string | null;
+        } | {
+            /** @enum {string} */
+            mode: "csv";
+            csv: string;
+            parentUnitId?: string | null;
         };
         CommentAssistRequest: {
             /**
@@ -844,6 +1522,24 @@ export interface components {
              */
             agreementRequired?: boolean;
         };
+        /** @description Where the new node sits in the tree (parent, or null for top level), what kind of node it is and its name. */
+        CreateUnit: {
+            /** @description Id of the node to create this one under; null places it at the top level. */
+            parentUnitId: string | null;
+            /**
+             * @description Level of the node: building, floor or unit.
+             * @enum {string}
+             */
+            kind: "building" | "floor" | "unit";
+            /**
+             * @description Purpose: regular unit or common area. Defaults to unit.
+             * @default unit
+             * @enum {string}
+             */
+            type: "unit" | "common";
+            /** @description Display name, which must be unique among siblings under the same parent. 1-80 characters. */
+            name: string;
+        };
         CreateVideoUpload: {
             /** @description Optional caption to remember for the clip once uploaded. Up to 200 characters. */
             caption?: string;
@@ -940,6 +1636,47 @@ export interface components {
             /** @description Optional response metadata, such as pagination information. */
             meta?: unknown;
         };
+        /** @description The signature image and the time the inspector signed. */
+        InspectorSignature: {
+            /** @description Signature image encoded as base64 text. 100-500000 characters. */
+            signatureBase64: string;
+            /** @description When the inspector signed, as a Unix timestamp in milliseconds. Integer, greater than 0. */
+            signedAt: number;
+        };
+        MediaCenterAttachedPhoto: {
+            key: string;
+            /** @description Source R2 key (revert target); differs from key when the photo is annotated */
+            originalKey: string;
+            url: string;
+            itemId: string;
+            itemLabel: string;
+            sectionId: string;
+            sectionTitle: string;
+            photoIndex: number;
+            annotated: boolean;
+            /** @description Defect id when the photo hangs off a canned/custom defect rather than the item */
+            defectId?: string;
+        };
+        MediaCenterPoolPhoto: {
+            id: string;
+            key: string;
+            url: string;
+            uploadedAt: number;
+            takenAt: number | null;
+        };
+        /** @description Response payload */
+        MediaCenterResponse: {
+            attached: components["schemas"]["MediaCenterAttachedPhoto"][];
+            pool: components["schemas"]["MediaCenterPoolPhoto"][];
+        };
+        /** @description Response payload */
+        MediaPoolUploadResponse: {
+            id: string;
+            key: string;
+            url: string;
+            uploadedAt: number;
+            takenAt: number | null;
+        };
         PhotoUploadUrlRequest: {
             /** @description Client-generated media id; repeating the request with the same id yields the same storage key */
             pendingId: string;
@@ -957,6 +1694,150 @@ export interface components {
             key: string;
             /** @description Token expiry as epoch milliseconds */
             expiresAt: number;
+        };
+        /** @description Response payload */
+        PropertyFacts: {
+            /**
+             * @description Year the building was built. Integer between 1800 and 2100.
+             * @example 1990
+             */
+            yearBuilt?: number | null;
+            /**
+             * @description Building floor area in square feet. Integer between 0 and 1000000.
+             * @example 1800
+             */
+            sqft?: number | null;
+            /**
+             * @description Type of foundation under the building, shown in the Property Facts strip. One of: basement, slab, crawlspace, other.
+             * @example basement
+             * @enum {string|null}
+             */
+            foundationType?: "basement" | "slab" | "crawlspace" | "other" | null;
+            /**
+             * @description Size of the lot as free text including its unit, for example 0.25 acres or 10,000 sqft; it is stored without parsing. Up to 50 characters.
+             * @example 0.25 acres
+             */
+            lotSize?: string | null;
+            /**
+             * @description Number of bedrooms in the building. Integer between 0 and 50.
+             * @example 3
+             */
+            bedrooms?: number | null;
+            /**
+             * @description Number of bathrooms in the building; half baths are written as .5. Between 0 and 50.
+             * @example 2.5
+             */
+            bathrooms?: number | null;
+            /**
+             * @description Unit / suite designation for the subject property (maps to the inspections.unit column). Null on properties with no unit. Up to 120 characters.
+             * @example Suite 200
+             */
+            unit?: string | null;
+            /**
+             * @description County the subject property sits in (maps to the inspections.county column). Autofilled at intake; editable in the Property Facts strip. Up to 120 characters.
+             * @example Travis County
+             */
+            county?: string | null;
+            /**
+             * @description Commercial report tier: light_commercial or full_pca. Null falls back to the resolver default.
+             * @example light_commercial
+             * @enum {string|null}
+             */
+            reportTier?: "light_commercial" | "full_pca" | null;
+            /**
+             * @description Commercial subtype id (platform id or org-custom). Only meaningful when propertyType = commercial. Up to 64 characters.
+             * @example office
+             */
+            commercialSubtype?: string | null;
+        };
+        /** @description The street address to look up in public property records. */
+        PropertyFactsAutofillRequest: {
+            /** @description Full street address to look up in public property records. The lookup result is returned for the inspector to review and is not saved by this call. 5-200 characters. */
+            addressString: string;
+        };
+        PropertyFactsAutofillResponse: {
+            /** @enum {boolean} */
+            success: true;
+            data: {
+                facts: components["schemas"]["PropertyFacts"] & unknown;
+                /** @enum {string} */
+                source: "estated" | "manual_required";
+                /** @enum {string} */
+                reason?: "NO_API_KEY" | "NOT_FOUND" | "PROVIDER_ERROR";
+            };
+        };
+        PropertyFactsResponse: {
+            /**
+             * @description True when the request succeeded.
+             * @example true
+             */
+            success: boolean;
+            data: components["schemas"]["PropertyFacts"];
+            /** @description Error detail; present only when the request failed. */
+            error?: {
+                /**
+                 * @description Human-readable description of the error.
+                 * @example Error message
+                 */
+                message: string;
+                /**
+                 * @description Stable machine-readable error code.
+                 * @example ERROR_CODE
+                 */
+                code: string;
+                /** @description Optional structured context for the error, such as per-field validation failures. */
+                details?: unknown;
+            };
+            /** @description Optional response metadata, such as pagination information. */
+            meta?: unknown;
+        };
+        /** @description Property Facts strip fields plus a metadata envelope for non-dedicated commercial subtype-preset fields. */
+        PropertyFactsWrite: components["schemas"]["PropertyFacts"] & {
+            /** @description Non-dedicated commercial subtype-preset fields, merged into the property_facts JSON envelope. null clears a key. */
+            metadata?: {
+                [key: string]: string | number | boolean | unknown;
+            };
+        };
+        /** @description Which report to publish and the optional republish note and translation request. */
+        PublishInspection: {
+            /**
+             * @description Report theme. Accepted but not used: the publish route ignores it. One of: modern, classic, minimal. Defaults to modern.
+             * @default modern
+             * @enum {string}
+             */
+            theme: "modern" | "classic" | "minimal";
+            /**
+             * @description Signature requirement flag. Accepted but not used: the publish route ignores it. Defaults to false.
+             * @default false
+             */
+            requireSignature: boolean;
+            /**
+             * @description Payment requirement flag. Accepted but not used: the publish route ignores it. Defaults to false.
+             * @default false
+             */
+            requirePayment: boolean;
+            /** @description Per-recipient delivery choices. Accepted but not used: who is notified is decided by the report.published automation rules. */
+            recipients?: components["schemas"]["PublishRecipient"][];
+            /**
+             * @description Whether to send a copy of the agreement with the report. Accepted but not used by the publish route. Defaults to false.
+             * @default false
+             */
+            sendAgreementCopy: boolean;
+            /** @description Note on what changed, stored with the version snapshot this publish creates. Leave out on a first publish. Up to 500 characters. */
+            summary?: string;
+            /** @description Report to publish; defaults to the inspection primary report. */
+            reportId?: string;
+            /** @description BCP-47 locale to produce a courtesy translation in on this publish, e.g. es-419. Absent means none. The English report is the inspection record either way. 2-20 characters. */
+            translateTo?: string;
+        };
+        PublishRecipient: {
+            /** @description Contact the report is addressed to; null for an ad-hoc recipient. Accepted but not used by the publish route. */
+            contactId: string | null;
+            /**
+             * @description Channels to deliver through; empty skips the recipient. Accepted but not used by the publish route.
+             * @default []
+             */
+            channels: ("email" | "text")[];
         };
         Recommendation: {
             /** @description Recommendation id. */
@@ -1318,6 +2199,13 @@ export interface components {
             /** @description Optional response metadata, such as pagination information. */
             meta?: unknown;
         };
+        UnitModeSwitch: {
+            /**
+             * @description Target unit-inspection mode: "per_unit" (promote to per-unit matrix) or "tagged" (flatten back to common scope + location tags).
+             * @enum {string}
+             */
+            mode: "tagged" | "per_unit";
+        };
         UpdateInspection: {
             /**
              * @description New street address of the property (at least 5 characters).
@@ -1453,6 +2341,13 @@ export interface components {
              * @example 9000
              */
             depositRequiredCents?: number | null;
+        };
+        /** @description New name and or new sort position; omit a field to leave it as is. */
+        UpdateUnit: {
+            /** @description New display name for the unit. 1-80 characters. */
+            name?: string;
+            /** @description New position among siblings; lower values come first. Integer, at least 0. */
+            sortOrder?: number;
         };
         /** @description Response payload */
         VideoCreateUploadResponse: {
@@ -1620,6 +2515,21 @@ export interface operations {
                             downloadUrl: string | null;
                             /** @description Native API contract version this server implements */
                             serverContractVersion: number;
+                            /** @description Https page where a person manages or deletes their account. Present only when the operator configured one; absent otherwise (never null or empty) */
+                            accountUrl?: string;
+                            /** @description How a large video may be uploaded. Absent on a server that predates chunked upload and when native clients are switched off here */
+                            videoUpload?: {
+                                /** @description Base path of the chunked video upload routes, authorized by the signed token from create-upload */
+                                path: string;
+                                /** @description Size of every part but the last */
+                                chunkBytes: number;
+                                /** @description Largest video the chunked route accepts */
+                                maxBytes: number;
+                                /** @description Chunked uploads one member may have open at once */
+                                maxOpen: number;
+                                /** @description Upload methods this server offers. A client that does not find chunked here uses the single-request route. A company may be served from another video backend: the provider in the create-upload answer decides, not this field */
+                                methods: ("chunked" | "form")[];
+                            };
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -1865,6 +2775,10 @@ export interface operations {
                             role: string;
                             /** @description Days the device may stay offline before locking */
                             offlineMaxDays: number;
+                            /** @description Display name the company set for itself, trimmed and cut to 200 characters, or null when it has none. Never replaced by a default name. A missing key means an older server */
+                            tenantName: string | null;
+                            /** @description The server clock when it answered this request, in whole milliseconds since the Unix epoch. Read on the server after all other work and never derived from anything the client sent. Treat it as the current time give or take network delay. The response is not cacheable. A missing key means an older server */
+                            serverNowMs: number;
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -2038,7 +2952,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description ID_CONFLICT: the supplied id already belongs to a record the caller may not open: one outside this workspace, or an inspection in it the caller is not assigned to. The answer is the same for both, so it does not reveal which */
+            /** @description ID_CONFLICT: the supplied id already belongs to a record the caller may not open: one outside this workspace, or an inspection in it the caller is not assigned to. The answer is the same for both, so it does not reveal which. INSPECTION_ID_DELETED: the supplied id belongs to an inspection this company deleted, and creating it again is refused (`details.inspectionId`); the client should keep its data and stop retrying */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2047,6 +2961,1789 @@ export interface operations {
             };
             /** @description The inspection was saved but its primary report could not be created. Retry the same request; the replay completes the create. (Any other step that fails answers 500, and the same retry applies when a client-generated id was sent.) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listInspectionTemplates: {
+        parameters: {
+            query?: {
+                /** @description 1-indexed page number for paginated results. Integer, at least 1. Defaults to 1. */
+                page?: number;
+                /** @description Number of results per page (one of 12, 25, 50, 100). Integer. Defaults to 50. */
+                pageSize?: number;
+                /** @description Filter templates by name (case-insensitive substring match) */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                        data: {
+                            id: string;
+                            name: string;
+                            version: number;
+                            itemCount: number;
+                            /** @enum {string} */
+                            source: "marketplace" | "custom";
+                            /** @description When this template stopped being offered for new inspections, epoch ms, or null */
+                            retiredAt: number | null;
+                            /**
+                             * @description Why it stopped being offered. The two differ in what anybody can do about it
+                             * @enum {string|null}
+                             */
+                            retiredReason: "superseded" | "uninstalled" | null;
+                            /** @description The state or country whose rules this template is written to, or null when it is written to none */
+                            jurisdiction: string | null;
+                        }[];
+                        meta: {
+                            total: number;
+                            page: number;
+                            pageSize: number;
+                            totalPages: number;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createInspectionTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Template name shown in template pickers. 1-100 characters. */
+                    name: string;
+                    /** @description Default report appearance profile id for inspections from this template; null inherits the tenant default */
+                    defaultProfileId?: string | null;
+                    /** @description Template checklist definition in the v2 schema format, sent as an object or as a JSON string that is parsed and validated. */
+                    schema: string | {
+                        /**
+                         * @description Template format version. Only version 2 is accepted; the older flat format is rejected.
+                         * @enum {number}
+                         */
+                        schemaVersion: 2;
+                        /** @description Ordered sections of the checklist, each with its own items. */
+                        sections: {
+                            /** @description Stable id of the section within the template; items and report anchors are addressed through it. */
+                            id: string;
+                            /** @description Section heading shown in the editor navigation and as the section title in the report; a heading, not a paragraph. 1-120 characters. */
+                            title: string;
+                            /** @description Optional icon key stored with the section. */
+                            icon?: string;
+                            /** @description Optional short code or numeral identifying the section, kept with the section when the template is saved. */
+                            identifier?: string;
+                            /** @description Ordered checklist items of the section; an item with a parentId nests under another item of the same section, and array order is the display order. */
+                            items: ({
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Rated item: a rating from ratingOptions plus the three canned-comment tabs. This is the main inspection item type. One of: rich.
+                                 * @enum {string}
+                                 */
+                                type: "rich";
+                                /** @description Rating labels offered at the top of the item card, in display order; at least one is required. At least 1 items. */
+                                ratingOptions: string[];
+                                /** @description The Information, Limitations and Defects canned-comment tabs for the item. */
+                                tabs: {
+                                    /** @description Canned information comments offered on the Information tab of the item: general statements about what was observed. */
+                                    information: {
+                                        /** @description Stable id of the canned information or limitation entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading shown above the comment text in the editor. */
+                                        title: string;
+                                        /** @description Plain-text body of the canned comment, inserted into the report when the entry is included on an inspection. */
+                                        comment: string;
+                                        /** @description When true the entry is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this comment. */
+                                        abbrev?: string;
+                                    }[];
+                                    /** @description Canned limitation comments offered on the Limitations tab of the item: conditions that restricted the inspection. */
+                                    limitations: {
+                                        /** @description Stable id of the canned information or limitation entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading shown above the comment text in the editor. */
+                                        title: string;
+                                        /** @description Plain-text body of the canned comment, inserted into the report when the entry is included on an inspection. */
+                                        comment: string;
+                                        /** @description When true the entry is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this comment. */
+                                        abbrev?: string;
+                                    }[];
+                                    /** @description Canned defect entries offered on the Defects tab of the item; each carries a category, location, comment and photos. */
+                                    defects: {
+                                        /** @description Stable id of the canned defect entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading naming the defect, shown above its comment in the editor and report. */
+                                        title: string;
+                                        /** @description Defect category the entry belongs to: the id of one of the company defect categories, or a legacy seed name. The category decides whether the defect appears in the report summary. */
+                                        category: string;
+                                        /** @description Free-text location of the defect in the property, for example the northeast corner; empty in a template and filled in by the inspector. */
+                                        location: string;
+                                        /** @description Plain-text narrative describing the defect, inserted into the report when the entry is included. */
+                                        comment: string;
+                                        /** @description Storage keys of photos attached to the canned defect at template level. Rarely used: photos taken during an inspection are stored with that inspection instead. */
+                                        photos: string[];
+                                        /** @description When true the defect is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this defect. */
+                                        abbrev?: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Single-line text item: the inspector types a short answer, stored as the item value.
+                                 * @enum {string}
+                                 */
+                                type: "text";
+                                /** @description Optional input settings for the text field, such as hint text and maximum length. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Yes or no item: a checkbox whose state is stored as the item value. One of: boolean.
+                                 * @enum {string}
+                                 */
+                                type: "boolean";
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Multi-line text item: the inspector types a longer answer, stored as the item value. One of: textarea.
+                                 * @enum {string}
+                                 */
+                                type: "textarea";
+                                /** @description Optional input settings for the text area, such as hint text and maximum length. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Numeric item: the inspector enters a number, stored as the item value and shown with its unit in the report.
+                                 * @enum {string}
+                                 */
+                                type: "number";
+                                /** @description Optional input settings for the number field: bounds, step, unit and hint text. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Single-choice item: the inspector picks one option from options.choices. One of: select.
+                                 * @enum {string}
+                                 */
+                                type: "select";
+                                /** @description Input settings for the select item; the options.choices list supplies the options. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Multiple-choice item: the inspector ticks any of the options in options.choices. One of: multi_select.
+                                 * @enum {string}
+                                 */
+                                type: "multi_select";
+                                /** @description Input settings for the multi-select item; the options.choices list supplies the options. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Date item: the inspector picks a calendar date, stored as the item value.
+                                 * @enum {string}
+                                 */
+                                type: "date";
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Photo-only item: no rating or text, the inspector only attaches photos. One of: photo_only.
+                                 * @enum {string}
+                                 */
+                                type: "photo_only";
+                                /** @description Optional settings carried with the item. The photo-only control reads none of them. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            })[];
+                            /** @description Legal or explanatory disclaimer printed at the bottom of the section in the published report; null or empty prints nothing. Up to 4000 characters. */
+                            disclaimerText?: string | null;
+                            /** @description When true the published report starts this section on a new page in print and PDF output. */
+                            alwaysPageBreak?: boolean;
+                            /** @description Where the section was imported from; the editor marks imported sections with a coloured dot. */
+                            source?: {
+                                /** @description Name of the product or platform the template content was imported from. */
+                                platform: string;
+                                /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                externalId: string;
+                            } | null;
+                            /** @description Property-type / commercial-subtype gating for this section */
+                            applicableTo?: {
+                                /** @description Property types this section applies to; empty = all */
+                                propertyTypes?: ("single-family" | "multi-unit" | "commercial")[];
+                                /** @description Commercial subtype ids this section applies to; empty = all commercial */
+                                commercialSubtypes?: string[];
+                            };
+                            /**
+                             * @description common (once) or unit (repeats per unit)
+                             * @enum {string}
+                             */
+                            defaultScope?: "common" | "unit";
+                        }[];
+                        /** @description Rating levels embedded in this template; inspections copy them when created, so later edits do not change existing inspections. */
+                        ratingSystem?: {
+                            /** @description Display name of the rating system, for example Standard 5-Level. */
+                            name?: string;
+                            /** @description Id of the level treated as the default rating; should match the id of one of the levels. */
+                            defaultLevelId?: string;
+                            /** @description Where the rating system came from when it was imported; null when authored here. */
+                            source?: string | null;
+                            /** @description The ordered rating levels an inspector can apply to items. */
+                            levels: {
+                                /** @description Id of the rating level, which is the value stored as an item rating in the inspection results. */
+                                id: string;
+                                /** @description Full name of the rating level shown to the inspector and in the report, for example Satisfactory. */
+                                label: string;
+                                /** @description Short code for the level shown on compact rating buttons. */
+                                abbreviation?: string;
+                                /** @description Colour of the level as a hex value, used for its button and report chip. */
+                                color?: string;
+                                /**
+                                 * @description Severity bucket the level falls in; the report summary and the rating contradiction check use it to tell good ratings from problems. One of: good, minor, marginal, significant.
+                                 * @enum {string}
+                                 */
+                                severity?: "good" | "minor" | "marginal" | "significant";
+                                /** @description Whether this level counts as a defect. */
+                                isDefect?: boolean;
+                                /** @description Pause auto-advance after selecting this level (focus notes) */
+                                pausesAdvance?: boolean;
+                                /** @description Marks the level the template treats as its default rating. */
+                                default?: boolean;
+                                /** @description Explanation of what the level means, for example Item is functioning as intended. */
+                                description?: string;
+                            }[];
+                        };
+                        /**
+                         * @description single-family | multi-unit | commercial
+                         * @enum {string}
+                         */
+                        propertyType?: "single-family" | "multi-unit" | "commercial";
+                        /** @description Commercial subtype id; only meaningful when propertyType = commercial */
+                        commercialSubtype?: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            template?: unknown;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+            /** @description Missing the 'templateCreate' capability */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getInspectionTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection template to retrieve. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            template?: unknown;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    updateInspectionTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template to update. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Template name shown in template pickers. 1-100 characters. */
+                    name?: string;
+                    /** @description Default report appearance profile id for inspections from this template; null inherits the tenant default */
+                    defaultProfileId?: string | null;
+                    /** @description Template checklist definition in the v2 schema format, sent as an object or as a JSON string that is parsed and validated. */
+                    schema?: string | {
+                        /**
+                         * @description Template format version. Only version 2 is accepted; the older flat format is rejected.
+                         * @enum {number}
+                         */
+                        schemaVersion: 2;
+                        /** @description Ordered sections of the checklist, each with its own items. */
+                        sections: {
+                            /** @description Stable id of the section within the template; items and report anchors are addressed through it. */
+                            id: string;
+                            /** @description Section heading shown in the editor navigation and as the section title in the report; a heading, not a paragraph. 1-120 characters. */
+                            title: string;
+                            /** @description Optional icon key stored with the section. */
+                            icon?: string;
+                            /** @description Optional short code or numeral identifying the section, kept with the section when the template is saved. */
+                            identifier?: string;
+                            /** @description Ordered checklist items of the section; an item with a parentId nests under another item of the same section, and array order is the display order. */
+                            items: ({
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Rated item: a rating from ratingOptions plus the three canned-comment tabs. This is the main inspection item type. One of: rich.
+                                 * @enum {string}
+                                 */
+                                type: "rich";
+                                /** @description Rating labels offered at the top of the item card, in display order; at least one is required. At least 1 items. */
+                                ratingOptions: string[];
+                                /** @description The Information, Limitations and Defects canned-comment tabs for the item. */
+                                tabs: {
+                                    /** @description Canned information comments offered on the Information tab of the item: general statements about what was observed. */
+                                    information: {
+                                        /** @description Stable id of the canned information or limitation entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading shown above the comment text in the editor. */
+                                        title: string;
+                                        /** @description Plain-text body of the canned comment, inserted into the report when the entry is included on an inspection. */
+                                        comment: string;
+                                        /** @description When true the entry is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this comment. */
+                                        abbrev?: string;
+                                    }[];
+                                    /** @description Canned limitation comments offered on the Limitations tab of the item: conditions that restricted the inspection. */
+                                    limitations: {
+                                        /** @description Stable id of the canned information or limitation entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading shown above the comment text in the editor. */
+                                        title: string;
+                                        /** @description Plain-text body of the canned comment, inserted into the report when the entry is included on an inspection. */
+                                        comment: string;
+                                        /** @description When true the entry is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this comment. */
+                                        abbrev?: string;
+                                    }[];
+                                    /** @description Canned defect entries offered on the Defects tab of the item; each carries a category, location, comment and photos. */
+                                    defects: {
+                                        /** @description Stable id of the canned defect entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading naming the defect, shown above its comment in the editor and report. */
+                                        title: string;
+                                        /** @description Defect category the entry belongs to: the id of one of the company defect categories, or a legacy seed name. The category decides whether the defect appears in the report summary. */
+                                        category: string;
+                                        /** @description Free-text location of the defect in the property, for example the northeast corner; empty in a template and filled in by the inspector. */
+                                        location: string;
+                                        /** @description Plain-text narrative describing the defect, inserted into the report when the entry is included. */
+                                        comment: string;
+                                        /** @description Storage keys of photos attached to the canned defect at template level. Rarely used: photos taken during an inspection are stored with that inspection instead. */
+                                        photos: string[];
+                                        /** @description When true the defect is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this defect. */
+                                        abbrev?: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Single-line text item: the inspector types a short answer, stored as the item value.
+                                 * @enum {string}
+                                 */
+                                type: "text";
+                                /** @description Optional input settings for the text field, such as hint text and maximum length. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Yes or no item: a checkbox whose state is stored as the item value. One of: boolean.
+                                 * @enum {string}
+                                 */
+                                type: "boolean";
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Multi-line text item: the inspector types a longer answer, stored as the item value. One of: textarea.
+                                 * @enum {string}
+                                 */
+                                type: "textarea";
+                                /** @description Optional input settings for the text area, such as hint text and maximum length. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Numeric item: the inspector enters a number, stored as the item value and shown with its unit in the report.
+                                 * @enum {string}
+                                 */
+                                type: "number";
+                                /** @description Optional input settings for the number field: bounds, step, unit and hint text. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Single-choice item: the inspector picks one option from options.choices. One of: select.
+                                 * @enum {string}
+                                 */
+                                type: "select";
+                                /** @description Input settings for the select item; the options.choices list supplies the options. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Multiple-choice item: the inspector ticks any of the options in options.choices. One of: multi_select.
+                                 * @enum {string}
+                                 */
+                                type: "multi_select";
+                                /** @description Input settings for the multi-select item; the options.choices list supplies the options. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Date item: the inspector picks a calendar date, stored as the item value.
+                                 * @enum {string}
+                                 */
+                                type: "date";
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Photo-only item: no rating or text, the inspector only attaches photos. One of: photo_only.
+                                 * @enum {string}
+                                 */
+                                type: "photo_only";
+                                /** @description Optional settings carried with the item. The photo-only control reads none of them. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            })[];
+                            /** @description Legal or explanatory disclaimer printed at the bottom of the section in the published report; null or empty prints nothing. Up to 4000 characters. */
+                            disclaimerText?: string | null;
+                            /** @description When true the published report starts this section on a new page in print and PDF output. */
+                            alwaysPageBreak?: boolean;
+                            /** @description Where the section was imported from; the editor marks imported sections with a coloured dot. */
+                            source?: {
+                                /** @description Name of the product or platform the template content was imported from. */
+                                platform: string;
+                                /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                externalId: string;
+                            } | null;
+                            /** @description Property-type / commercial-subtype gating for this section */
+                            applicableTo?: {
+                                /** @description Property types this section applies to; empty = all */
+                                propertyTypes?: ("single-family" | "multi-unit" | "commercial")[];
+                                /** @description Commercial subtype ids this section applies to; empty = all commercial */
+                                commercialSubtypes?: string[];
+                            };
+                            /**
+                             * @description common (once) or unit (repeats per unit)
+                             * @enum {string}
+                             */
+                            defaultScope?: "common" | "unit";
+                        }[];
+                        /** @description Rating levels embedded in this template; inspections copy them when created, so later edits do not change existing inspections. */
+                        ratingSystem?: {
+                            /** @description Display name of the rating system, for example Standard 5-Level. */
+                            name?: string;
+                            /** @description Id of the level treated as the default rating; should match the id of one of the levels. */
+                            defaultLevelId?: string;
+                            /** @description Where the rating system came from when it was imported; null when authored here. */
+                            source?: string | null;
+                            /** @description The ordered rating levels an inspector can apply to items. */
+                            levels: {
+                                /** @description Id of the rating level, which is the value stored as an item rating in the inspection results. */
+                                id: string;
+                                /** @description Full name of the rating level shown to the inspector and in the report, for example Satisfactory. */
+                                label: string;
+                                /** @description Short code for the level shown on compact rating buttons. */
+                                abbreviation?: string;
+                                /** @description Colour of the level as a hex value, used for its button and report chip. */
+                                color?: string;
+                                /**
+                                 * @description Severity bucket the level falls in; the report summary and the rating contradiction check use it to tell good ratings from problems. One of: good, minor, marginal, significant.
+                                 * @enum {string}
+                                 */
+                                severity?: "good" | "minor" | "marginal" | "significant";
+                                /** @description Whether this level counts as a defect. */
+                                isDefect?: boolean;
+                                /** @description Pause auto-advance after selecting this level (focus notes) */
+                                pausesAdvance?: boolean;
+                                /** @description Marks the level the template treats as its default rating. */
+                                default?: boolean;
+                                /** @description Explanation of what the level means, for example Item is functioning as intended. */
+                                description?: string;
+                            }[];
+                        };
+                        /**
+                         * @description single-family | multi-unit | commercial
+                         * @enum {string}
+                         */
+                        propertyType?: "single-family" | "multi-unit" | "commercial";
+                        /** @description Commercial subtype id; only meaningful when propertyType = commercial */
+                        commercialSubtype?: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            template?: unknown;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+            /** @description Missing the 'templateEdit' capability, or the template produces an official form and is structurally read-only */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2080,9 +4777,79 @@ export interface operations {
                         success: boolean;
                         /** @description Response payload */
                         data: {
-                            inspection: components["schemas"]["Inspection"] & unknown;
+                            /** @description The inspection record. */
+                            inspection: components["schemas"]["Inspection"] & {
+                                /** @description The template structure frozen onto this inspection, or null when it has none or the stored value is not a readable object. The editor reads it to render the checklist. */
+                                templateSnapshot?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** @description Storage key of the photo chosen as the report cover, or null when none is chosen. */
+                                coverPhotoId?: string | null;
+                                /** @description The Property Facts values (year built, size, foundation and the like), or null when none are stored. */
+                                propertyFacts?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** @description The stored PCA report narrative blocks by key, or null when none are stored. Blocks left empty fall back to seed copy when the report renders. */
+                                pcaNarrative?: {
+                                    [key: string]: string;
+                                } | null;
+                            };
                             /** @description The associated template schema */
                             template?: unknown;
+                            /** @description Id of the primary report of this inspection, or null when it has none yet. A native device writes it into the manifest of an exported package; the importer refuses a package for an existing inspection whose report id differs from this one. The key is always present on a server that supports it; a missing key means an older server. */
+                            primaryReportId: string | null;
+                            /** @description How the inspection date sits against the statutory form revision its template produces. Present only for an inspection whose template declares a statutory form and names its revision; absent means there is nothing to say, never that nobody looked. It changes with the date and with the current time, so a cached copy can show an earlier answer. */
+                            revisionStatus?: {
+                                /**
+                                 * @description The template produces the revision this inspection needs; nothing to say.
+                                 * @enum {string}
+                                 */
+                                kind: "current";
+                            } | {
+                                /**
+                                 * @description A newer revision becomes mandatory soon; nothing is blocked.
+                                 * @enum {string}
+                                 */
+                                kind: "superseding_soon";
+                                /** @description Label of the revision that becomes mandatory. */
+                                nextVersion: string;
+                                /** @description When the newer revision becomes mandatory, as Unix milliseconds. */
+                                from: number;
+                            } | {
+                                /**
+                                 * @description A newer revision is in force but this inspection predates it, so its form is correct.
+                                 * @enum {string}
+                                 */
+                                kind: "superseded_elsewhere";
+                                /** @description Label of the revision now in force for later inspections. */
+                                nextVersion: string;
+                                /** @description When the newer revision became mandatory, as Unix milliseconds. */
+                                from: number;
+                            } | {
+                                /**
+                                 * @description This inspection falls under a revision the template does not produce.
+                                 * @enum {string}
+                                 */
+                                kind: "cannot_produce";
+                                /** @description Label of the revision that governs the inspection date. */
+                                applicableVersion: string;
+                                /** @description Label of the revision the template produces. */
+                                templateVersion: string;
+                            } | {
+                                /**
+                                 * @description The revision the template produces has been taken out of service.
+                                 * @enum {string}
+                                 */
+                                kind: "withdrawn";
+                                /** @description Label of the withdrawn revision. */
+                                version: string;
+                                /** @description Why the revision was withdrawn, as a stable reason code. */
+                                reason: string;
+                                /** @description When new production stopped, as Unix milliseconds. */
+                                withdrawnAt: number;
+                                /** @description Label of the revision that governs this inspection date now, or null when none is published. */
+                                replacementVersion: string | null;
+                            };
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -2152,6 +4919,441 @@ export interface operations {
             };
         };
     };
+    recordCollabFollowup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose report document is addressed. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verdict recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Always true when the verdict was recorded.
+                         * @enum {boolean}
+                         */
+                        ok: true;
+                        /** @description Key of the carried finding that was updated. */
+                        findingKey: string;
+                    };
+                };
+            };
+            /** @description The body is not valid, or the status is not in the company vocabulary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Short message saying what was wrong with the request. */
+                        error: string;
+                        /** @description The follow-up status keys the company accepts; present when the status is not one of them. */
+                        allowed?: string[];
+                    };
+                };
+            };
+            /** @description No signed-in user */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The caller is not on the inspection roster */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description No such inspection or report (plain text), or no such carried item (JSON with ok false and a reason) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The item cannot take a follow-up verdict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Always false when nothing was recorded.
+                         * @enum {boolean}
+                         */
+                        ok: false;
+                        /** @description Why the verdict could not be recorded. */
+                        reason: string;
+                    };
+                };
+            };
+            /** @description Collaborative editing is not available on this deployment */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    restoreCollabSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose report document is addressed. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Always true when the change was applied.
+                         * @enum {boolean}
+                         */
+                        ok: true;
+                    };
+                };
+            };
+            /** @description The body is not JSON or not a valid restore request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Short message saying what was wrong with the request. */
+                        error: string;
+                    };
+                };
+            };
+            /** @description No signed-in user */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The caller is not on the inspection roster */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description No such inspection or report, or the Durable Object has no such snapshot; the body is plain text */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Collaborative editing is not available on this deployment */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    restructureCollabDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose report document is addressed. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document restructured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Always true when the change was applied.
+                         * @enum {boolean}
+                         */
+                        ok: true;
+                    };
+                };
+            };
+            /** @description No signed-in user */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The caller is not on the inspection roster */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description No such inspection or report, or the Durable Object has no such snapshot; the body is plain text */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Collaborative editing is not available on this deployment */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    listCollabSnapshots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose report document is addressed. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Snapshot list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Snapshot sequence number; starts at 0 and only increases. */
+                        seq: number;
+                        /** @description When the snapshot was taken, in epoch milliseconds. */
+                        atMs: number;
+                        /** @description Id of the user the snapshot was taken for; null for an automatic one. */
+                        byUserId: string | null;
+                        /** @description Why the snapshot was taken, such as manual or import; absent for an ordinary one. */
+                        reason?: string;
+                    }[];
+                };
+            };
+            /** @description No signed-in user */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The caller is not on the inspection roster */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description No such inspection or report, or the Durable Object has no such snapshot; the body is plain text */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Collaborative editing is not available on this deployment */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    captureCollabSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose report document is addressed. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Snapshot captured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Sequence number of the new snapshot. */
+                        seq: number;
+                        /** @description When it was taken, in epoch milliseconds. */
+                        atMs: number;
+                    };
+                };
+            };
+            /** @description No signed-in user */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The caller is not on the inspection roster */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description No such inspection or report, or the Durable Object has no such snapshot; the body is plain text */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Collaborative editing is not available on this deployment */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    getCollabSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose report document is addressed. */
+                id: string;
+                /** @description Snapshot sequence number, a whole number of zero or more. */
+                seq: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description The sequence number is not a whole number of zero or more */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Short message saying what was wrong with the request. */
+                        error: string;
+                    };
+                };
+            };
+            /** @description No signed-in user */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The caller is not on the inspection roster */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description No such inspection or report, or the Durable Object has no such snapshot; the body is plain text */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Collaborative editing is not available on this deployment */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
     issueCollabTicket: {
         parameters: {
             query?: never;
@@ -2182,6 +5384,8 @@ export interface operations {
                             ticket: string;
                             /** @description Seconds the ticket stays valid */
                             expiresIn: number;
+                            /** @description Optional collab socket features this server supports; ack-v1 means ack frames are sent to sockets opened with ack=1 */
+                            features: string[];
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -2305,6 +5509,306 @@ export interface operations {
                                 standard: "E2018-24";
                                 conforms: boolean;
                             };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    seedInspectionComplianceDocReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Seed acknowledged (idempotent — already-seeded keys are skipped). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                    };
+                };
+            };
+        };
+    };
+    patchInspectionComplianceDocReviewItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier */
+                id: string;
+                /** @description Document Review catalog key */
+                documentKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Whether the document was requested from the point-of-contact. */
+                    requested?: boolean;
+                    /** @description Whether the requested document was received. */
+                    received?: boolean;
+                    /** @description Whether the received document was reviewed by the inspector. */
+                    reviewed?: boolean;
+                    /** @description Whether this document does not apply to this property. */
+                    na?: boolean;
+                    /** @description Free-text notes on the request/receipt/review status. */
+                    notes?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Update acknowledged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                    };
+                };
+            };
+        };
+    };
+    upsertInspectionCompliancePsq: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Structured Pre-Survey Questionnaire responses (ASTM §8.5). */
+                    responses: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Responses stored; status transitions to received. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                    };
+                };
+            };
+            /** @description Inspection is not report_tier=full_pca. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: false;
+                        error: {
+                            /** @enum {string} */
+                            code: "TIER_NOT_FULL_PCA";
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setInspectionCompliancePsqStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description New PSQ lifecycle status: sent to the point-of-contact, received back, or declined outright.
+                     * @enum {string}
+                     */
+                    status: "sent" | "received" | "declined";
+                    /** @description Required context when status=declined — carried into the auto-disclosed Deviations entry. */
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Status updated. Declining also discloses the omission in the Deviations store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                    };
+                };
+            };
+            /** @description Inspection is not report_tier=full_pca. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: false;
+                        error: {
+                            /** @enum {string} */
+                            code: "TIER_NOT_FULL_PCA";
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    signInspectionCompliance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Sign-off role: the field observer who performed the walk-through, or the PCR reviewer exercising responsible control. One of: field_observer, pcr_reviewer.
+                     * @enum {string}
+                     */
+                    role: "field_observer" | "pcr_reviewer";
+                    /** @description Optional. Omit it to sign as yourself. A role other than owner or manager is refused with 400 for any value that is not its own user id; an owner or manager naming another person sends this together with name. */
+                    personId?: string;
+                    /** @description Optional. Omit it to sign as yourself: the name on your user record is used, and for a role other than owner or manager a name sent here is ignored. An owner or manager naming another person sends it together with personId. Rendered in the Appendix D qualifications block. */
+                    name?: string;
+                    /** @description Professional license number, if applicable. */
+                    license?: string | null;
+                    /** @description Pointer to the qualifications narrative/exhibit. */
+                    qualificationsRef?: string | null;
+                    /** @description True when one person holds both sign-off roles (ASTM §7.6). */
+                    dualRole?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The recorded (or re-signed) attestation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                        data: {
+                            id: string;
+                            tenantId: string;
+                            inspectionId: string;
+                            /** @enum {string} */
+                            role: "field_observer" | "pcr_reviewer";
+                            personId: string;
+                            name: string;
+                            license: string | null;
+                            qualificationsRef: string | null;
+                            /** @description Unix epoch milliseconds. */
+                            signedAt: number;
+                            /** @description base64url Ed25519 signature over the canonical attestation payload. */
+                            signatureRef: string;
+                            dualRole: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description Inspection is not report_tier=full_pca. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: false;
+                        error: {
+                            /** @enum {string} */
+                            code: "TIER_NOT_FULL_PCA";
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    removeInspectionComplianceSignoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier */
+                id: string;
+                /** @description Sign-off role to remove. One of: field_observer, pcr_reviewer. */
+                role: "field_observer" | "pcr_reviewer";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Delete acknowledged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                    };
+                };
+            };
+            /** @description Inspection is not report_tier=full_pca. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: false;
+                        error: {
+                            /** @enum {string} */
+                            code: "TIER_NOT_FULL_PCA";
+                            message: string;
                         };
                     };
                 };
@@ -2559,6 +6063,352 @@ export interface operations {
             };
         };
     };
+    setInspectionCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Baked cropped JPEG (2048px long edge)
+                     */
+                    image?: string;
+                    /** @description R2 key of the cover source photo this crop applies to */
+                    sourceKey: string;
+                    /** @description JSON-encoded CoverCrop transform (source-pixel coords) */
+                    crop: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cropped cover saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            /** @description R2 key of the baked cropped cover derivative */
+                            coverImageKey: string;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    createInspectionInspectorSignature: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InspectorSignature"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Always true when the signature was recorded.
+                         * @enum {boolean}
+                         */
+                        success: true;
+                        /** @description Result of recording the inspector signature. */
+                        data: {
+                            /** @description Result of recording the inspector signature. */
+                            savedAt: number;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createInspectionItemsPhotosAnnotation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the photo belongs to. */
+                id: string;
+                /** @description Id of the checklist item whose photo is annotated. */
+                itemId: string;
+                /** @description Zero-based position of the photo within the item photo list. Integer, at least 0. */
+                photoIndex: number | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Flattened PNG rendering of the photo with its annotations drawn on.
+                     */
+                    image?: string;
+                    /** @description JSON text of the annotation shapes, stored so the annotation can be re-edited. */
+                    nodes: string;
+                    /** @description Section ID for composite finding key */
+                    sectionId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Annotation saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            annotatedKey: string;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    cropInspectionItemPhoto: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id */
+                id: string;
+                /** @description Inspection item id */
+                itemId: string;
+                /** @description Index into the item/defect photos array. Integer, at least 0. */
+                photoIndex: number | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Baked cropped JPEG (2048px long edge)
+                     */
+                    image?: string;
+                    /** @description JSON-encoded PhotoCrop transform (source-pixel coords) */
+                    crop: string;
+                    /** @description Section id for composite finding key (defect photos) */
+                    sectionId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cropped item photo saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            /** @description R2 key of the baked cropped derivative */
+                            croppedKey: string;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    listInspectionMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose photos to list. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aggregated photos */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        data: components["schemas"]["MediaCenterResponse"];
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    uploadInspectionMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the photo is uploaded to. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description The photo to add to the media pool.
+                     */
+                    file?: string;
+                    /** @description When the photo was taken, as Unix milliseconds, if the client can read it from the image. Stored with the pool entry; a missing or non-positive value is treated as unknown. Integer, at least 0. */
+                    takenAt?: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Pool photo created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        data: components["schemas"]["MediaPoolUploadResponse"];
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
     createInspectionPhotoUploadUrl: {
         parameters: {
             query?: never;
@@ -2778,6 +6628,282 @@ export interface operations {
             };
         };
     };
+    patchInspectionPcaNarrative: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id whose PCA narrative is patched */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Transmittal Letter narrative block */
+                    transmittalLetter?: string;
+                    /** @description Executive Summary 1.1 General Description block */
+                    summaryGeneralDescription?: string;
+                    /** @description Executive Summary 1.2 General Physical Condition block */
+                    summaryPhysicalCondition?: string;
+                    /** @description Executive Summary 1.5 Recommendations block */
+                    summaryRecommendations?: string;
+                    /** @description Introduction 2.1 Purpose narrative block */
+                    purpose?: string;
+                    /** @description Introduction 2.2 Scope of Work block (methodology folds in) */
+                    scopeOfWork?: string;
+                    /** @description Introduction 2.3 Limitations and Exceptions block */
+                    limitationsExceptions?: string;
+                    /** @description Introduction 2.4 General Property Reconnaissance block */
+                    reconnaissance?: string;
+                    /** @description Additional Considerations narrative block */
+                    additionalConsiderations?: string;
+                    /** @description Reliance §4.2.1 — parties entitled to rely on the report */
+                    userReliance?: string;
+                    /** @description Reliance §4.2.3 — point-in-time assessment limitation */
+                    pointInTime?: string;
+                    /** @description Reliance §4.2.4 — site-specific scope limitation */
+                    siteSpecific?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Resolved narrative */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            [key: string]: string;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    serveInspectionPhoto: {
+        parameters: {
+            query: {
+                /** @description R2 object key (`${tenantId}/${inspectionId}/...`). */
+                key: string;
+                /** @description Set to "1" to force an attachment download named after the original file. */
+                download?: string;
+                /** @description Optional width in pixels, clamped to 16-2000 (a value that is not a number counts as 16). Omitted serves the original. With an image service the response is a webp of that width; without one, or when the conversion fails, it is the original bytes (up to the upload limit, possibly a HEIC file). Read the response Content-Type to know which. */
+                w?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Inspection id that scopes the photo. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Photo bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": unknown;
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    patchInspectionPropertyFact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection whose property facts are changed. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PropertyFactsWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PropertyFactsResponse"];
+                };
+            };
+        };
+    };
+    autofillInspection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of the inspection the property-record lookup is run for. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PropertyFactsAutofillRequest"];
+            };
+        };
+        responses: {
+            /** @description Auto-fill result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PropertyFactsAutofillResponse"];
+                };
+            };
+        };
+    };
+    publishInspection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection whose report is published. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PublishInspection"];
+            };
+        };
+        responses: {
+            /** @description Published */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            reportUrl: string;
+                            reportStatus: string;
+                            /** @description Outcome of adding the report link to the ISN order named in Reference Number; null when ISN is not configured or the inspection has no Reference Number. */
+                            isnSync: {
+                                ok: boolean;
+                                isnReportId?: string;
+                                error?: string;
+                            } | null;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+        };
+    };
+    getInspectionPublishReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection identifier to evaluate for publish readiness */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Readiness payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ready: boolean;
+                        blockingDefects: {
+                            sectionId: string;
+                            sectionTitle: string;
+                            itemId: string;
+                            itemLabel: string;
+                            cannedId: string;
+                            cannedTitle: string;
+                            missing: ("location" | "trade")[];
+                            unresolvedTokens: string[];
+                        }[];
+                        warningDefects: {
+                            sectionId: string;
+                            sectionTitle: string;
+                            itemId: string;
+                            itemLabel: string;
+                            cannedId: string;
+                            cannedTitle: string;
+                            missing: ("location" | "trade")[];
+                            unresolvedTokens: string[];
+                        }[];
+                    };
+                };
+            };
+        };
+    };
     listInspectionReportData: {
         parameters: {
             query?: never;
@@ -2911,6 +7037,55 @@ export interface operations {
             };
         };
     };
+    updateInspectionStatutoryDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description The day the inspector signed — NOT the day of the visit. Empty clears it. */
+                    inspectorSignatureDate?: string | null;
+                    /** @description The second signer FL OIR-B1-1802 page 5 prints. Empty clears it. Up to 120 characters. */
+                    employeePrintedName?: string | null;
+                    /** @description The property OWNER, who is frequently not the client. Empty clears it. Up to 120 characters. */
+                    ownerName?: string | null;
+                    /** @description The owner's email. Empty clears it. Up to 200 characters. */
+                    ownerEmail?: string | null;
+                    /** @description Where the owner receives post, which may not be the property. Empty clears it. Up to 300 characters. */
+                    ownerMailingAddress?: string | null;
+                    /** @description The owner's home number. The form prints three separate boxes. Up to 40 characters. */
+                    ownerHomePhone?: string | null;
+                    /** @description The owner's work number. Up to 40 characters. */
+                    ownerWorkPhone?: string | null;
+                    /** @description The owner's mobile number. Up to 40 characters. */
+                    ownerCellPhone?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded, and the whole record comes back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such inspection, or its template declares no statutory form */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getInspectionStatutoryCoverage: {
         parameters: {
             query?: never;
@@ -2932,6 +7107,898 @@ export interface operations {
             };
             /** @description No such inspection for this workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    addInspectionStatutoryFormInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description The repeated block, e.g. electrical_panel */
+                    groupId: string;
+                    /** @description Position, 0-based. Must be at or past the group capacity. Integer, at least 0. */
+                    index: number;
+                    /** @description Field name to value, in the vocabulary the group declares */
+                    fields: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The index names a slot the form prints */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such inspection, or it produces no statutory form */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    patchInspectionTemplateSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Full v2 template structure to overwrite the inspection snapshot with */
+                    snapshot: {
+                        /**
+                         * @description Template format version. Only version 2 is accepted; the older flat format is rejected.
+                         * @enum {number}
+                         */
+                        schemaVersion: 2;
+                        /** @description Ordered sections of the checklist, each with its own items. */
+                        sections: {
+                            /** @description Stable id of the section within the template; items and report anchors are addressed through it. */
+                            id: string;
+                            /** @description Section heading shown in the editor navigation and as the section title in the report; a heading, not a paragraph. 1-120 characters. */
+                            title: string;
+                            /** @description Optional icon key stored with the section. */
+                            icon?: string;
+                            /** @description Optional short code or numeral identifying the section, kept with the section when the template is saved. */
+                            identifier?: string;
+                            /** @description Ordered checklist items of the section; an item with a parentId nests under another item of the same section, and array order is the display order. */
+                            items: ({
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Rated item: a rating from ratingOptions plus the three canned-comment tabs. This is the main inspection item type. One of: rich.
+                                 * @enum {string}
+                                 */
+                                type: "rich";
+                                /** @description Rating labels offered at the top of the item card, in display order; at least one is required. At least 1 items. */
+                                ratingOptions: string[];
+                                /** @description The Information, Limitations and Defects canned-comment tabs for the item. */
+                                tabs: {
+                                    /** @description Canned information comments offered on the Information tab of the item: general statements about what was observed. */
+                                    information: {
+                                        /** @description Stable id of the canned information or limitation entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading shown above the comment text in the editor. */
+                                        title: string;
+                                        /** @description Plain-text body of the canned comment, inserted into the report when the entry is included on an inspection. */
+                                        comment: string;
+                                        /** @description When true the entry is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this comment. */
+                                        abbrev?: string;
+                                    }[];
+                                    /** @description Canned limitation comments offered on the Limitations tab of the item: conditions that restricted the inspection. */
+                                    limitations: {
+                                        /** @description Stable id of the canned information or limitation entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading shown above the comment text in the editor. */
+                                        title: string;
+                                        /** @description Plain-text body of the canned comment, inserted into the report when the entry is included on an inspection. */
+                                        comment: string;
+                                        /** @description When true the entry is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this comment. */
+                                        abbrev?: string;
+                                    }[];
+                                    /** @description Canned defect entries offered on the Defects tab of the item; each carries a category, location, comment and photos. */
+                                    defects: {
+                                        /** @description Stable id of the canned defect entry within the template; an inspection records which entries are included by this id. */
+                                        id: string;
+                                        /** @description Short heading naming the defect, shown above its comment in the editor and report. */
+                                        title: string;
+                                        /** @description Defect category the entry belongs to: the id of one of the company defect categories, or a legacy seed name. The category decides whether the defect appears in the report summary. */
+                                        category: string;
+                                        /** @description Free-text location of the defect in the property, for example the northeast corner; empty in a template and filled in by the inspector. */
+                                        location: string;
+                                        /** @description Plain-text narrative describing the defect, inserted into the report when the entry is included. */
+                                        comment: string;
+                                        /** @description Storage keys of photos attached to the canned defect at template level. Rarely used: photos taken during an inspection are stored with that inspection instead. */
+                                        photos: string[];
+                                        /** @description When true the defect is included automatically on new inspections; when false the inspector must switch it on. */
+                                        default: boolean;
+                                        /** @description Optional shortcode of up to 12 characters that the inspector types in the editor to fill in this defect. */
+                                        abbrev?: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Single-line text item: the inspector types a short answer, stored as the item value.
+                                 * @enum {string}
+                                 */
+                                type: "text";
+                                /** @description Optional input settings for the text field, such as hint text and maximum length. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Yes or no item: a checkbox whose state is stored as the item value. One of: boolean.
+                                 * @enum {string}
+                                 */
+                                type: "boolean";
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Multi-line text item: the inspector types a longer answer, stored as the item value. One of: textarea.
+                                 * @enum {string}
+                                 */
+                                type: "textarea";
+                                /** @description Optional input settings for the text area, such as hint text and maximum length. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Numeric item: the inspector enters a number, stored as the item value and shown with its unit in the report.
+                                 * @enum {string}
+                                 */
+                                type: "number";
+                                /** @description Optional input settings for the number field: bounds, step, unit and hint text. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Single-choice item: the inspector picks one option from options.choices. One of: select.
+                                 * @enum {string}
+                                 */
+                                type: "select";
+                                /** @description Input settings for the select item; the options.choices list supplies the options. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Multiple-choice item: the inspector ticks any of the options in options.choices. One of: multi_select.
+                                 * @enum {string}
+                                 */
+                                type: "multi_select";
+                                /** @description Input settings for the multi-select item; the options.choices list supplies the options. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Date item: the inspector picks a calendar date, stored as the item value.
+                                 * @enum {string}
+                                 */
+                                type: "date";
+                            } | {
+                                /** @description Stable id of the item within its section; inspection results are recorded against it, so it should not change once inspections use the template. */
+                                id: string;
+                                /** @description Name of the item, shown as its heading in the template editor, the inspection editor and the report. 1-100 characters. */
+                                label: string;
+                                /** @description Optional longer text saying what the item covers. */
+                                description?: string;
+                                /** @description Optional icon key stored with the item. */
+                                icon?: string;
+                                /** @description Optional display number shown before the item label, such as 01. */
+                                number?: string;
+                                /** @description Shows a Required badge on the item to mark it as one the inspector must complete. */
+                                required?: boolean;
+                                /** @description Shows a Safety badge on the item to mark it as a safety concern. */
+                                isSafety?: boolean;
+                                /** @description Prose remedy this item usually calls for, offered as the starting recommendation. Describes scope, not a cost. */
+                                defaultRecommendation?: string;
+                                /** @description Optional sub-fields captured beside the item rating, such as tonnage on an HVAC unit; each has its own input type. */
+                                attributes?: {
+                                    /** @description Stable id of the attribute within its item; the value an inspector enters is stored under this id in the item attribute values. */
+                                    id: string;
+                                    /** @description Label shown beside the attribute input in the editor. */
+                                    name: string;
+                                    /**
+                                     * @description Kind of input the attribute uses, which also determines the type of the stored value. One of: boolean, text, number, select, multi_select, date.
+                                     * @enum {string}
+                                     */
+                                    type: "boolean" | "text" | "number" | "select" | "multi_select" | "date";
+                                    /** @description Options offered by a select or multi-select attribute. A bare string is both stored value and label; the object form keeps a stored value distinct from its on-screen label. */
+                                    choices?: (string | {
+                                        /** @description The token stored in the results and matched against a statutory form mapping */
+                                        value: string;
+                                        /** @description What the inspector reads on screen; never stored */
+                                        label: string;
+                                    })[];
+                                    /** @description Unit of measure shown in brackets after the label of a number attribute. */
+                                    unit?: string;
+                                    /** @description Marks the attribute as one the inspector is expected to fill in. */
+                                    required?: boolean;
+                                    /** @description Marks the attribute as a safety concern. */
+                                    isSafety?: boolean;
+                                    /** @description Marks that a poor reading of this attribute counts as a defect. */
+                                    isDefect?: boolean;
+                                    /** @description Prose advice on what to do when the attribute reads badly: the remedy to recommend, never a price. */
+                                    recommendation?: string | null;
+                                }[];
+                                /** @description Where the item was imported from; null or absent for items authored in the editor. */
+                                source?: {
+                                    /** @description Name of the product or platform the template content was imported from. */
+                                    platform: string;
+                                    /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                    externalId: string;
+                                } | null;
+                                /** @description Id of the item this one nests under, within the same section; null or absent = top level */
+                                parentId?: string | null;
+                                /**
+                                 * @description Photo-only item: no rating or text, the inspector only attaches photos. One of: photo_only.
+                                 * @enum {string}
+                                 */
+                                type: "photo_only";
+                                /** @description Optional settings carried with the item. The photo-only control reads none of them. */
+                                options?: {
+                                    /** @description Lowest value the number input accepts. Used by number items; null means no lower bound. */
+                                    min?: number | null;
+                                    /** @description Highest value the number input accepts. Used by number items; null means no upper bound. */
+                                    max?: number | null;
+                                    /** @description Unit of measure shown beside the captured value in the report, for example yr or psi. */
+                                    unit?: string;
+                                    /** @description Increment the number input steps by. Used by number items; null leaves the browser default. */
+                                    step?: number | null;
+                                    /** @description Hint text shown inside the empty input; when absent the item label is shown instead. */
+                                    placeholder?: string;
+                                    /** @description Longest text the input accepts, in characters. Used by text and textarea items; null means no limit. */
+                                    maxLength?: number | null;
+                                    /** @description The options offered by a select or multi-select item; the chosen option text is what is stored in the results. */
+                                    choices?: string[];
+                                };
+                            })[];
+                            /** @description Legal or explanatory disclaimer printed at the bottom of the section in the published report; null or empty prints nothing. Up to 4000 characters. */
+                            disclaimerText?: string | null;
+                            /** @description When true the published report starts this section on a new page in print and PDF output. */
+                            alwaysPageBreak?: boolean;
+                            /** @description Where the section was imported from; the editor marks imported sections with a coloured dot. */
+                            source?: {
+                                /** @description Name of the product or platform the template content was imported from. */
+                                platform: string;
+                                /** @description Identifier of this record in the platform it was imported from, kept so the origin can be traced. */
+                                externalId: string;
+                            } | null;
+                            /** @description Property-type / commercial-subtype gating for this section */
+                            applicableTo?: {
+                                /** @description Property types this section applies to; empty = all */
+                                propertyTypes?: ("single-family" | "multi-unit" | "commercial")[];
+                                /** @description Commercial subtype ids this section applies to; empty = all commercial */
+                                commercialSubtypes?: string[];
+                            };
+                            /**
+                             * @description common (once) or unit (repeats per unit)
+                             * @enum {string}
+                             */
+                            defaultScope?: "common" | "unit";
+                        }[];
+                        /** @description Rating levels embedded in this template; inspections copy them when created, so later edits do not change existing inspections. */
+                        ratingSystem?: {
+                            /** @description Display name of the rating system, for example Standard 5-Level. */
+                            name?: string;
+                            /** @description Id of the level treated as the default rating; should match the id of one of the levels. */
+                            defaultLevelId?: string;
+                            /** @description Where the rating system came from when it was imported; null when authored here. */
+                            source?: string | null;
+                            /** @description The ordered rating levels an inspector can apply to items. */
+                            levels: {
+                                /** @description Id of the rating level, which is the value stored as an item rating in the inspection results. */
+                                id: string;
+                                /** @description Full name of the rating level shown to the inspector and in the report, for example Satisfactory. */
+                                label: string;
+                                /** @description Short code for the level shown on compact rating buttons. */
+                                abbreviation?: string;
+                                /** @description Colour of the level as a hex value, used for its button and report chip. */
+                                color?: string;
+                                /**
+                                 * @description Severity bucket the level falls in; the report summary and the rating contradiction check use it to tell good ratings from problems. One of: good, minor, marginal, significant.
+                                 * @enum {string}
+                                 */
+                                severity?: "good" | "minor" | "marginal" | "significant";
+                                /** @description Whether this level counts as a defect. */
+                                isDefect?: boolean;
+                                /** @description Pause auto-advance after selecting this level (focus notes) */
+                                pausesAdvance?: boolean;
+                                /** @description Marks the level the template treats as its default rating. */
+                                default?: boolean;
+                                /** @description Explanation of what the level means, for example Item is functioning as intended. */
+                                description?: string;
+                            }[];
+                        };
+                        /**
+                         * @description single-family | multi-unit | commercial
+                         * @enum {string}
+                         */
+                        propertyType?: "single-family" | "multi-unit" | "commercial";
+                        /** @description Commercial subtype id; only meaningful when propertyType = commercial */
+                        commercialSubtype?: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Snapshot replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuccessResponse"];
+                };
+            };
+        };
+    };
+    switchInspectionUnitMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id whose unit-inspection mode is switched */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UnitModeSwitch"];
+            };
+        };
+        responses: {
+            /** @description switched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                        data: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description switch failed (e.g. inspection not found in this tenant) */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2978,6 +8045,265 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    createInspectionUnits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the unit belongs to. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateUnit"];
+            };
+        };
+        responses: {
+            /** @description created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                        data: {
+                            id: string;
+                        };
+                    };
+                };
+            };
+            /** @description validation / depth / duplicate-name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    bulkCreateInspectionUnits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the units are added to. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BulkCreateUnits"];
+            };
+        };
+        responses: {
+            /** @description created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                        data: {
+                            ids: string[];
+                        };
+                    };
+                };
+            };
+            /** @description validation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteInspectionUnit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the unit belongs to; a unit of any other inspection is reported as not found. */
+                id: string;
+                /** @description Unit to delete along with all of its descendants. */
+                unitId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuccessResponse"];
+                };
+            };
+            /** @description unit not found in this inspection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    patchInspectionUnit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the unit belongs to; a unit of any other inspection is reported as not found. */
+                id: string;
+                /** @description Unit to rename or reorder. */
+                unitId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UpdateUnit"];
+            };
+        };
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuccessResponse"];
+                };
+            };
+            /** @description unit not found in this inspection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    duplicateInspectionUnit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the unit belongs to. */
+                id: string;
+                /** @description Unit to copy. */
+                unitId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description duplicated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        success: true;
+                        data: {
+                            id: string;
+                        };
+                    };
+                };
+            };
+            /** @description unit not found */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    uploadInspection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection the photo is stored under. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description The photo to upload.
+                     */
+                    file?: string;
+                    /** @description Id of the checklist item the photo is for. Required and echoed back, but not used to place the file. */
+                    itemId: string;
+                    /**
+                     * @description Whether the photo is for the item itself or for one of its custom defect rows.
+                     * @enum {string}
+                     */
+                    targetType?: "item" | "defect";
+                    /** @description Id of the custom defect row the photo is for. Required when targetType is defect and echoed back. */
+                    customId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            key: string;
+                            /** @enum {string} */
+                            targetType: "item" | "defect";
+                            itemId: string;
+                            customId: string | null;
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
             };
         };
     };

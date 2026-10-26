@@ -65,7 +65,7 @@ interface Parsed {
 function inspect(text: string): { parsed: Parsed | null; problems: string[] } {
   const problems: string[] = [];
   if (text.includes('\t')) problems.push('contains a tab');
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   const divider = lines.indexOf('---');
   if (divider < 0) return { parsed: null, problems: [...problems, 'has no --- line between the header and the commands'] };
   if (lines.indexOf('---', divider + 1) >= 0) problems.push('has more than one --- line');
@@ -122,7 +122,7 @@ function missingFromApp(flow: string, source: string): string[] {
 
 function credentialProblems(flow: string): string[] {
   const problems: string[] = [];
-  for (const line of flow.split('\n')) {
+  for (const line of flow.split(/\r?\n/)) {
     const typed = /^\s*-?\s*inputText:\s*(.*)$/.exec(line);
     if (typed !== null && !ENV_REFERENCE.test((typed[1] ?? '').trim())) problems.push(`inputText is not an environment reference: ${line}`);
     if (/(password|passwd|secret|token|apikey)\s*[:=]\s*["']?[^$"'\s]/i.test(line) && !line.trimStart().startsWith('#')) problems.push(`looks like a credential: ${line}`);

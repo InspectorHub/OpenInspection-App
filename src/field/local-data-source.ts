@@ -41,8 +41,8 @@ import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
  *    (`video-adapter.ts`);
  *  - `urls`: see below; `platform`: the native shell the editor adapts its bars to.
  *
- * Not provided on purpose: the human-verification slot. The package's default fails closed, so a publish is refused
- * until the product decides what the native shell may do there.
+ * Not provided here: the human-verification slot. It belongs to the provider, not the data source, and the editor screen
+ * (`ui/EditorScreen.tsx`) is the one place that sets it.
  */
 
 export interface NotifySink {
@@ -141,6 +141,8 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
+  // `canEdit` guards commands, uploads and media saves. It does not reach edits the editor makes directly in the shared document
+  // (ratings, notes): field-ui has no read-only mode yet, and a `readOnly` prop is planned for it.
   const canEdit = (): boolean => {
     try {
       return deps.canEdit?.() !== false;
@@ -270,8 +272,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       reportPdf: () => null,
       statutoryPreviewPdf: () => null,
       videoObject: () => null,
-      // The package requires an address for the cost download. This one goes nowhere: the cost tables are downloaded from the web app.
-      costExport: () => '#',
+      // No `costExport`: the app has no cost download, and without it the editor hides the export buttons.
       // Presence is off (the session names no user), so the editor never opens this; it must still be a string.
       presenceSocket: (inspectionId) => `${PRESENCE_OFF_ORIGIN}/${encodeURIComponent(inspectionId)}`,
       editorPath: (inspectionId) => `/inspections/${encodeURIComponent(inspectionId)}/edit`,

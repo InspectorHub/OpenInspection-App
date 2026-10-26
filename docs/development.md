@@ -89,6 +89,18 @@ foreground. To see each state, point the app at a local engine and change that e
 | Server without the check for removed inspections (a notice, and that one check is skipped; everything else syncs) | Point the app at an engine whose `SERVER_CONTRACT_VERSION` is below `MIN_CONTRACT_FOR_RECONCILE` in `src/auth/server-config.ts` (or temporarily raise that constant above the engine's). The notice shows once per server and can be dismissed. |
 | Test build expiry (iOS only) | Build with `APP_BUILT_AT` set to a UTC ISO instant 76 or more days ago, for example `APP_BUILT_AT=2026-07-01T00:00:00.000Z npm run build`. The warning only ever shows on iOS builds, and also on the lock, sign-in and server screens. |
 
+## The inspection editor
+
+The editor is `@inspectorhub/field-ui` (pinned to the `0.3` line in `package.json`), mounted by `src/ui/EditorScreen.tsx` over the device's own
+data source. Tapping a row of the work list opens it. Its styles come from the package: `src/styles.css` imports `@inspectorhub/field-ui/theme.css`
+and points Tailwind's `@source` at the package build, and Vite resolves the two third-party stylesheets the package imports. Check on a device:
+
+| Area | How to check it |
+|---|---|
+| Back key | With a dialog or drawer open, back closes it; with none open, back returns to the work list; only on the work list does back leave the app. |
+| Read-only | With an update required (see above) the editor shows a notice; commands, uploads and media saves are refused with "Editing is turned off until you update the app.". Edits to ratings and notes in the shared document are NOT blocked yet in this build (a known gap; field-ui needs a `readOnly` prop, planned). |
+| Removed inspection | Remove or quarantine the open inspection from another session and reconcile: the editor leaves for the list. |
+
 ## Trying Settings and the platform details on a device
 
 Open Settings from the work list. Check each of these in the light and the dark scheme, on a phone and a tablet width, at font scale 1.3 and with
@@ -106,7 +118,7 @@ Open Settings from the work list. Check each of these in the light and the dark 
 
 ## End-to-end flows with Maestro
 
-`maestro/` holds the device flows. They cover the screens that exist in this build: server setup and sign-in, the work list and its "Needs attention" panel, Settings (including "Photos not attached"), and the lock screen's two-step clear. They do not yet cover the inspection editor or the import entry; add flows for those when the screens land.
+`maestro/` holds the device flows. They cover the screens that exist in this build: server setup and sign-in, the work list and its "Needs attention" panel, Settings (including "Photos not attached"), and the lock screen's two-step clear. They do not yet cover the inspection editor or the import entry; add flows for those when the device checks above have been done by hand.
 
 | Flow | What it does |
 |---|---|

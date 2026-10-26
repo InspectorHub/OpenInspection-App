@@ -46,10 +46,13 @@ const PSQ_STATUSES: readonly string[] = ['sent', 'received', 'declined'];
 export async function executeCompliance(api: Api, inspectionId: string, cmd: ComplianceCommand): Promise<CommandResult<unknown>> {
   switch (cmd.op) {
     case 'signoff': {
-      const personId = cmd.personId.trim();
-      const name = cmd.name.trim();
-      if (!ROLES.includes(cmd.role) || personId === '' || name === '') return { ok: false };
-      const sent = plain(await api.send({ method: 'POST', path: apiPath(inspectionId, 'compliance', 'signoff'), json: { role: cmd.role, personId, name, license: cmd.license?.trim() || null, dualRole: cmd.dualRole } }));
+      // The server signs for the signed-in user when both are absent, lets an owner or manager name both, and refuses one without the other.
+      const personId = cmd.personId?.trim() ?? '';
+      const name = cmd.name?.trim() ?? '';
+      const signer = personId !== '' && name !== '' ? { personId, name } : {};
+      const named = cmd.personId !== undefined || cmd.name !== undefined;
+      if (!ROLES.includes(cmd.role) || (named && personId === '') || (named && name === '')) return { ok: false };
+      const sent = plain(await api.send({ method: 'POST', path: apiPath(inspectionId, 'compliance', 'signoff'), json: { role: cmd.role, ...signer, license: cmd.license?.trim() || null, dualRole: cmd.dualRole } }));
       return sent.ok ? { ok: true, data: { role: cmd.role } } : sent;
     }
     case 'remove-signoff': {

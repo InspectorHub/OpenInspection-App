@@ -138,7 +138,8 @@ describe('urls', () => {
     expect(urls.reportPdf(INSPECTION)).toBeNull();
     expect(urls.statutoryPreviewPdf(INSPECTION)).toBeNull();
     expect(urls.videoObject(INSPECTION, 'ref')).toBeNull();
-    expect(urls.costExport(INSPECTION, 'csv')).toBe('#');
+    expect(urls.costExport).toBeUndefined();
+    expect('costExport' in urls).toBe(false);
     expect(urls.editorPath(INSPECTION)).toBe(`/inspections/${INSPECTION}/edit`);
     expect(urls.editorPath(INSPECTION)).toBe(urls.editorPath(INSPECTION));
     expect(urls.presenceSocket(INSPECTION)).toMatch(/^wss:\/\/[^/]+\.invalid\//);
