@@ -125,7 +125,10 @@ so the settings are the actual protection.
 1. **Environments** (Settings, Environments): create `android-release` and `ios-release`, each with:
    - **Deployment branches and tags** limited to the `v*` tag pattern only (no branches). A run from a branch can then never enter the
      environment.
-   - **Required reviewers** who are not the person who pushes the tag, with **Prevent self-review** switched on.
+   - **Required reviewers** who are not the person who pushes the tag, with **Prevent self-review** switched on. While the project has a
+     single maintainer this is a deliberate trade-off: that person is the only reviewer and **Prevent self-review** is off, because
+     with it on nobody could approve a run. The approval is then a pause to re-read the tagged commit, not a second pair of eyes. Add
+     a second reviewer and switch **Prevent self-review** on as soon as another maintainer exists.
 2. **Environment-scoped secrets only.** Put every secret below in its environment, and keep **no** signing secret at repository or
    organization level: a workflow on a branch that does not name the environment could read a repository-level secret.
 3. **A tag ruleset** (Settings, Rules) limiting creation of `v*` tags to maintainers. A tag push is what starts a signing run.
