@@ -54,6 +54,7 @@ export async function world(over: Partial<LocalDataSourceDeps> = {}): Promise<Wo
     db,
     account: ALICE,
     store,
+    withDoc: (_inspectionId, fn) => Promise.resolve(fn(doc)),
     uploader: { uploadDetailed: (ref) => (nativeCalls.push(ref.pendingId), Promise.resolve({ ok: true as const, key: `k/${ref.pendingId}`, reused: false })) },
     connector,
     refresher: { refreshInspection: () => Promise.resolve({ kind: 'refreshed' } as never) },

@@ -188,6 +188,7 @@ describe('the key swap', () => {
     const uploader = createUploaderFactory({
       isBlocked: neverBlocked,
       store,
+      withDoc: (_inspectionId, fn) => Promise.resolve(fn(doc)),
       native: { uploadDetailed: () => Promise.reject(new Error('the background uploader must not be asked')) },
       foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(store, files), isSynced: () => true }),
     })(INSPECTION, doc);

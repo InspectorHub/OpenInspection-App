@@ -2,6 +2,7 @@ import type * as Y from 'yjs';
 import type { MediaUploader, PendingMediaRecord } from '@inspectorhub/field-ui';
 import { isMediaError } from '../media/errors';
 import type { NativeUploader, UploadFailureCode } from '../media/native-uploader';
+import type { WithDoc } from '../media/pending-doc';
 import type { MediaStore } from '../media/store';
 import type { IsBlocked } from '../offline/blocked';
 import type { Files } from '../platform/files';
@@ -35,6 +36,8 @@ export interface UploaderDeps {
   isBlocked: IsBlocked;
   store: Pick<MediaStore, 'getRow' | 'put' | 'delete'>;
   native: Pick<NativeUploader, 'uploadDetailed'>;
+  /** Runs a function against the results document of an inspection; rejects with `BLOCKED` for a blocked inspection. */
+  withDoc: WithDoc;
   foreground: ForegroundUploads;
   /** A row that could not be removed after its upload. The upload itself still stands. */
   onError?(error: unknown): void;

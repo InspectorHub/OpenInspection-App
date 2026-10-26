@@ -1,3 +1,4 @@
+import * as Y from 'yjs';
 import { createManualTimers } from '../../collab/test-support/manual-timers';
 import { createNativeUploader, type NativeUploader } from '../../media/native-uploader';
 import { createFakePlugin, createMediaWorld, ORIGIN, type FakePlugin, type MediaWorld } from '../../media/test-support/fakes';
@@ -56,6 +57,7 @@ export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): 
   const deps: UploaderDeps = {
     isBlocked: (id) => Promise.resolve(blocked.has(id)),
     store: world.store,
+    withDoc: (_inspectionId, fn) => Promise.resolve(fn(new Y.Doc())),
     native: counted,
     foreground: createForegroundUploads({ api, readStoredBlob: createStoredBlobReader(world.store, world.files), isSynced: () => sync.value }),
     onError: (error) => errors.push(error),

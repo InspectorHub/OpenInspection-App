@@ -314,3 +314,26 @@ describe('the diagnostics the stack keeps', () => {
     await stack.stop();
   });
 });
+
+describe('the stack hands out its document access', () => {
+  it('runs a function against the results document of an inspection that is not blocked', async () => {
+    const w = await createStackWorld();
+    const stack = w.make();
+    const out = await stack.withDoc('insp-1', (doc) => {
+      doc.getMap<unknown>('results').set('k', 1);
+      return 'ran';
+    });
+    expect(out).toBe('ran');
+    await stack.stop();
+  });
+
+  it('rejects with BLOCKED, without running the function, for a blocked inspection', async () => {
+    const w = await createStackWorld();
+    await w.replay.db.run('INSERT INTO work_package (inspection_id, refreshed_at, pinned, server_confirmed, tenant_id, user_id, purging) VALUES (?, 1, 0, 1, ?, ?, 1)', ['gone-1', ALICE.tenantId, ALICE.userId]);
+    const stack = w.make();
+    const fn = vi.fn();
+    await expect(stack.withDoc('gone-1', fn)).rejects.toMatchObject({ code: 'BLOCKED' });
+    expect(fn).not.toHaveBeenCalled();
+    await stack.stop();
+  });
+});

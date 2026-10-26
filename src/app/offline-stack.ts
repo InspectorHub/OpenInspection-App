@@ -6,7 +6,7 @@ import type { TokenManager } from '../auth/tokens';
 import { CollabIssue, createCollabConnector, type CollabStatus, type NativeCollabConnector, type SocketFactory } from '../collab/connector';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { createNativeUploader, type NativeUploader } from '../media/native-uploader';
-import { createWithDoc, createPendingResolver } from '../media/pending-doc';
+import { createWithDoc, createPendingResolver, type WithDoc } from '../media/pending-doc';
 import { createMediaReconciler, type MediaReconciler } from '../media/reconcile';
 import { createMediaStore, type MediaStore } from '../media/store';
 import { sweepOrphanFiles } from '../media/sweep';
@@ -186,6 +186,8 @@ export interface OfflineStack {
   readonly mediaReconciler: MediaReconciler;
   readonly uploader: NativeUploader;
   readonly store: MediaStore;
+  /** Runs a function against the results document of an inspection, live or short-lived; rejects with `BLOCKED` for a blocked inspection. */
+  readonly withDoc: WithDoc;
   /** The collaboration connector. Connections opened through it are destroyed when the stack stops. */
   readonly connector: NativeCollabConnector;
   readonly userActions: BoundUserActions;
@@ -895,6 +897,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     status,
     replayer: replay,
     refresher,
+    withDoc,
     reconciler: {
       trigger: triggerReconcile,
       onNeedsReconcile: (inspectionId) => {

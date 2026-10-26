@@ -22,6 +22,7 @@ import type { NetworkFlag } from './network-flag';
 import { createMemoryPhotoIndex, createPhotoUrls, indexUploadedRows, type PhotoIndex } from './photo-urls';
 import { hasQueuedWrites } from './queued-writes';
 import { createResources } from './resources';
+import type { WithDoc } from '../media/pending-doc';
 import { createStoredBlobReader, createUploaderFactory } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
 import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
@@ -51,6 +52,8 @@ export interface LocalStack {
   readonly db: Db;
   readonly account: Account;
   readonly store: MediaStore;
+  /** Runs a function against the results document of an inspection (`OfflineStack.withDoc`). */
+  readonly withDoc: WithDoc;
   readonly uploader: Pick<NativeUploader, 'uploadDetailed'>;
   readonly connector: CollabConnector;
   readonly refresher: Pick<WorkPackageRefresher, 'refreshInspection'>;
@@ -160,6 +163,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
   const sendPhoto = createUploaderFactory({
     isBlocked,
     store: stack.store,
+    withDoc: stack.withDoc,
     native: stack.uploader,
     foreground: createForegroundUploads({
       api: deps.api,
