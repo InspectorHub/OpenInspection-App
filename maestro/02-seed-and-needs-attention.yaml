@@ -1,0 +1,52 @@
+# Seeds the demo rows from the development Diagnostics screen, then looks at the work list with the network off.
+# Run after 01-sign-in.yaml. The demo rows are named diag-...; the 04 flow ends by clearing local data, which removes them.
+appId: io.inspectorhub.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 60000
+- scrollUntilVisible:
+    element: "Diagnostics (development only)"
+    timeout: 60000
+- tapOn: "Diagnostics (development only)"
+# The page opens at the work list's scroll position and then jumps to its top; scrolling before that jump is undone by it.
+- extendedWaitUntil:
+    visible: "Run all"
+    timeout: 30000
+- waitForAnimationToEnd
+# One slow drag (a fixed distance from the top of the page) brings "Seed demo data" to about 78% of the screen height.
+# The button is tapped by position: in this page the WebView's accessibility bounds for elements far below the top are
+# not where they are drawn, so a tap by text landed on the wrong row.
+- swipe:
+    start: 50%,75%
+    end: 50%,40%
+    duration: 2500
+- waitForAnimationToEnd
+- tapOn:
+    point: "50%,78%"
+- extendedWaitUntil:
+    visible: ".*queued=6 photos=5.*"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "Close diagnostics"
+- tapOn: "Close diagnostics"
+# Waiting changes are held back and stuck photos are marked as given up, but the next server check would remove
+# the demo inspections, so everything below is looked at offline.
+- setAirplaneMode: enabled
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Offline"
+    timeout: 30000
+- assertVisible: ".*12 Oak Street.*"
+- assertVisible: ".*48 Harbour Road.*"
+- scrollUntilVisible:
+    element: "Needs attention"
+- assertVisible: "Needs attention"
+- scrollUntilVisible:
+    element: "Discard photo.*"
+- assertVisible: "Discard photo.*"

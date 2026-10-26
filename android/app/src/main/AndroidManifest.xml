@@ -61,8 +61,9 @@
     <!-- The notification plugin is used for its permission calls only; nothing is ever scheduled. The permissions it would add on
          its own (restoring scheduled notifications after a reboot, exact alarms) are removed, and so are the biometric permissions
          that arrive through the database plugin, because the app never asks for biometrics.
-         READ_EXTERNAL_STORAGE also arrives transitively and is kept for now: it needs a real upload test on Android 9 to 12 before
-         it can go. -->
+         READ_EXTERNAL_STORAGE arrives through the upload library and is removed too: uploads only read files the app keeps in its own
+         private directory, which never needs it, and from Android 13 it has no effect. A real upload on Android 10 without it worked. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="remove" />

@@ -1,0 +1,53 @@
+# Server setup and sign-in against a local engine (see docs/development.md, "End-to-end flows with Maestro").
+# Needs the environment values SERVER_URL, E2E_EMAIL and E2E_PASSWORD, supplied by maestro/run-emulator.ps1 with -e.
+# The engine's own pages (email, password, authorize) are not in this repository; their labels are the engine's English strings.
+appId: io.inspectorhub.app
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Choose your server"
+    timeout: 60000
+# Tap right of the pre-filled address so the cursor lands at its end; eraseText deletes backwards from the cursor.
+- tapOn:
+    point: "85%,26%"
+- eraseText: 80
+- inputText: "${SERVER_URL}"
+- hideKeyboard
+- tapOn: "Allow plain http (development only)"
+- tapOn: "Continue"
+- assertVisible: "Connect to this server?"
+- tapOn: "Connect"
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 30000
+- tapOn:
+    text: "Sign in"
+    index: 1
+# The browser tab opens on the engine's login page, or straight on the consent page when the browser already holds a session.
+- extendedWaitUntil:
+    visible: "Email address|Allow"
+    timeout: 60000
+- runFlow:
+    when:
+      visible: "Email address"
+    commands:
+      - tapOn: "Email address"
+      - inputText: "${E2E_EMAIL}"
+      - tapOn: "Password"
+      - inputText: "${E2E_PASSWORD}"
+      - hideKeyboard
+      - tapOn: "Log In"
+      - extendedWaitUntil:
+          visible: "Allow|Work list"
+          timeout: 60000
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 60000
+- assertVisible: "Settings"
+- assertVisible: "Download today's work"
