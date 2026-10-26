@@ -1,0 +1,212 @@
+name: Release Android
+
+# A pushed tag vX.Y.Z builds, signs and verifies the APK and creates a DRAFT GitHub Release for the owner to publish by hand.
+# The tag must equal package.json's version. A manual run from a branch builds an UNSIGNED APK only (a pipeline check): it never
+# enters the android-release environment and never reads a secret. Signing and the Release exist only for a tag ref.
+# See docs/release.md.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ENGINE_CONTRACT_URL: https://raw.githubusercontent.com/InspectorHub/OpenInspection/main/contracts/native-contract.openapi.json
+  BUILD_TOOLS_VERSION: 36.0.0
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Tag equals the package.json version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not equal the package.json version ($expected). Bump package.json first, then tag."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run
+      - run: npm run build
+      - name: Release bundle has no development-only UI
+        run: npm run check:bundle
+      - run: npx cap sync android
+      - name: API types match the engine contract
+        run: npm run api:types:check -- "$ENGINE_CONTRACT_URL"
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync android
+      - name: Build the unsigned release APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
+      - name: Record the unsigned APK checksum
+        run: |
+          {
+            echo '### Unsigned release APK'
+            echo
+            echo '```'
+            sha256sum android/app/build/outputs/apk/release/app-release-unsigned.apk
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: android-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-unsigned
+          path: unsigned
+      - name: Select the pinned build tools
+        run: |
+          set -eu
+          tools="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          if [ ! -x "$tools/apksigner" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;$BUILD_TOOLS_VERSION"
+          fi
+          if [ ! -x "$tools/apksigner" ]; then
+            echo "::error::Build tools $BUILD_TOOLS_VERSION are not available on this runner."
+            exit 1
+          fi
+          echo "$tools" >> "$GITHUB_PATH"
+      - name: Decode the signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release-keystore.p12"
+      - name: Align-check and sign the APK (v2 and v3 signatures)
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          version="$(node -p "require('./package.json').version")"
+          mkdir -p release
+          zipalign -c -P 16 4 unsigned/app-release-unsigned.apk
+          apksigner sign \
+            --ks "$RUNNER_TEMP/release-keystore.p12" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "release/InspectorHub-$version.apk" \
+            unsigned/app-release-unsigned.apk
+      - name: Verify the signature and the version
+        run: |
+          set -eu
+          version="$(node -p "require('./package.json').version")"
+          apk="release/InspectorHub-$version.apk"
+          apksigner verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/apksigner.txt"
+          cat "$RUNNER_TEMP/apksigner.txt"
+          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' "$RUNNER_TEMP/apksigner.txt"
+          grep -F 'Verified using v3 scheme (APK Signature Scheme v3): true' "$RUNNER_TEMP/apksigner.txt"
+          badging="$(aapt2 dump badging "$apk" | head -n 1)"
+          echo "$badging"
+          case "$badging" in
+            *"versionName='$version'"*) ;;
+            *) echo "::error::The APK versionName is not $version"; exit 1 ;;
+          esac
+          fingerprint="$(grep -m 1 'certificate SHA-256 digest' "$RUNNER_TEMP/apksigner.txt" | sed 's/.*: //')"
+          {
+            echo "### Android release $version"
+            echo
+            echo "Signing certificate SHA-256: \`$fingerprint\`"
+            echo
+            echo '```'
+            (cd release && sha256sum "InspectorHub-$version.apk")
+            echo '```'
+            echo
+            echo 'Unsigned APK that was signed (compare with the build job summary):'
+            echo '```'
+            sha256sum unsigned/app-release-unsigned.apk
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Checksums
+        working-directory: release
+        run: sha256sum *.apk > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-release
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Delete the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release-keystore.p12"
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-release
+          path: release
+      - name: Create the draft Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            release/*.apk
+            release/SHA256SUMS
