@@ -43,6 +43,7 @@ describe('the Android manifest permissions', () => {
       .map((p) => p.name)
       .sort();
     expect(removed).toEqual([
+      'android.permission.READ_EXTERNAL_STORAGE',
       'android.permission.RECEIVE_BOOT_COMPLETED',
       'android.permission.SCHEDULE_EXACT_ALARM',
       'android.permission.USE_BIOMETRIC',
@@ -51,9 +52,12 @@ describe('the Android manifest permissions', () => {
     expect(manifest).toMatch(/xmlns:tools="http:\/\/schemas\.android\.com\/tools"/);
   });
 
-  it('keeps READ_EXTERNAL_STORAGE out of the source manifest on purpose: it is transitive and stays until an upload test on Android 9 to 12 allows removing it', () => {
-    expect(permissions(manifest).map((p) => p.name)).not.toContain('android.permission.READ_EXTERNAL_STORAGE');
-    expect(manifest).toContain('READ_EXTERNAL_STORAGE');
+  it('removes READ_EXTERNAL_STORAGE, which the upload library adds: uploads only read private app files', () => {
+    const declared = permissions(manifest).filter((p) => p.name === 'android.permission.READ_EXTERNAL_STORAGE');
+    expect(declared).toHaveLength(1);
+    expect(declared[0]?.remove).toBe(true);
+    // Control: a permission the app really uses is declared and not removed.
+    expect(permissions(manifest).find((p) => p.name === 'android.permission.CAMERA')?.remove).toBeFalsy();
   });
 
   it('removes the notification plugin components that only serve scheduled notifications, by their exact names', () => {
