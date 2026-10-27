@@ -91,14 +91,14 @@ foreground. To see each state, point the app at a local engine and change that e
 
 ## The inspection editor
 
-The editor is `@inspectorhub/field-ui` (pinned to the `0.3` line in `package.json`), mounted by `src/ui/EditorScreen.tsx` over the device's own
+The editor is `@inspectorhub/field-ui` (pinned to the `0.4` line in `package.json`), mounted by `src/ui/EditorScreen.tsx` over the device's own
 data source. Tapping a row of the work list opens it. Its styles come from the package: `src/styles.css` imports `@inspectorhub/field-ui/theme.css`
 and points Tailwind's `@source` at the package build, and Vite resolves the two third-party stylesheets the package imports. Check on a device:
 
 | Area | How to check it |
 |---|---|
 | Back key | With a dialog or drawer open, back closes it; with none open, back returns to the work list; only on the work list does back leave the app. |
-| Read-only | With an update required (see above) the editor shows a notice; commands, uploads and media saves are refused with "Editing is turned off until you update the app.". Edits to ratings and notes in the shared document are NOT blocked yet in this build (a known gap; field-ui needs a `readOnly` prop, planned). |
+| Read-only | With an update required (see above) the editor shows a notice; commands, uploads and media saves are refused with "Editing is turned off until you update the app.". The editor is read-only (field-ui `readOnly`): no edits to the shared document, no host writes, write controls hidden; the data source's refusal stays as a second guard. |
 | Removed inspection | Remove or quarantine the open inspection from another session and reconcile: the editor leaves for the list. |
 
 ## Trying Settings and the platform details on a device

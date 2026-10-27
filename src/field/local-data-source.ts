@@ -141,8 +141,8 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
-  // `canEdit` guards commands, uploads and media saves. It does not reach edits the editor makes directly in the shared document
-  // (ratings, notes): field-ui has no read-only mode yet, and a `readOnly` prop is planned for it.
+  // `canEdit` guards commands, uploads and media saves. It is also the editor's read-only switch: with it false
+  // EditorScreen passes `readOnly` to field-ui (no document writes, write controls hidden), and this guard stays as defence in depth.
   const canEdit = (): boolean => {
     try {
       return deps.canEdit?.() !== false;

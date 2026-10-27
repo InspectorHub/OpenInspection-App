@@ -42,9 +42,8 @@ export interface EditorScreenProps {
  * purpose; leaving it out would refuse every publish.
  */
 /**
- * Shown while a required update turns editing off. What is refused today: commands, uploads and media saves (the data source
- * checks `canEdit`). Edits to ratings and notes in the shared document are not blocked in this build; field-ui has no read-only
- * mode yet, and a `readOnly` prop is planned for it. The wording claims only what is enforced.
+ * Shown while a required update turns editing off. The editor itself is then read-only (`readOnly` on `FieldEditor`: no document
+ * writes, no host writes, write controls hidden); the data source also refuses commands, uploads and media saves as defence in depth.
  */
 export const READ_ONLY_NOTICE = 'Some actions are turned off until you update the app. You can still read this inspection.';
 
@@ -173,7 +172,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
         </div>
       )}
       <FieldDataSourceProvider dataSource={phase.source} slots={SLOTS}>
-        <FieldEditor data={phase.data} />
+        <FieldEditor data={phase.data} readOnly={!canEdit} />
       </FieldDataSourceProvider>
       {toasts.view}
     </>

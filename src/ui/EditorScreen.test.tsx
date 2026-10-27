@@ -24,13 +24,14 @@ vi.mock('@inspectorhub/field-ui', async (importOriginal) => {
   return {
     ...actual,
     escapeWillBeHandled: () => layers.open || actual.escapeWillBeHandled(),
-    FieldEditor: ({ data }: { data: EditorData }) => {
+    FieldEditor: ({ data, readOnly }: { data: EditorData; readOnly?: boolean }) => {
       const source = useFieldDataSource();
       const slots = useFieldSlots();
       return (
         <div>
           <p data-testid="address">{String(data.inspection.propertyAddress)}</p>
           <p data-testid="platform">{source.platform}</p>
+          <p data-testid="read-only">{String(readOnly)}</p>
           <p data-testid="human-check">{slots.humanCheck ?? 'unset'}</p>
           <button type="button" onClick={() => source.exit()}>
             leave
@@ -180,6 +181,7 @@ describe('the editor screen while a required update turns editing off', () => {
     render(mount());
     expect(await screen.findByTestId('address')).toBeInTheDocument();
     expect(screen.getByText(READ_ONLY_NOTICE)).toBeInTheDocument();
+    expect(screen.getByTestId('read-only')).toHaveTextContent('true');
     await userEvent.setup().click(screen.getByRole('button', { name: 'write' }));
     await waitFor(() => expect(screen.getAllByText(MESSAGES.editingOff).length).toBeGreaterThan(0));
   });
@@ -188,5 +190,6 @@ describe('the editor screen while a required update turns editing off', () => {
     render(mount());
     await screen.findByTestId('address');
     expect(screen.queryByText(READ_ONLY_NOTICE)).toBeNull();
+    expect(screen.getByTestId('read-only')).toHaveTextContent('false');
   });
 });
