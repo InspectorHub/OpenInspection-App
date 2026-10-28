@@ -7,9 +7,8 @@ import { MESSAGES, blockedOf, failureOf } from './messages';
 import { cachedData, type ResourceDeps } from './resources-shared';
 
 /**
- * The editor's `resources.itemTags` (from field-ui 0.5.0), written here against its shape rather than its type so the app
- * builds with the field-ui it has now: an editor that does not know the member never calls it, and one that does uses it
- * as soon as the dependency is raised, with no change here.
+ * The editor's `resources.itemTags` (field-ui 0.5.0). `createResources` returns it typed as the package's own member, so
+ * this interface has to stay assignable to it.
  *
  * Offline-first: a toggle is written to the device at once and answers ok, and the server is told when it can be
  * (`item-tags-sync.ts`). `list` also sends what the server has not heard yet and then reads what it has, so what a person

@@ -672,6 +672,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inspections/{id}/items/{itemId}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link a tag to an inspection item
+         * @description Attach one of the company's tags to a checklist item of an inspection. Attaching a tag that is already on the item changes nothing.
+         */
+        post: operations["createTagItemsTags"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/items/{itemId}/tags/{tagId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unlink a tag from an inspection item
+         * @description Detach a tag from a checklist item of an inspection. The tag itself stays available to the company.
+         */
+        delete: operations["deleteTagItemsTag"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inspections/{id}/media": {
         parameters: {
             query?: never;
@@ -1030,6 +1070,26 @@ export interface paths {
          * @description Stores one repeated-block instance past the printed capacity of the form. Printed slots are ordinary items and are not recorded here.
          */
         post: operations["addInspectionStatutoryFormInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inspections/{id}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Map of itemId → tags for an inspection
+         * @description Return, for one inspection, a map from each checklist item id to the tags attached to that item.
+         */
+        get: operations["listTagTags"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2066,7 +2126,7 @@ export interface components {
                         templateEdit: boolean;
                         /** @description May delete an inspection template, directly or as part of a migration. */
                         templateDelete: boolean;
-                        /** @description May bring a template in from a Spectora export or the content marketplace. */
+                        /** @description May bring a template in from an export of another inspection product or the content marketplace. */
                         templateImport: boolean;
                         /** @description May permanently delete an inspection, its report data and its media. */
                         deleteInspection: boolean;
@@ -2173,6 +2233,21 @@ export interface components {
             /** @description When the tag was created (epoch milliseconds). */
             createdAt: number;
         };
+        TagLinkResponse: {
+            /**
+             * @description True when the request succeeded.
+             * @enum {boolean}
+             */
+            success: true;
+            /** @description Response payload. */
+            data: {
+                /**
+                 * @description True when the tag was attached to the item.
+                 * @enum {boolean}
+                 */
+                linked: true;
+            };
+        };
         TagListResponse: {
             /**
              * @description True when the request succeeded.
@@ -2198,6 +2273,21 @@ export interface components {
             };
             /** @description Optional response metadata, such as pagination information. */
             meta?: unknown;
+        };
+        TagUnlinkResponse: {
+            /**
+             * @description True when the request succeeded.
+             * @enum {boolean}
+             */
+            success: true;
+            /** @description Response payload. */
+            data: {
+                /**
+                 * @description True when the tag was detached from the item.
+                 * @enum {boolean}
+                 */
+                unlinked: true;
+            };
         };
         UnitModeSwitch: {
             /**
@@ -6303,6 +6393,65 @@ export interface operations {
             };
         };
     };
+    createTagItemsTags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id. */
+                id: string;
+                /** @description Checklist item id within the inspection. */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Unique id of the tag. */
+                    tagId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Linked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagLinkResponse"];
+                };
+            };
+        };
+    };
+    deleteTagItemsTag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id. */
+                id: string;
+                /** @description Checklist item id within the inspection. */
+                itemId: string;
+                /** @description Unique id of the tag. */
+                tagId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlinked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagUnlinkResponse"];
+                };
+            };
+        };
+    };
     listInspectionMedia: {
         parameters: {
             query?: never;
@@ -7159,6 +7308,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    listTagTags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Item tag map */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @enum {boolean}
+                         */
+                        success: true;
+                        /** @description Response payload. */
+                        data: {
+                            [key: string]: {
+                                /** @description Unique id of the tag. */
+                                id: string;
+                                /** @description Tag name. */
+                                name: string;
+                                /** @description Colour token for the tag, or null. */
+                                color?: string | null;
+                                /** @description True for built-in tags that ship with the company. */
+                                isSeed: boolean;
+                                /** @description When the tag was created (epoch milliseconds). */
+                                createdAt: number;
+                            }[];
+                        };
+                    };
+                };
             };
         };
     };

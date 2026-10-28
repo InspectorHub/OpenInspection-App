@@ -19,7 +19,8 @@ import { DEVICE_STATE_KEY_PREFIXES, type DeviceStateKey } from '../platform/sche
  * ends with the data it protected).
  */
 export const DEVICE_STATE_SURVIVORS = ['server_url', 'device_id', 'install_marker'] as const satisfies readonly DeviceStateKey[];
-export const DEVICE_STATE_SURVIVOR_PREFIXES = DEVICE_STATE_KEY_PREFIXES;
+// Named, not "every declared family": a family added for an account's own data (`tag_rejected:`) must go with the clear.
+export const DEVICE_STATE_SURVIVOR_PREFIXES = ['client_id:'] as const satisfies readonly (typeof DEVICE_STATE_KEY_PREFIXES)[number][];
 
 export interface ClearResult {
   filesRemoved: number;

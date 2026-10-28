@@ -412,7 +412,7 @@ describe('device_state keys', () => {
     expect(DEVICE_STATE_KEYS).toContain('tenant_id');
     expect(DEVICE_STATE_KEYS).toContain('user_id');
     expect(DEVICE_STATE_KEYS).toContain('role');
-    expect([...DEVICE_STATE_KEY_PREFIXES]).toEqual(['client_id:']);
+    expect([...DEVICE_STATE_KEY_PREFIXES]).toEqual(['client_id:', 'tag_rejected:']);
     expect(new Set(DEVICE_STATE_KEYS).size).toBe(DEVICE_STATE_KEYS.length);
   });
 

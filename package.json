@@ -35,7 +35,7 @@
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/share": "^8.0.3",
     "@capgo/capacitor-uploader": "^8.3.23",
-    "@inspectorhub/field-ui": "~0.4.0",
+    "@inspectorhub/field-ui": "~0.5.0",
     "fflate": "^0.8.3",
     "konva": "10.9.0",
     "lib0": "^0.2.119",

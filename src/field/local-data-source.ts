@@ -25,6 +25,7 @@ import { hasQueuedWrites, unsentPhotos } from './queued-writes';
 import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
 import { createKeptNotice } from './kept-notice';
+import { takeRejected } from './item-tags-notice';
 import { createStoredBlobReader, createUploaderFactory } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
 import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
@@ -231,6 +232,14 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
   return {
     load: async (inspectionId, scope) => {
       const data = await load(inspectionId, scope);
+      // Tag changes the server refused while no editor was open were undone on the device: say so once, then forget the count.
+      if (scope === undefined) {
+        try {
+          if ((await takeRejected(stack.db, stack.account)) > 0) say(MESSAGES.tagsNotSynced, 'warning', { durationMs: 15_000 });
+        } catch (error) {
+          report(error);
+        }
+      }
       // Photos that are on the server but whose file is still on this device can be shown from it.
       if (scope === undefined) await indexUploadedRows(photoIndex, stack.store, inspectionId);
       return data;

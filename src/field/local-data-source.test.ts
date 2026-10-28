@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { recordRejected, takeRejected } from './item-tags-notice';
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
 import { INSPECTION, photoRecord } from '../media/test-support/fakes';
 import { listOutbox } from '../offline/outbox';
@@ -21,6 +22,53 @@ describe('the assembled data source', () => {
     expect(source.urls.inspectionsList).toBeUndefined();
     expect(source.platform).toBe('android');
     expect(Object.keys(source.media).sort()).toEqual(['store', 'uploader']);
+  });
+
+  it('the editor-facing itemTags keeps a tag on the device and reads it back', async () => {
+    const w = await world();
+    w.online.value = false;
+    const tags = w.source.resources.itemTags;
+    expect(tags).toBeDefined();
+    expect(await tags?.add(INSPECTION, 'item-1', 'tag-urgent')).toEqual({ ok: true });
+    expect((await tags?.list(INSPECTION))?.['item-1']?.map((t) => t.id)).toEqual(['tag-urgent']);
+    expect(await tags?.remove(INSPECTION, 'item-1', 'tag-urgent')).toEqual({ ok: true });
+    expect((await tags?.list(INSPECTION))?.['item-1'] ?? []).toEqual([]);
+  });
+
+  it('tells the person once, on the next load, about tag changes refused while no editor was open', async () => {
+    const w = await world();
+    await recordRejected(w.db, w.stack.account, 2);
+    await w.source.load(INSPECTION);
+    expect(w.notes).toEqual([[MESSAGES.tagsNotSynced, 'warning']]);
+    await w.source.load(INSPECTION);
+    expect(w.notes).toHaveLength(1);
+  });
+
+  it('says nothing when nothing was refused, and another account\'s count is not told', async () => {
+    const w = await world();
+    await recordRejected(w.db, { tenantId: 'tenant-1', userId: 'someone-else' }, 2);
+    await w.source.load(INSPECTION);
+    expect(w.notes).toEqual([]);
+  });
+
+  it('a load still succeeds when the count cannot be read', async () => {
+    const errors: unknown[] = [];
+    const quiet = await world({ onError: (e) => errors.push(e) });
+    await recordRejected(quiet.db, quiet.stack.account, 1);
+    quiet.db.transaction = () => Promise.reject(new Error('disk full'));
+    await expect(quiet.source.load(INSPECTION)).resolves.toBeDefined();
+    expect(errors).toHaveLength(1);
+    expect(quiet.notes).toEqual([]);
+  });
+
+  it('a refusal the editor itself meets is told at once and is not also kept for the next load', async () => {
+    const w = await world();
+    w.api.send = () => Promise.resolve({ kind: 'response', status: 404, json: {} });
+    expect(await w.source.resources.itemTags?.add(INSPECTION, 'item-1', 'tag-x')).toEqual({ ok: true });
+    await vi.waitFor(() => expect(w.notes).toEqual([[MESSAGES.tagsNotSynced, 'warning']]));
+    expect(await takeRejected(w.db, w.stack.account)).toBe(0);
+    await w.source.load(INSPECTION);
+    expect(w.notes).toHaveLength(1);
   });
 
   it('restartSession is offered only when the screen can restart', async () => {

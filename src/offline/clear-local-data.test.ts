@@ -55,6 +55,17 @@ describe('clearLocalData', () => {
     expect(await stateKeys()).toEqual(['client_id:https://oi.example.test', 'client_id:https://other.example.test', 'device_id', 'install_marker', 'server_url']);
   });
 
+  it('wipes a stored tag_rejected:* count while the client_id:* registrations stay', async () => {
+    await seed();
+    await db.run('INSERT INTO device_state (key, value) VALUES (?, ?)', ['tag_rejected:tenant-1:alice', '3']);
+    expect(await stateKeys()).toContain('tag_rejected:tenant-1:alice');
+    await clearLocalData(db, createMemoryFiles(), NOW);
+    const keys = await stateKeys();
+    expect(keys).not.toContain('tag_rejected:tenant-1:alice');
+    expect(keys).toContain('client_id:https://oi.example.test');
+    expect(keys).toContain('client_id:https://other.example.test');
+  });
+
   it('the survivor list is declared device_state keys and everything else is removed (identity, lock marks, verification)', async () => {
     expect([...DEVICE_STATE_SURVIVORS].sort()).toEqual(['device_id', 'install_marker', 'server_url']);
     expect(DEVICE_STATE_SURVIVOR_PREFIXES).toEqual(['client_id:']);

@@ -257,8 +257,13 @@ export const DEVICE_STATE_KEYS = [
   'media_temp_sweep_at',
 ] as const;
 
-/** Families of per-server keys: the key is the prefix followed by a non-empty suffix. */
-export const DEVICE_STATE_KEY_PREFIXES = ['client_id:'] as const;
+/**
+ * Families of keyed values: the key is the prefix followed by a non-empty suffix.
+ *  - `client_id:<origin>`: the registered OAuth client of one server (survives a clear).
+ *  - `tag_rejected:<account key>`: how many tag changes the server refused for good during a background send, not yet
+ *    told to the person (`field/item-tags-notice.ts`). Wiped by a clear with the rest of the account's data.
+ */
+export const DEVICE_STATE_KEY_PREFIXES = ['client_id:', 'tag_rejected:'] as const;
 
 export type DeviceStateKey = (typeof DEVICE_STATE_KEYS)[number] | `${(typeof DEVICE_STATE_KEY_PREFIXES)[number]}${string}`;
 
