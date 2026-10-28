@@ -74,6 +74,7 @@ describe('migrate() on the sql.js double', () => {
     );
     expect(tables.map((t) => t.name)).toEqual([
       'device_state',
+      'item_tags',
       'lease',
       'media',
       'outbox',

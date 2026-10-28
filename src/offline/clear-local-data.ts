@@ -68,7 +68,7 @@ export async function clearLocalData(db: Db, files: Pick<Files, 'remove' | 'list
     // A directory that cannot be listed leaves its files to the orphan sweep of a later start.
   }
 
-  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'work_package', 'lease'] as const) {
+  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'item_tags', 'work_package', 'lease'] as const) {
     await db.run(`DELETE FROM ${table}`);
   }
 

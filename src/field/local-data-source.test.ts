@@ -17,7 +17,7 @@ describe('the assembled data source', () => {
   it('carries every member the editor asks for, and no list address (a native shell has no pages)', async () => {
     const { source } = await world();
     expect(Object.keys(source).sort()).toEqual(['collab', 'exit', 'execute', 'isOnline', 'load', 'media', 'notify', 'onOnlineChange', 'openUrl', 'platform', 'reload', 'resources', 'session', 'urls'].sort());
-    expect(Object.keys(source.resources).sort()).toEqual(['aiAssist', 'commentsLibrary', 'costItems', 'mediaPool', 'prefs', 'publishReadiness', 'repairItems', 'settingsSheet', 'templateSearch', 'versionHistory', 'video']);
+    expect(Object.keys(source.resources).sort()).toEqual(['aiAssist', 'commentsLibrary', 'costItems', 'itemTags', 'mediaPool', 'prefs', 'publishReadiness', 'repairItems', 'settingsSheet', 'templateSearch', 'versionHistory', 'video']);
     expect(source.urls.inspectionsList).toBeUndefined();
     expect(source.platform).toBe('android');
     expect(Object.keys(source.media).sort()).toEqual(['store', 'uploader']);

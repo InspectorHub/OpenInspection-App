@@ -12,7 +12,7 @@ beforeEach(async () => {
   world = await createPurgeWorld();
 });
 
-const ZERO: Record<InspectionTable | 'files', number> = { work_package: 0, outbox: 0, media: 0, ydoc_updates: 0, ydoc_sync: 0, resource_cache: 0, files: 0 };
+const ZERO: Record<InspectionTable | 'files', number> = { work_package: 0, outbox: 0, media: 0, ydoc_updates: 0, ydoc_sync: 0, resource_cache: 0, item_tags: 0, files: 0 };
 
 async function auto(id: string, deps: PurgeDeps = world.purgeDeps()): Promise<PurgeOutcome> {
   return purgeInspection(deps, id, { mode: 'auto', account: ALICE, expectedFingerprint: await fingerprintOf(world.db, id) });

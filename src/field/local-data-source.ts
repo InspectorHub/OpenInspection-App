@@ -213,15 +213,19 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
   });
   deps.resolveVideo?.bind(videoAdapter.resolveVideo);
 
-  const resources = createResources({
-    api: deps.api,
-    db: stack.db,
-    account: stack.account,
-    isOnline: () => deps.network.isOnline(),
-    isBlocked,
-    photoUrl,
-    afterWrite,
-  });
+  const resources = createResources(
+    {
+      api: deps.api,
+      db: stack.db,
+      account: stack.account,
+      isOnline: () => deps.network.isOnline(),
+      isBlocked,
+      photoUrl,
+      afterWrite,
+    },
+    // A tag change the server refused for good has been undone on the device; the person is told once per round.
+    { onRejected: () => say(MESSAGES.tagsNotSynced, 'warning') },
+  );
 
   return {
     load: async (inspectionId, scope) => {
