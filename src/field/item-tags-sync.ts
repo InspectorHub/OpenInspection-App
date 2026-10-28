@@ -54,7 +54,8 @@ function verdictOf(outcome: Awaited<ReturnType<Api['send']>>): Verdict {
   return 'rejected';
 }
 
-function parseTags(json: unknown): TagMap | null {
+/** The tag map of `GET /api/inspections/{id}/tags`, or null when the answer is not a success envelope with an object. */
+export function parseTags(json: unknown): TagMap | null {
   if (!isRec(json) || json.success !== true || !isRec(json.data)) return null;
   const map: TagMap = {};
   for (const [itemId, list] of Object.entries(json.data)) {

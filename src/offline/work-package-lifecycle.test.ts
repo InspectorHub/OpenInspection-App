@@ -138,7 +138,7 @@ describe('triggers', () => {
     held.open();
     await flight;
     await w.refresher.idle();
-    expect(w.pkg.forInspection('t1').sort()).toEqual(['/api/inspections/t1', '/api/inspections/t1/report-data', '/api/inspections/t1/results']);
+    expect(w.pkg.forInspection('t1').sort()).toEqual(['/api/inspections/t1', '/api/inspections/t1/report-data', '/api/inspections/t1/results', '/api/inspections/t1/tags']);
   });
 
   it('start() runs once at once, and again on the network returning, the app coming to the front and an unlock', async () => {

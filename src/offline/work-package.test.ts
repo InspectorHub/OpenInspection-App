@@ -284,7 +284,7 @@ describe('freshness', () => {
     await w.run('start');
     expect(w.pkg.forInspection('t1')).toEqual([]);
     await w.run('manual');
-    expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));
+    expect(w.pkg.forInspection('t1').sort()).toEqual([...BASE('t1'), '/api/inspections/t1/tags']);
   });
 
   it('downloads again once the window has passed, and when the clock was set back before the last refresh', async () => {
@@ -297,11 +297,11 @@ describe('freshness', () => {
     expect(w.pkg.forInspection('t1')).toEqual([]);
     w.clock.advance(30_002);
     await w.run('start');
-    expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));
+    expect(w.pkg.forInspection('t1').sort()).toEqual([...BASE('t1'), '/api/inspections/t1/tags']);
     w.pkg.requests.length = 0;
     w.clock.set(NOW - 3_600_000);
     await w.run('start');
-    expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));
+    expect(w.pkg.forInspection('t1').sort()).toEqual([...BASE('t1'), '/api/inspections/t1/tags']);
   });
 
   it('the global reads follow the same window: skipped while fresh, read again after it or when asked', async () => {
@@ -332,7 +332,7 @@ describe('freshness', () => {
     w.pkg.requests.length = 0;
     w.clock.advance(31_000);
     await w.run('start');
-    expect(w.pkg.forInspection('t1').sort()).toEqual(BASE('t1'));
+    expect(w.pkg.forInspection('t1').sort()).toEqual([...BASE('t1'), '/api/inspections/t1/tags']);
   });
 });
 

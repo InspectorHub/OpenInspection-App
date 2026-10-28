@@ -7,6 +7,8 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import type { Network } from '../platform/network';
+import { mergeFromServer } from '../field/item-tags-store';
+import { parseTags } from '../field/item-tags-sync';
 import { isLocalId } from './registry';
 import { DEFAULT_LEASE_TTL_MS, SYNC_LEASE, withLease, type LeaseHandle } from './lease';
 import type { AppStatePort } from './lock-monitor';
@@ -241,6 +243,8 @@ interface Run {
   replaceOnly: boolean;
   /** Growth already granted to replacements of this run while in `replaceOnly` mode. */
   granted: number;
+  /** Inspections whose cached set this run replaced and whose tags have not been pulled yet. */
+  replacedIds: string[];
 }
 
 const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, notVisible: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false });
@@ -581,8 +585,10 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     }
     try {
       const outcome = await replaceInspectionResources(deps.db, { accountKey: run.key, inspectionId: target.id, packageGen: before.package_gen, resources: staged, refreshedAt: deps.clock.now() });
-      if (outcome === 'replaced') run.summary.refreshed += 1;
-      else run.summary.skipped += 1;
+      if (outcome === 'replaced') {
+        run.summary.refreshed += 1;
+        run.replacedIds.push(target.id);
+      } else run.summary.skipped += 1;
     } catch (error) {
       report(error);
       await fail(run, target.id, 'storage_failed');
@@ -652,6 +658,56 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     } catch (error) {
       report(error);
     }
+  }
+
+  /**
+   * The tags of each inspection this run replaced, merged into `item_tags` at the moment the server answers. This is a pull,
+   * like the editor's: the answer is fresh, so the three-way merge (`mergeFromServer`) is right; a copy kept in the cache would
+   * not be (it can be older than a tag this device added and sent since), so the body is NOT cached and nothing reads tags from
+   * the cache. Best effort, and it can never change the outcome of the run:
+   *  - it comes after every required read and after the package was replaced, so a failure here touches neither;
+   *  - one attempt, no retry, no counting towards the consecutive-error rule; any status but 2xx, an unusable body or a
+   *    transport error just ends that inspection's pull;
+   *  - it uses only the request budget the required reads left, and never halts the run for lack of it;
+   *  - it is sequential, one request at a time.
+   * Halts that `sendOnce` itself raises (locked, stopped, signed out, lease lost) are real conditions and apply as for any read.
+   */
+  async function pullTags(run: Run): Promise<void> {
+    const ids = run.replacedIds.splice(0);
+    for (const id of ids) {
+      if (run.halted !== null || stopped) return;
+      if (run.summary.requests >= limits.maxRequests) return;
+      try {
+        await pullTagsOne(run, id);
+      } catch (error) {
+        report(error);
+      }
+    }
+  }
+
+  async function pullTagsOne(run: Run, id: string): Promise<void> {
+    if (!isLocalId(id)) return;
+    const release = await acquirePermit();
+    let sent: Sent;
+    try {
+      sent = await sendOnce(run, `/api/inspections/${id}/tags`);
+    } finally {
+      release();
+    }
+    if (sent.kind !== 'response' || sent.res.status < 200 || sent.res.status >= 300) return;
+    const answer = judge(sent.res);
+    if (answer.kind !== 'ok') return;
+    // A body whose values are not all lists is not the tag map (a foreign object would read as "no tags" and the merge would
+    // then remove every tag the device holds as synced), so it is ignored here.
+    const data = asRecord(asRecord(answer.json)?.data);
+    if (data === null || !Object.values(data).every(Array.isArray)) return;
+    const tags = parseTags(answer.json);
+    if (tags === null) return;
+    // Looked at again right before the write: an inspection that started being removed, or is quarantined, is left alone.
+    const row = await readPackageRow(deps.db, id);
+    if (row === null || !isRefreshable(row, run.account)) return;
+    if ((await gate(run, false)) !== null) return;
+    await mergeFromServer(deps.db, run.key, id, tags, deps.clock.now());
   }
 
   async function evict(run: Run): Promise<number> {
@@ -734,6 +790,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
     if (run.halted === null) await refreshGlobals(run);
+    // Last, so it can only use what the required reads left of the request budget.
+    if (run.halted === null) await pullTags(run);
     if (run.halted === null && (await gate(run, false)) === null) await evict(run);
   }
 
@@ -755,7 +813,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       const since = deps.clock.now() - lastListed.at;
       if (since >= 0 && since < limits.listDebounceMs) return summary;
     }
-    const run: Omit<Run, 'lease'> = { account, key, reason, summary, consecutive: 0, halted: null, cooling: null, hidden: new Set<string>(), replaceOnly: false, granted: 0 };
+    const run: Omit<Run, 'lease'> = { account, key, reason, summary, consecutive: 0, halted: null, cooling: null, hidden: new Set<string>(), replaceOnly: false, granted: 0, replacedIds: [] };
     try {
       const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease) => {
         const live: Run = { ...run, lease };
@@ -780,12 +838,13 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     const account = await currentAccount();
     if (account === null) return { kind: 'halted', reason: 'no_account' };
     const summary = emptySummary();
-    const base: Omit<Run, 'lease'> = { account, key: accountKeyOf(account), reason: 'manual', summary, consecutive: 0, halted: null, cooling: null, hidden: new Set<string>(), replaceOnly: false, granted: 0 };
+    const base: Omit<Run, 'lease'> = { account, key: accountKeyOf(account), reason: 'manual', summary, consecutive: 0, halted: null, cooling: null, hidden: new Set<string>(), replaceOnly: false, granted: 0, replacedIds: [] };
     try {
       const outcome = await withLease(deps.db, SYNC_LEASE, leaseOptions, async (lease) => {
         const live: Run = { ...base, lease };
         try {
           await refreshOne(live, { id: inspectionId, scheduledAt: null, completed: false, pinned: false, today: false, listed: false });
+          if (live.halted === null) await pullTags(live);
         } finally {
           summary.halted = live.halted;
         }
