@@ -18,7 +18,8 @@ export const MESSAGES = {
   sessionExpired: 'Your session has expired. Sign in again to continue.',
   forbidden: 'Your account is not allowed to do that.',
   requestFailed: 'The server could not complete that. Try again.',
-  tagsNotSynced: 'Some tag changes could not be saved to the server and were undone.',
+  tagsNotSynced:
+    'Some tag changes you made earlier could not be saved to the server, so they were undone. The tag may have been deleted, or your account may not be allowed to change that inspection. Open the inspection, check its tags, and choose them again if you still need them. If this keeps happening, ask your administrator.',
   outcomeUnknown: 'The app lost contact with the server before it confirmed this change. The change may or may not have been saved, so check before trying again.',
   publishOutcomeUnknown: 'The app lost contact with the server before it confirmed the publish. The report may already be published, and publishing again can create a second revision, so check the report before trying again.',
   deviceLocked: 'This device needs to be verified online before it can send changes.',

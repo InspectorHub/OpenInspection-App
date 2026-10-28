@@ -133,6 +133,7 @@ export function RemoveDialog({ stack, row, discardKey, now, reload, onClose, onR
         <li>{`Edits on this device that are not on the server: ${yesNo(ready.reasons.includes('ydoc_not_on_server'))}`}</li>
         <li>{`Photos and clips waiting to upload: ${String(ready.counts.media.notUploaded + ready.counts.media.unknownState)}`}</li>
         <li>{`Queued changes: ${String(ready.counts.outbox.pending + ready.counts.outbox.failed + ready.counts.outbox.orphaned + ready.counts.outbox.other)}`}</li>
+        {ready.counts.tags > 0 && <li>{`Tag changes waiting to be sent: ${String(ready.counts.tags)}`}</li>}
         {ready.counts.createdLocally && <li>Created on this device and never sent: Yes</li>}
       </ul>
     );

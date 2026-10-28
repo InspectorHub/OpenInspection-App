@@ -223,8 +223,9 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       photoUrl,
       afterWrite,
     },
-    // A tag change the server refused for good has been undone on the device; the person is told once per round.
-    { onRejected: () => say(MESSAGES.tagsNotSynced, 'warning') },
+    // A tag change the server refused for good has been undone on the device; the person is told once per round. The notice
+    // says what to do and stays long enough to be read: it can appear while another inspection is open.
+    { onRejected: () => say(MESSAGES.tagsNotSynced, 'warning', { durationMs: 15_000 }) },
   );
 
   return {

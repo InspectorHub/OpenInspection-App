@@ -25,14 +25,17 @@ import { ALLOWED_GLOBAL_OPS, isLocalId } from './registry';
  *    inspection now would lose the person's placement of that photo; and a row the reconciler could not place
  *    (`missing`) stays for good. There is no state of a surviving row that is safe, so the allow-list of safe states is
  *    empty. A state outside `MEDIA_STATES` is `media_unknown_state`.
+ *  - `tags_not_on_server`: a tag a person put on an item, or took off one, that the server has not been told about yet
+ *    (`item_tags` rows that are not `synced`). They are not in the queue (see `item-tags-store.ts`), so this is the only
+ *    place that counts them. Rows of every account count.
  *  - `ydoc_not_on_server`: the device stores updates of the results document and `docIsCovered` cannot show that the
  *    server holds all of them. A document with no stored update, or one whose stored content is empty, has nothing to
  *    lose.
  *  - `created_locally`: the inspection was created on this device and the server has not acknowledged the create.
  *  - `package_owner_mismatch`: the package row belongs to another account or to nobody, so this account cannot vouch for it.
  *
- * All reads run in ONE transaction. The `Db` runs a transaction without anything else interleaving, so the five
- * facts (queue, media, document, package, unattributable rows) are one snapshot: a write that arrives during the
+ * All reads run in ONE transaction. The `Db` runs a transaction without anything else interleaving, so the six
+ * facts (queue, media, tags, document, package, unattributable rows) are one snapshot: a write that arrives during the
  * call is applied after it, never between two of its reads. The Yjs coverage check is inside the transaction for the
  * same reason; it loads at most 5 MiB into a scratch document and the transaction holds the connection for that time.
  */
@@ -46,6 +49,7 @@ export const UNSENT_REASONS = [
   'media_not_uploaded',
   'media_uploaded_unresolved',
   'media_unknown_state',
+  'tags_not_on_server',
   'ydoc_not_on_server',
   'created_locally',
   'package_owner_mismatch',
@@ -55,6 +59,8 @@ export type UnsentReason = (typeof UNSENT_REASONS)[number];
 export interface UnsentCounts {
   outbox: { pending: number; failed: number; orphaned: number; other: number };
   media: { notUploaded: number; uploaded: number; unknownState: number };
+  /** Tag changes on this inspection's items that the server has not been told about. */
+  tags: number;
   ydocRows: number;
   /** Null when there is no stored update to ask about. */
   ydocCovered: boolean | null;
@@ -76,6 +82,7 @@ function emptyCounts(): UnsentCounts {
   return {
     outbox: { pending: 0, failed: 0, orphaned: 0, other: 0 },
     media: { notUploaded: 0, uploaded: 0, unknownState: 0 },
+    tags: 0,
     ydocRows: 0,
     ydocCovered: null,
     createdLocally: false,
@@ -124,6 +131,10 @@ async function read(tx: Db, inspectionId: string, account: Account): Promise<Uns
   if (counts.media.notUploaded > 0) reasons.add('media_not_uploaded');
   if (counts.media.uploaded > 0) reasons.add('media_uploaded_unresolved');
   if (counts.media.unknownState > 0) reasons.add('media_unknown_state');
+
+  const tags = await tx.query<{ n: number }>("SELECT COUNT(*) AS n FROM item_tags WHERE inspection_id = ? AND state <> 'synced'", [inspectionId]);
+  counts.tags = Number(tags[0]?.n ?? 0);
+  if (counts.tags > 0) reasons.add('tags_not_on_server');
 
   const docName = `results-${inspectionId}`;
   const updates = await tx.query<{ n: number }>('SELECT COUNT(*) AS n FROM ydoc_updates WHERE doc_name = ?', [docName]);

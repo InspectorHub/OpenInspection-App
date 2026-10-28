@@ -128,8 +128,8 @@ export async function createPurgeWorld(): Promise<PurgeWorld> {
     await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, 'e', '{}', 5, ?)", [key, `/api/inspections/${id}`, id]);
     await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, 'e', '{}', 5, ?)", [key, `/api/inspections/${id}/results`, id]);
     await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, 'network', 5, ?)", [key, `$refresh_error:${id}`, id]);
-    // A tag a person put on an item that the server has not been told about yet: a purge must take it too.
-    await world.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, ?, 'item-1', 'tag-1', 'Urgent', NULL, 'add', 5)", [key, id]);
+    // A tag the server already has: nothing to lose, and a purge must still take it.
+    await world.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, ?, 'item-1', 'tag-1', 'Urgent', NULL, 'synced', 5)", [key, id]);
   };
 
   const seedFull = async (id: string, options: { quarantine?: string | null; unsent?: boolean } = {}): Promise<void> => {
@@ -140,6 +140,8 @@ export async function createPurgeWorld(): Promise<PurgeWorld> {
       await mediaFile(id, `${id}-m2`, 'uploaded');
       await world.outbox(id, 'pending');
       await world.outbox(id, 'failed');
+      // A tag change the server has not been told about: unsent work like the rows above, so only the person's confirmation removes it.
+      await world.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, ?, 'item-2', 'tag-2', 'Follow Up', NULL, 'add', 6)", [accountKey(ALICE), id]);
     }
   };
 

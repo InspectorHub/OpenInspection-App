@@ -4,7 +4,7 @@ import { countOrphanedOutbox, countWaitingUploads } from './waiting';
 
 /** What clearing this device would destroy for good because the server does not have it. */
 export interface AtRisk {
-  /** Photos, clips and queued changes still to upload. */
+  /** Photos, clips, queued changes and tag changes still to upload. */
   waiting: number;
   /** Queued changes whose inspection is gone or no longer yours; they will never be sent. */
   orphaned: number;

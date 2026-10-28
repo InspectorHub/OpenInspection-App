@@ -69,6 +69,53 @@ describe('the baseline: nothing stored means nothing to lose', () => {
   });
 });
 
+let tagN = 0;
+async function tag(id: string, state: string, o: { account?: Account; item?: string } = {}): Promise<void> {
+  tagN += 1;
+  const account = o.account ?? ALICE;
+  await db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, ?, ?, ?, 'Urgent', NULL, ?, 1)", [
+    `${account.tenantId}:${account.userId}`,
+    id,
+    o.item ?? 'item-1',
+    `tag-${String(tagN)}`,
+    state,
+  ]);
+}
+
+// A tag change the server has not been told about is work that would be lost. It is not in the queue (it is a set of rows,
+// not an ordered line), so without its own check removing the inspection, or an automatic purge, would drop it unseen.
+describe('tag changes the server has not been told about count', () => {
+  it.each(['add', 'remove'])('a tag row waiting to %s is unsent', async (state) => {
+    await package_('insp-1');
+    await tag('insp-1', state);
+    const result = await unsentData(db, 'insp-1', ALICE);
+    expect(result).toMatchObject({ unsent: true, unknown: false, reasons: ['tags_not_on_server'] });
+    expect(result.counts.tags).toBe(1);
+  });
+
+  it('counts every waiting row, and only this inspection\'s', async () => {
+    await package_('insp-1');
+    await tag('insp-1', 'add', { item: 'a' });
+    await tag('insp-1', 'remove', { item: 'b' });
+    await tag('insp-2', 'add');
+    expect((await unsentData(db, 'insp-1', ALICE)).counts.tags).toBe(2);
+    expect((await unsentData(db, 'insp-2', ALICE)).counts.tags).toBe(1);
+  });
+
+  it('a tag the server already has is not unsent', async () => {
+    await package_('insp-1');
+    await tag('insp-1', 'synced');
+    expect(await unsentData(db, 'insp-1', ALICE)).toMatchObject({ unsent: false, reasons: [] });
+    expect((await unsentData(db, 'insp-1', ALICE)).counts.tags).toBe(0);
+  });
+
+  it('counts the rows of every account, not only the signed-in one', async () => {
+    await package_('insp-1');
+    await tag('insp-1', 'add', { account: BOB });
+    expect((await unsentData(db, 'insp-1', ALICE)).reasons).toEqual(['tags_not_on_server']);
+  });
+});
+
 describe('queued writes count in every state', () => {
   it.each([
     ['pending', 'outbox_pending'],
