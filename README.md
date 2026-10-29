@@ -18,7 +18,7 @@ npm run cap:sync
 
 Regenerate API types with `OPENINSPECTION_CONTRACT=<path or URL> npm run api:types`.
 
-Local setup for Android and Windows is in [docs/development.md](docs/development.md).
+Local setup for Android and Windows is in [docs/development.md](docs/development.md). Cutting a release is in [docs/release.md](docs/release.md).
 
 ## License
 

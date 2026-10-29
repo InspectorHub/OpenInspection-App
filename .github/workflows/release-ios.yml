@@ -1,0 +1,117 @@
+name: Release iOS
+
+# Written to the release plan and NOT yet run: it needs an Apple developer account, an App Store Connect app record and the
+# secrets listed in docs/release.md. A pushed tag vX.Y.Z (equal to package.json's version) builds, signs and uploads a build to
+# TestFlight. A manual run is refused unless it is started on a tag ref, so TestFlight only ever receives tagged builds. Nothing
+# here submits for review or releases to the App Store.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ios-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ENGINE_CONTRACT_URL: https://raw.githubusercontent.com/InspectorHub/OpenInspection/main/contracts/native-contract.openapi.json
+  BUNDLE_ID: io.inspectorhub.app
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Tag equals the package.json version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not equal the package.json version ($expected). Bump package.json first, then tag."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run
+      - run: npm run build
+      - name: Release bundle has no development-only UI
+        run: npm run check:bundle
+      - run: npx cap sync android
+      - name: API types match the engine contract
+        run: npm run api:types:check -- "$ENGINE_CONTRACT_URL"
+
+  testflight:
+    if: github.ref_type == 'tag'
+    needs: verify
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: ios-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - run: npm run build
+      - name: Set the iOS version from package.json and the build number from the run
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          node scripts/sync-ios-version.mjs --build-number "$((RUN_NUMBER * 100 + RUN_ATTEMPT))"
+          node scripts/sync-ios-version.mjs --check
+      - run: npx cap sync ios
+      - name: Warn when the encryption compliance code is not recorded
+        run: |
+          if ! grep -q 'ITSEncryptionExportComplianceCode' ios/App/App/Info.plist; then
+            echo "::warning::Info.plist has no ITSEncryptionExportComplianceCode. App Store Connect will ask for export compliance on this build (docs/release.md)."
+          fi
+      - name: Import the distribution certificate
+        uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9 # v7.1.0
+        with:
+          p12-file-base64: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+      - name: Download the App Store provisioning profile
+        id: profiles
+        uses: apple-actions/download-provisioning-profiles@230860ab5f632551a5f9a5e1d98a774485463888 # v7.0.0
+        with:
+          bundle-id: ${{ env.BUNDLE_ID }}
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+      - name: Archive and export the IPA
+        env:
+          PROFILES: ${{ steps.profiles.outputs.profiles }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+          profile="$(node -p "JSON.parse(process.env.PROFILES)[0].name")"
+          npx cap build ios \
+            --scheme App \
+            --xcode-team-id "$APPLE_TEAM_ID" \
+            --xcode-export-method app-store-connect \
+            --xcode-signing-style manual \
+            --xcode-signing-certificate "Apple Distribution" \
+            --xcode-provisioning-profile "$profile"
+      - name: Upload to TestFlight
+        uses: apple-actions/upload-testflight-build@acf1166e95edc302069b74b258a788004fe39a08 # v5.7.0
+        with:
+          app-path: ios/App/output/App.ipa
+          app-type: ios
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          uses-non-exempt-encryption: 'true'
