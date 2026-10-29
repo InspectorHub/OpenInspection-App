@@ -1,12 +1,15 @@
 import { _electron, expect, test, type ElectronApplication, type FileChooser, type Page } from '@playwright/test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { DesktopBridge } from '../electron/shared/ipc-contract.ts';
 import { startRendererEngine, type RendererEngine } from './fixtures/renderer-engine.ts';
 
 declare global { interface Window { oiDesktop: DesktopBridge } }
+
+const execFileAsync = promisify(execFile);
 
 let electronApp: ElectronApplication;
 let page: Page;
@@ -146,12 +149,151 @@ test('imports valid photos and reports an unsupported neighbor in the same libra
   await expect(page.getByText('3 photos', { exact: true })).toBeVisible();
 });
 
+test('offline import explains an unsupported file and still stores its valid neighbor', async () => {
+  await signIn();
+  await seedEditorPackage();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+
+  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const chooser = await openLibrary();
+  await chooser.setFiles([
+    { name: 'unsupported.tiff', mimeType: 'image/tiff', buffer: Buffer.from('not a TIFF image') },
+    { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+  ]);
+
+  const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
+  await expect(refusal).toBeVisible({ timeout: 20_000 });
+  for (const theme of ['light', 'dark'] as const) {
+    await electronApp.evaluate(({ nativeTheme }, selected) => { nativeTheme.themeSource = selected; }, theme);
+    await page.emulateMedia({ colorScheme: theme });
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe(theme);
+    await expect(refusal).toBeVisible();
+    await page.screenshot({ path: `.superpowers/sdd/plan-d2-windows-electron/offline-photo-refusal-${theme}-1280.png`, animations: 'disabled' });
+  }
+  await expect.poll(async () => mediaRows()).toHaveLength(1);
+  expect((await mediaRows())[0]?.content_type).toBe('image/jpeg');
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+});
+
 test('a spoofed JPEG is rejected before reaching the media store', async () => {
   await signIn();
   await seedEditorPackage();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
   const libraryPicker = await openLibrary();
   await (await libraryPicker).setFiles([{ name: 'fake.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('MZ payload') }]);
-  await expect(page.getByText(/0 of 1 photos uploaded.*1 failed/)).toBeVisible({ timeout: 15_000 });
+  const rejected = page.getByText(/1 photo could not be added/).waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'rejected');
+  const stored = expect.poll(() => readdir(join(userData, 'media')).then((files) => files.length), { timeout: 15_000 })
+    .toBeGreaterThan(0).then(() => 'stored');
+  await expect(Promise.race([rejected, stored])).resolves.toBe('rejected');
+  await expect.poll(async () => mediaRows()).toHaveLength(0);
+  await expect.poll(() => readdir(join(userData, 'media'))).toEqual([]);
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+});
+
+test('caps a 25-photo offline selection at 20 and shows the capped-batch notice', async () => {
+  test.setTimeout(120_000);
+  await signIn();
+  await seedEditorPackage();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const chooser = await openLibrary();
+  await chooser.setFiles(Array.from({ length: 25 }, (_, index) => ({
+    name: `photo-${index + 1}.jpg`,
+    mimeType: 'image/jpeg',
+    buffer: jpeg,
+  })));
+
+  await expect.poll(async () => (await mediaRows()).length, { timeout: 60_000 }).toBe(20);
+  await expect(page.getByText('Added the first 20 photos; add the rest in another batch.', { exact: true })).toBeVisible();
+  expect((await mediaRows()).every((row) => row.content_type === 'image/jpeg')).toBe(true);
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+});
+
+test('the batch survives a force-kill and each persisted photo uploads once after restart', async () => {
+  test.setTimeout(120_000);
+  await signIn();
+  await seedEditorPackage();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+
+  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const picker = await openLibrary();
+  await (await picker).setFiles(Array.from({ length: 3 }, (_, index) => ({
+    name: `persist-${index + 1}.jpg`,
+    mimeType: 'image/jpeg',
+    buffer: jpeg,
+  })));
+  await expect.poll(async () => (await mediaRows()).length, { timeout: 30_000 }).toBe(3);
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+
+  const beforeKill = await mediaRows();
+  for (const row of beforeKill) {
+    expect(row.content_type).toBe('image/jpeg');
+    const file = await readFile(join(userData, 'media', row.path.replace(/^media[\\/]/, '')));
+    expect(file.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+  }
+
+  const killedApp = electronApp;
+  const pid = killedApp.process().pid;
+  if (pid === undefined) throw new Error('photo-import-main-pid-missing');
+  const exited = new Promise<void>((resolveExit) => killedApp.process().once('exit', () => resolveExit()));
+  await execFileAsync('taskkill.exe', ['/F', '/T', '/PID', String(pid)]);
+  await exited;
+  await killedApp.close().catch(() => undefined);
+
+  electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
+  page = await electronApp.firstWindow();
+  await electronApp.evaluate(({ shell }) => { shell.openExternal = async (url) => { Reflect.set(globalThis, 'rendererExternalUrl', url); }; });
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible({ timeout: 20_000 });
+
+  const afterRestart = await mediaRows();
+  expect(afterRestart).toHaveLength(3);
+  expect(afterRestart.map(({ pending_id }) => pending_id).sort()).toEqual(beforeKill.map(({ pending_id }) => pending_id).sort());
+  for (const row of afterRestart) {
+    const file = await readFile(join(userData, 'media', row.path.replace(/^media[\\/]/, '')));
+    expect(file.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+  }
+
+  await expect.poll(() => engine.uploads.size, { timeout: 30_000 }).toBe(3);
+  expect(engine.uploadCounts.size).toBe(3);
+  expect([...engine.uploadCounts.values()]).toEqual([1, 1, 1]);
+  expect(engine.uploadContentLengths).toHaveLength(3);
+  expect(engine.uploadContentLengths.every((length) => length !== null && length > 0)).toBe(true);
+  await page.waitForTimeout(500);
+  expect([...engine.uploadCounts.values()]).toEqual([1, 1, 1]);
+});
+
+test('original-quality keeps a large JPEG unchanged and rejects it, while normal quality recompresses it', async () => {
+  test.setTimeout(120_000);
+  await signIn();
+  await seedEditorPackage();
+
+  await page.getByRole('button', { name: 'Report settings' }).click();
+  const originalQuality = page.getByTestId('original-quality-uploads');
+  await expect(originalQuality).toBeVisible();
+  await originalQuality.check();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBe('1');
+  await page.getByRole('button', { name: 'Close' }).click();
+
+  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const oversizedJpeg = Buffer.concat([jpeg, Buffer.alloc(12 * 1024 * 1024 - jpeg.length)]);
+  const input = page.locator('input[type=file][multiple]');
+  await input.setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg });
+  await expect(page.getByText(/0 of 1 photos uploaded.*1 failed/)).toBeVisible({ timeout: 20_000 });
   expect(await mediaRows()).toEqual([]);
   expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+
+  await page.getByRole('button', { name: 'Report settings' }).click();
+  await expect(originalQuality).toBeVisible();
+  await originalQuality.uncheck();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBeNull();
+  await input.setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg });
+  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
+  expect(engine.uploadContentLengths).toHaveLength(1);
+  expect(engine.uploadContentLengths[0]).toBeLessThan(1024 * 1024);
+  expect(engine.uploads.size).toBe(1);
 });
