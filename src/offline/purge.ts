@@ -346,6 +346,8 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
     step = 'cache';
     if (!(await go())) return failed('cache', 'interrupted');
     await deps.db.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ?', [accountKey(account), inspectionId]);
+    // The tags a person put on this inspection's items, including the ones the server was never told about.
+    await deps.db.run('DELETE FROM item_tags WHERE account_key = ? AND inspection_id = ?', [accountKey(account), inspectionId]);
 
     step = 'outbox';
     if (!(await go())) return failed('outbox', 'interrupted');
@@ -368,6 +370,7 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
       await deleteDocRows(tx, docName);
       await clearSyncProof(tx, docName);
       await tx.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ?', [accountKey(account), inspectionId]);
+      await tx.run('DELETE FROM item_tags WHERE account_key = ? AND inspection_id = ?', [accountKey(account), inspectionId]);
       await tx.run('DELETE FROM work_package WHERE inspection_id = ? AND tenant_id = ? AND user_id = ? AND purging IN (1, 2)', [inspectionId, account.tenantId, account.userId]);
       return { kind: 'purged' };
     });

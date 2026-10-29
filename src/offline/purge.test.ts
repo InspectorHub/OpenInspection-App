@@ -17,7 +17,7 @@ beforeEach(async () => {
   world = await createPurgeWorld();
 });
 
-const ZERO: Record<InspectionTable | 'files', number> = { work_package: 0, outbox: 0, media: 0, ydoc_updates: 0, ydoc_sync: 0, resource_cache: 0, files: 0 };
+const ZERO: Record<InspectionTable | 'files', number> = { work_package: 0, outbox: 0, media: 0, ydoc_updates: 0, ydoc_sync: 0, resource_cache: 0, item_tags: 0, files: 0 };
 
 async function auto(id: string, deps: PurgeDeps = world.purgeDeps(), fingerprint?: string): Promise<PurgeOutcome> {
   return purgeInspection(deps, id, { mode: 'auto', account: ALICE, expectedFingerprint: fingerprint ?? (await fingerprintOf(world.db, id)) });
@@ -162,6 +162,10 @@ describe('what an automatic purge refuses, each with the same state minus the re
     ['a photo waiting', async () => void (await world.mediaFile('p2', 'm', 'pending')), 'media_not_uploaded'],
     ['an uploaded photo nothing placed', async () => void (await world.mediaFile('p2', 'm', 'uploaded')), 'media_uploaded_unresolved'],
     ['edits the server may not have', async () => void (await world.ydoc('p2')), 'ydoc_not_on_server'],
+    // Not in the fingerprint (tags are rows with a state, not part of the queue), so only this predicate stands between
+    // an automatic purge and a tag change nobody sent.
+    ['a tag added and not yet sent', async () => void (await world.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, 'p2', 'item-9', 'tag-9', 'Late', NULL, 'add', 9)", [accountKey(ALICE)])), 'tags_not_on_server'],
+    ['a tag removed and not yet sent', async () => void (await world.db.run("UPDATE item_tags SET state = 'remove' WHERE inspection_id = 'p2'")), 'tags_not_on_server'],
   ])('%s that the fingerprint already includes: the unsent predicate stops it inside the tombstone transaction', async (_name, change, reason) => {
     await world.seedPurgeable('p2');
     await change();

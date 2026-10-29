@@ -1,17 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import type { TimerPort } from '../collab/timers';
 import { useOfflineStack } from '../app/stack-context';
 import type { StoredIdentity } from '../auth/server-config';
 import { reconcileGateFor } from '../export/reconcile-gate';
+import type { Network } from '../platform/network';
 import { ClientNotices } from './ClientNotices';
 import { DevDiagnostics } from './dev-diagnostics';
+import { EditorBoundary } from './EditorBoundary';
+import { editorModule } from './editor-loader';
 import { ExportFlow } from './ExportFlow';
 import { Body, Button, Heading, Screen } from './kit';
 import { NotificationPrompt } from './NotificationPrompt';
 import { Settings } from './Settings';
 import { SignOutControl } from './SignOutControl';
 import { WorkList } from './WorkList';
+
+// The editor and its libraries are a chunk of their own: the lock, sign-in and work-list screens do not load it. The chunk is part
+// of the app's assets, so opening it needs no network.
+// A load that failed is cached by React, so the lazy is rebuilt when the person goes back: the next tap tries the load again.
+const makeEditorScreen = () => lazy(() => editorModule.load().then((module) => ({ default: module.EditorScreen })));
+let EditorScreen = makeEditorScreen();
 
 export interface SignedInProps {
   services: AppServices;
@@ -22,6 +31,8 @@ export interface SignedInProps {
   onWiping?(wiping: boolean): void;
   /** Timers of the polling reads (the upload count). Defaults to the real ones. */
   timers?: TimerPort;
+  /** Link state for the editor. Defaults to the device's. */
+  network?: Network;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -38,8 +49,10 @@ export function roleLabel(role: string): string {
 }
 
 /** The home of a signed-in device: the work list (where there is an offline stack), the account, and the sign-out contract. */
-export function SignedIn({ services, origin, identity, onSignedOut, onWiping, timers }: SignedInProps) {
+export function SignedIn({ services, origin, identity, onSignedOut, onWiping, timers, network }: SignedInProps) {
   const [view, setView] = useState<'home' | 'settings'>('home');
+  // The inspection open in the editor, or null for the work list.
+  const [editing, setEditing] = useState<string | null>(null);
   // What the open export covers: everything (an empty object) or the listed inspections (a quarantined row's own export).
   const [exporting, setExporting] = useState<{ only?: readonly string[] } | null>(null);
   const [exportsClosed, setExportsClosed] = useState(0);
@@ -76,6 +89,28 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
   );
   const prompt = <NotificationPrompt services={services} exportsClosed={exportsClosed} suspended={exporting !== null} timers={timers} />;
 
+  if (editing !== null && stack !== null) {
+    const back = (): void => {
+      EditorScreen = makeEditorScreen();
+      setEditing(null);
+    };
+    return (
+      <EditorBoundary onBack={back}>
+      <Suspense
+        fallback={
+          <Screen>
+            <div role="status" aria-busy="true">
+              <Body>Opening the inspection…</Body>
+            </div>
+          </Screen>
+        }
+      >
+        <EditorScreen services={services} stack={stack} origin={origin} inspectionId={editing} onExit={back} {...(network === undefined ? {} : { network })} />
+      </Suspense>
+      </EditorBoundary>
+    );
+  }
+
   if (view === 'settings') {
     return (
       <>
@@ -107,7 +142,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
           </Button>
         </>
       ) : (
-        <WorkList stack={stack} notices={notices} onSettings={() => setView('settings')} settingsRef={settingsTrigger} onExportAll={() => setExporting({})} onExport={(inspectionId) => setExporting({ only: [inspectionId] })} />
+        <WorkList stack={stack} notices={notices} onOpenInspection={setEditing} onSettings={() => setView('settings')} settingsRef={settingsTrigger} onExportAll={() => setExporting({})} onExport={(inspectionId) => setExporting({ only: [inspectionId] })} />
       )}
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-base">
         <dt className="text-ih-fg-3">Role</dt>

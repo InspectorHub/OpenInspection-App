@@ -18,5 +18,7 @@ export default defineConfig({
   build: { outDir: 'dist' },
   // Ceilings, not waits: every test awaits an explicit signal, so these only bound a hang. The default 5 s is too
   // tight for a cold child process or a React flow when the whole suite shares a loaded machine.
-  test: { include: ['src/**/*.test.ts', 'src/**/*.test.tsx'], testTimeout: 30_000, hookTimeout: 30_000 },
+  // field-ui keeps two bare `.css` imports of its third-party stylesheets in its built entry; node cannot load those, so the
+  // test runner builds the package through vite like the app's own bundle does.
+  test: { include: ['src/**/*.test.ts', 'src/**/*.test.tsx'], testTimeout: 30_000, hookTimeout: 30_000, server: { deps: { inline: ['@inspectorhub/field-ui'] } } },
 });

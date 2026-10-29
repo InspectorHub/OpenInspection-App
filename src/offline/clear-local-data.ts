@@ -19,7 +19,8 @@ import { DEVICE_STATE_KEY_PREFIXES, type DeviceStateKey } from '../platform/sche
  * ends with the data it protected).
  */
 export const DEVICE_STATE_SURVIVORS = ['server_url', 'device_id', 'install_marker'] as const satisfies readonly DeviceStateKey[];
-export const DEVICE_STATE_SURVIVOR_PREFIXES = DEVICE_STATE_KEY_PREFIXES;
+// Named, not "every declared family": a family added for an account's own data (`tag_rejected:`) must go with the clear.
+export const DEVICE_STATE_SURVIVOR_PREFIXES = ['client_id:'] as const satisfies readonly (typeof DEVICE_STATE_KEY_PREFIXES)[number][];
 
 export interface ClearResult {
   filesRemoved: number;
@@ -68,7 +69,7 @@ export async function clearLocalData(db: Db, files: Pick<Files, 'remove' | 'list
     // A directory that cannot be listed leaves its files to the orphan sweep of a later start.
   }
 
-  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'work_package', 'lease'] as const) {
+  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'item_tags', 'work_package', 'lease'] as const) {
     await db.run(`DELETE FROM ${table}`);
   }
 

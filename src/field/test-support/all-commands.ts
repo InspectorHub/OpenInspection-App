@@ -41,6 +41,7 @@ export const COMMANDS_BY_TYPE: Record<FieldCommand['type'], FieldCommand[]> = {
     { type: 'compliance', op: 'doc-review', documentKey: 'deed', requested: true, received: false, reviewed: false, na: false, notes: null },
     { type: 'compliance', op: 'psq', responses: { q1: 'yes' } },
     { type: 'compliance', op: 'psq-status', status: 'declined', reason: 'No time' },
+    { type: 'compliance', op: 'signoff', role: 'field_observer', license: null, dualRole: false },
   ],
   'load-scope': [{ type: 'load-scope', scope: 'unit-1' }],
 };

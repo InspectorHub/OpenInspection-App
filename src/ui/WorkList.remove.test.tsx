@@ -89,6 +89,29 @@ describe('Remove dialog: what it shows', () => {
     expect(within(dialog).queryByText(/created on this device/i)).toBeNull();
   });
 
+  // Tag changes are not in the queue, so without their own line the person confirming a removal would not be told they
+  // are about to lose them.
+  it('warns about tag changes the server has not been told about, with their number, and only then', async () => {
+    await seedPkg(w.db, { id: 'q1', scheduledAt: at(0), quarantine: 'reconcile_missing' });
+    const row = (tag: string, state: string, inspection = 'q1'): Promise<unknown> =>
+      w.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES ('tenant-1:alice', ?, 'item-1', ?, 'Urgent', NULL, ?, 1)", [inspection, tag, state]);
+    await row('t-add', 'add');
+    await row('t-remove', 'remove');
+    await row('t-synced', 'synced'); // the server has it: not counted
+    await row('t-other', 'add', 'another-inspection'); // another inspection's: not counted
+    renderList(w.stack);
+    const dialog = await openDialog('q1');
+    expect(await within(dialog).findByText('Tag changes waiting to be sent: 2')).toBeInTheDocument();
+  });
+
+  it('says nothing about tags when none are waiting', async () => {
+    await seedPkg(w.db, { id: 'q1', scheduledAt: at(0), quarantine: 'reconcile_missing' });
+    renderList(w.stack);
+    const dialog = await openDialog('q1');
+    expect(await within(dialog).findByText('Edits on this device that are not on the server: No')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/tag changes/i)).toBeNull();
+  });
+
   it('flags an inspection created on this device and never sent', async () => {
     await seedPkg(w.db, { id: 'q1', scheduledAt: at(0), quarantine: 'reconcile_missing', confirmed: 0 });
     renderList(w.stack);

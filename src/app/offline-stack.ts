@@ -5,6 +5,9 @@ import { loadIdentity, writeDeviceState, type StoredIdentity } from '../auth/ser
 import type { TokenManager } from '../auth/tokens';
 import { CollabIssue, createCollabConnector, type CollabStatus, type NativeCollabConnector, type SocketFactory } from '../collab/connector';
 import { realTimers, type TimerPort } from '../collab/timers';
+import { createApiClient } from '../field/api-client';
+import { recordRejected } from '../field/item-tags-notice';
+import { createItemTagSync } from '../field/item-tags-sync';
 import { createNativeUploader, type NativeUploader } from '../media/native-uploader';
 import { createDefectResolver, createWithDoc, createPendingResolver, type WithDoc } from '../media/pending-doc';
 import { createMediaReconciler, type MediaReconciler } from '../media/reconcile';
@@ -79,7 +82,7 @@ export interface StackStatus {
 }
 
 /** Fixed codes the stack reports about failures it swallowed. Never an error object, an id, a path or a url. */
-export type StackDiagnostic = 'replay_error' | 'refresh_error' | 'reconcile_error' | 'uploader_error' | 'media_error' | 'collab_error' | 'doc_error' | 'proof_error' | 'sweep_failed' | 'sweep_timeout' | 'start_failed' | 'factory_failed';
+export type StackDiagnostic = 'replay_error' | 'refresh_error' | 'reconcile_error' | 'uploader_error' | 'media_error' | 'collab_error' | 'doc_error' | 'proof_error' | 'sweep_failed' | 'sweep_timeout' | 'tags_error' | 'start_failed' | 'factory_failed';
 
 export type EditorEvent = { kind: 'purging' | 'quarantined' | 'unquarantined'; inspectionId: string };
 
@@ -586,6 +589,90 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     },
   };
 
+  // The tags a person put on checklist items are kept on the device as rows with a state, not in the outbox (`item-tags-sync.ts`),
+  // and this is what sends them when no editor is open. It follows the replayer's triggers and gates: it starts after the first
+  // replay, runs again on the network returning, the app coming to the front, an unlock (or a server that was too old no longer
+  // being so) and a confirmed sign-in, and sends nothing while the stack has stopped, the device is locked or the server too old
+  // (the api client's gate and `syncBlocked`), the account is not the stored one (signed out, data cleared), or the device is
+  // offline. An inspection that is blocked (being removed) is skipped row by row. Runs one at a time; a trigger during a run
+  // makes one more run after it. A failure here is reported and changes nothing else.
+  let tagsOnline = false;
+  const tagSync = createItemTagSync({
+    api: createApiClient({
+      http,
+      tokens,
+      origin,
+      clientHeaders,
+      gate: async () => !(await stackLocked()),
+      serverTooOld: () => deps.serverTooOld?.get() === true,
+    }),
+    db,
+    account: bound,
+    isOnline: () => tagsOnline,
+    isBlocked,
+    now: () => clock.now(),
+    // No editor is here to say so: the count is kept until the next editor open tells the person (`item-tags-notice.ts`).
+    onRejected: (count) => {
+      void recordRejected(db, bound, count).catch(report('tags_error'));
+    },
+  });
+  let tagsStarted = false;
+  let tagRun: Promise<void> | null = null;
+  let tagAgain = false;
+
+  async function flushTagsOnce(): Promise<void> {
+    try {
+      if (stopped || (await syncBlocked())) return;
+      if ((await account()) === null) return;
+      tagsOnline = await network.online().catch(() => false);
+      if (!tagsOnline) return;
+      await tagSync.flush();
+    } catch {
+      report('tags_error')();
+    }
+  }
+
+  function triggerTags(): void {
+    if (stopped || !tagsStarted) return;
+    if (tagRun !== null) {
+      tagAgain = true;
+      return;
+    }
+    const run = (async (): Promise<void> => {
+      do {
+        tagAgain = false;
+        await flushTagsOnce();
+      } while (tagAgain && !stopped);
+    })().finally(() => {
+      tagRun = null;
+    });
+    tagRun = run;
+  }
+
+  function tagsIdle(): Promise<void> {
+    return tagRun ?? Promise.resolve();
+  }
+
+  /** Called once by the start sequence, after the first replay. */
+  function startTags(): void {
+    if (stopped || tagsStarted) return;
+    tagsStarted = true;
+    teardown.push(
+      network.onChange((online) => {
+        if (online) triggerTags();
+      }),
+    );
+    if (appState) {
+      teardown.push(
+        appState.onChange((active) => {
+          if (active) triggerTags();
+        }),
+      );
+    }
+    teardown.push(subscribeUnlocked(triggerTags));
+    triggerTags();
+  }
+
   const trackedConnector: NativeCollabConnector = {
     ...connector,
     connect: (inspectionId, opts) => {
@@ -800,6 +887,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     if (stopped) return;
     await firstReplay();
     if (stopped) return;
+    // Not waited for: a tag that is not on the server yet blocks the automatic clean-up of its inspection (`unsent.ts`), so the
+    // reconciler need not follow it, and a slow server must not hold the reconcile and the refresh back.
+    startTags();
     reconcile.start();
     reconcileStarted = true;
     await reconcile.idle();
@@ -853,6 +943,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
           triggerReconcile('token');
           // A run of uploads halted for the sign-in resumes at once instead of waiting for its slow timer.
           if (mediaStarted) media.trigger();
+          triggerTags();
         }),
       );
     }
@@ -875,6 +966,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     if (stopping !== null) return stopping;
     stopped = true;
     latestPlan = null;
+    tagsStarted = false;
     for (const off of teardown.splice(0)) off();
     for (const release of [...releases]) release();
     replay.stop();
@@ -951,6 +1043,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       await refresher.idle();
       await reconcile.idle();
       await media.idle();
+      await tagsIdle();
     },
     isStopped: () => stopped,
   };

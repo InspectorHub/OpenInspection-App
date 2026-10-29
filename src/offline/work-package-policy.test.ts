@@ -78,7 +78,7 @@ describe('a manual request during a run is not answered with that run', () => {
     expect(await background).toBe(summary);
     expect(summary).toMatchObject({ refreshed: 1, skipped: 0 });
     expect(windowLists()).toBe(2);
-    expect(w.pkg.forInspection('t1')).toHaveLength(3);
+    expect(w.pkg.forInspection('t1')).toHaveLength(4);
   });
 
   it('a request that is not manual shares the run and queues nothing, and a manual one during a manual run does not repeat it', async () => {
@@ -128,7 +128,7 @@ describe('a call made from the end of a run', () => {
     expect(first.halted).toBe('auth');
     await again;
     expect(windowLists()).toBe(1);
-    expect(w.pkg.forInspection('t1')).toHaveLength(3);
+    expect(w.pkg.forInspection('t1')).toHaveLength(4);
   });
 });
 
@@ -294,7 +294,7 @@ describe('the write-time checks', () => {
     w = await createPackageWorld({ concurrency: 1 });
     w.serve('m1', { row: { propertyType: 'multi_family' } });
     expect(await w.run()).toMatchObject({ refreshed: 1 });
-    expect(w.pkg.forInspection('m1')).toHaveLength(5);
+    expect(w.pkg.forInspection('m1')).toHaveLength(6);
     w.pkg.requests.length = 0;
     w.pkg.overrides.set('/api/inspections/m1/results', () => jsonReply(403, { success: false }));
     const summary = await w.run();

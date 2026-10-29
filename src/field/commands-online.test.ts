@@ -29,6 +29,15 @@ describe('online: publish', () => {
     expect(api.calls[2]?.json).toEqual({ summary: 'Fixed roof' });
   });
 
+  it('the publish request carries the key the editor holds across a retry; control: no key, no header', async () => {
+    const keyed = await send(only('publish', 1), [], 'key-9');
+    expect(keyed.api.calls[0]?.idempotencyKey).toBe('key-9');
+    const plainSend = await send(only('publish', 1));
+    expect(plainSend.api.calls[0]?.idempotencyKey).toBeUndefined();
+    const full = await send(only('publish'), [], 'key-9');
+    expect(full.api.calls.map((c) => c.idempotencyKey)).toEqual([undefined, undefined, 'key-9']);
+  });
+
   it('control: a bare publish is one request with an empty body', async () => {
     const { api } = await send(only('publish', 1));
     expect(api.calls).toHaveLength(1);
@@ -82,6 +91,27 @@ describe('online: one request commands', () => {
     expect(api.calls).toHaveLength(1);
     expect(`${api.calls[0]?.method} ${api.calls[0]?.path}`).toBe(route);
     expect(api.calls[0]?.json).toEqual(body);
+  });
+
+  it('a sign-off sends the signer only when the command names one: both present are sent, both absent are left out', async () => {
+    const both = await send(only('compliance', 0));
+    expect(both.api.calls[0]?.json).toMatchObject({ personId: 'p1', name: 'Sam' });
+    const absent = await send(only('compliance', 6));
+    expect(absent.result.ok).toBe(true);
+    expect(absent.api.calls[0]?.json).toEqual({ role: 'field_observer', license: null, dualRole: false });
+    expect(Object.keys(absent.api.calls[0]?.json as object)).not.toContain('personId');
+    expect(Object.keys(absent.api.calls[0]?.json as object)).not.toContain('name');
+  });
+
+  it('a sign-off with only one of the two is refused without a request, because the server refuses it', async () => {
+    for (const cmd of [
+      { type: 'compliance', op: 'signoff', role: 'field_observer', personId: 'p1', license: null, dualRole: false },
+      { type: 'compliance', op: 'signoff', role: 'field_observer', name: 'Sam', license: null, dualRole: false },
+    ] as const) {
+      const { api, result } = await send(cmd);
+      expect(result.ok).toBe(false);
+      expect(api.calls).toHaveLength(0);
+    }
   });
 
   it('the keyed creating commands carry the key, the others do not', async () => {
@@ -254,7 +284,7 @@ describe('online: structure', () => {
   });
 
   it('save-structure-template back reads the source name, then updates the source in place', async () => {
-    const { api, result } = await send(only('save-structure-template', 1), [reply(200, { data: { name: ' Source ' } })]);
+    const { api, result } = await send(only('save-structure-template', 1), [reply(200, { data: { template: { id: 'tpl-1', name: ' Source ' } } })]);
     expect(result.ok).toBe(true);
     expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/inspections/templates/tpl-1', 'PUT /api/inspections/templates/tpl-1']);
     expect(api.calls[1]?.json).toMatchObject({ name: 'Source' });
@@ -276,7 +306,7 @@ describe('online: structure', () => {
     expect(noId.api.calls).toHaveLength(0);
     const unreadable = await send(only('save-structure-template', 1), [reply(404)]);
     expect(unreadable.result).toEqual({ ok: false, error: MESSAGES.sourceTemplateUnreadable });
-    const nameless = await send(only('save-structure-template', 1), [reply(200, { data: { name: ' ' } })]);
+    const nameless = await send(only('save-structure-template', 1), [reply(200, { data: { template: { id: 'tpl-1', name: ' ' } } })]);
     expect(nameless.result).toEqual({ ok: false, error: MESSAGES.sourceTemplateUnnamed });
     for (const r of [unreadable, nameless]) expect(r.api.calls.map((c) => c.method)).toEqual(['GET']);
   });
