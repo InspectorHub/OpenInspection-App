@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createAppOriginHandler, createHttpsPassthrough, isAppOrigin } from './app-origin.ts';
 import { createKvHost } from './data/kv.ts';
 import { createFilesHost } from './data/files-host.ts';
+import { createDialogsHost } from './dialogs.ts';
 import { createMediaFileResolver, createUploaderHost } from './net/uploader-host.ts';
 import { createUploadTransport } from './net/upload-transport.ts';
 import { createMediaFileResponse, createMediaProtocolHandler } from './data/media-protocol.ts';
@@ -172,6 +173,13 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     applyPermissionPolicy(session.defaultSession);
     protocol.handle('https', createAppOriginHandler({ rendererRoot: paths.rendererRoot, readFile, passthrough: createHttpsPassthrough(net), packaged: app.isPackaged }));
     filesHost = createFilesHost({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
+    const dialogsHost = createDialogsHost({
+      dialog: { showSaveDialog: (options) => dialog.showSaveDialog(options as Parameters<typeof dialog.showSaveDialog>[0]) },
+      fs,
+      cacheRoot: join(paths.userData, 'cache'),
+      downloadsDir: app.getPath('downloads'),
+      showItemInFolder: (path) => shell.showItemInFolder(path),
+    });
     uploaderHost = createUploaderHost({ transport: createUploadTransport(), resolveMediaFile: createMediaFileResolver({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache') }),
       timers: { setTimeout, clearTimeout }, random: Math.random, packaged: app.isPackaged });
     uploaderHost.onEvent((event) => { try { uploaderContents?.send(EVENT_CHANNELS.uploaderEvent, event); } catch { /* renderer lifecycle can race a completion */ } });
@@ -185,6 +193,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       fetchFile: createMediaFileResponse,
     }));
     const files = filesHost;
+    registerHandler(registerDeps, 'dialogs:save-export', validators.dialogs.saveExport, async (fileUri, suggestedName) => dialogsHost.saveExport(fileUri, suggestedName));
     registerHandler(registerDeps, 'files:write', validators.files.write, async (path, bytes) => files.write(path, bytes));
     registerHandler(registerDeps, 'files:size', validators.files.size, async (path) => files.size(path));
     registerHandler(registerDeps, 'files:read', validators.files.read, async (path) => files.read(path));
