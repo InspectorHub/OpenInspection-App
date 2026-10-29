@@ -12,7 +12,7 @@ function setup(packaged = false) {
   const order: string[] = [];
   let destroyed = false;
   const webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler: vi.fn() });
-  const win = Object.assign(new EventEmitter(), { webContents, isDestroyed: () => destroyed, isMinimized: () => true, restore: () => { order.push('restore'); }, focus: () => { order.push('focus'); }, loadURL: vi.fn(async () => {}) });
+  const win = Object.assign(new EventEmitter(), { webContents, isDestroyed: () => destroyed, isMinimized: () => true, isFocused: () => false, setProgressBar: vi.fn(), restore: () => { order.push('restore'); }, focus: () => { order.push('focus'); }, loadURL: vi.fn(async () => {}) });
   const create = vi.fn((_options: BrowserWindowConstructorOptions): ShellWindow => win);
   const setApplicationMenu = vi.fn();
   const controller = createWindowController({ packaged, preload: '/preload.cjs', create, setApplicationMenu, openExternal: async () => {}, log: vi.fn() });
@@ -28,6 +28,21 @@ it.each([true, false])('creates one isolated window with the fixed entry: packag
   expect(create.mock.calls[0]![0]).toEqual({ width: 1280, height: 800, minWidth: 480, minHeight: 640, title: 'InspectorHub', webPreferences: { preload: '/preload.cjs', contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, backgroundThrottling: false, devTools: !packaged, spellcheck: false, webviewTag: false } });
   expect(win.loadURL).toHaveBeenCalledExactlyOnceWith('https://localhost');
   expect(setApplicationMenu.mock.calls).toEqual(packaged ? [[null]] : []);
+});
+
+it('keeps renderer timers active and maps focus/restore/show and minimize/hide to app state', () => {
+  const states: boolean[] = [];
+  const { create, win } = setup();
+  // The controller callback is wired by the main process to DesktopBridge app-state listeners.
+  const windowController = createWindowController({ packaged: false, preload: '/preload.cjs', create, setApplicationMenu: vi.fn(), openExternal: async () => {}, log: vi.fn(), onActiveChange: (active) => states.push(active) });
+  windowController.ensure();
+  win.emit('focus');
+  win.emit('restore');
+  win.emit('show');
+  win.emit('minimize');
+  win.emit('hide');
+  expect(create.mock.calls[0]![0].webPreferences?.backgroundThrottling).toBe(false);
+  expect(states).toEqual([true, true, true, false, false]);
 });
 
 it('restores before focus, tolerates missing/destroyed/closing windows, and recreates only on ensure', () => {
@@ -90,6 +105,8 @@ it('does not let an old window cancellation reset the replacement window close s
     webContents: Object.assign(new EventEmitter(), { setWindowOpenHandler: vi.fn() }),
     isDestroyed: getDestroyed,
     isMinimized: () => true,
+    isFocused: () => false,
+    setProgressBar: vi.fn(),
     restore: () => { order.push('restore'); },
     focus: () => { order.push('focus'); },
     loadURL: vi.fn(async () => {}),

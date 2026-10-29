@@ -6,11 +6,13 @@ import { applyNavigationGuards, type WindowLike } from './security.ts';
 export interface ShellWindow extends WindowLike {
   isDestroyed(): boolean;
   isMinimized(): boolean;
+  isFocused(): boolean;
   restore(): void;
   focus(): void;
+  setProgressBar(value: number, options?: { mode: 'normal' | 'error' | 'none' }): void;
   loadURL(url: string): Promise<void>;
   on(event: 'close', listener: (event: ElectronEvent) => void): unknown;
-  on(event: 'closed', listener: () => void): unknown;
+  on(event: 'closed' | 'focus' | 'restore' | 'show' | 'minimize' | 'hide', listener: () => void): unknown;
 }
 
 export function createWindowController(deps: {
@@ -20,7 +22,8 @@ export function createWindowController(deps: {
   setApplicationMenu(menu: null): void;
   openExternal(url: string): Promise<void>;
   log(event: LogEvent): void;
-  onCreated?(window: ShellWindow): void;
+  onCreated?(window: ShellWindow): void | (() => void);
+  onActiveChange?(active: boolean): void;
 }): { ensure(): void; focus(): void } {
   let window: ShellWindow | undefined;
   let closing = false;
@@ -34,7 +37,12 @@ export function createWindowController(deps: {
           allowRunningInsecureContent: false, backgroundThrottling: false, devTools: !deps.packaged, spellcheck: false, webviewTag: false },
       });
       window = created;
-      deps.onCreated?.(created);
+      const dispose = deps.onCreated?.(created);
+      created.on('focus', () => deps.onActiveChange?.(true));
+      created.on('restore', () => deps.onActiveChange?.(true));
+      created.on('show', () => deps.onActiveChange?.(true));
+      created.on('minimize', () => deps.onActiveChange?.(false));
+      created.on('hide', () => deps.onActiveChange?.(false));
       closing = false;
       applyNavigationGuards(created, deps);
       let closeAttempt = 0;
@@ -45,7 +53,10 @@ export function createWindowController(deps: {
           if (event.defaultPrevented && attempt === closeAttempt && window === created && !created.isDestroyed()) closing = false;
         });
       });
-      created.on('closed', () => { if (window === created) window = undefined; });
+      created.on('closed', () => {
+        dispose?.();
+        if (window === created) window = undefined;
+      });
       void created.loadURL(APP_ORIGIN).catch(() => { deps.log('renderer-load-failed'); });
     },
     focus() {

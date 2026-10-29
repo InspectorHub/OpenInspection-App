@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, net, protocol, safeStorage, session, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, net, protocol, safeStorage, session, shell, ipcMain, powerMonitor, powerSaveBlocker, dialog, Notification } from 'electron';
 import { mkdirSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -25,6 +25,13 @@ import { createWindowController } from './window.ts';
 import { createDeepLinkHub, extractCallbackUrl } from './auth/deep-link.ts';
 import { isAllowedExternalUrl } from './auth/open-external.ts';
 import { registerProtocolClient } from './auth/protocol-client.ts';
+import { createPowerBridge, createPowerSaveGuard } from './lifecycle/power.ts';
+import { createQuitGuard } from './lifecycle/quit-guard.ts';
+import { createUploadNotifier } from './lifecycle/notify.ts';
+import { createTaskbarProgress } from './lifecycle/taskbar.ts';
+import { shutdownDesktop } from './lifecycle/shutdown.ts';
+
+app.setAppUserModelId('io.inspectorhub.app');
 
 const paths = resolveStartupPaths({ packaged: app.isPackaged, appData: app.getPath('appData'), appPath: app.getAppPath(), env: process.env });
 const runSecurityCommand: SecurityCommand = (command, args) => {
@@ -76,6 +83,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
   const windows = createWindowController({ packaged: app.isPackaged, preload: join(__dirname, '../preload/index.cjs'),
     create: (options) => new BrowserWindow(options), setApplicationMenu: (menu) => Menu.setApplicationMenu(menu),
     openExternal: (url) => isAllowedExternalUrl(url, { packaged: app.isPackaged }) ? shell.openExternal(url) : Promise.resolve(), log,
+    onActiveChange: (active) => { try { uploaderContents?.send(EVENT_CHANNELS.activeChange, active); } catch { /* renderer lifecycle can race a transition */ } },
     onCreated: (win) => {
       const currentContents = win.webContents as unknown as { send(channel: string, payload: unknown): void };
       uploaderContents = currentContents;
@@ -83,6 +91,46 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       watchRendererDbLifecycle(contents, () => dbHost);
       contents.on('destroyed', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); if (uploaderContents === currentContents) uploaderContents = null; });
       contents.on('render-process-gone', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); });
+      const quitGuard = createQuitGuard({
+        uploads: () => uploaderHost?.activeCount() ?? 0,
+        confirm: async () => {
+          const answer = await dialog.showMessageBox({ type: 'warning', title: 'Uploads are still running',
+            message: 'Uploads are still running. Quit InspectorHub?', buttons: ['Quit', 'Stay'], defaultId: 1, cancelId: 1, noLink: true });
+          return answer.response === 0 ? 'quit' : 'stay';
+        },
+        quit: () => app.quit(),
+        shutdown: () => shutdownDesktop({
+          abortUploads: () => uploaderHost?.abortAll('quit'),
+          state: {
+            get opening() { return dbOpening; },
+            set opening(value) { dbOpening = value; },
+            get host() { return dbHost; },
+            set host(value) { dbHost = value; },
+          },
+        }),
+      });
+      win.on('close', (event) => { void quitGuard.onClose(event).catch(() => log('quit-shutdown-failed')); });
+      const removeTaskbar = uploaderHost ? createTaskbarProgress({ win, uploader: uploaderHost }) : () => {};
+      const notifier = createUploadNotifier({ Notification, isFocused: () => win.isFocused(), now: Date.now });
+      let batchActive = false;
+      let failures = 0;
+      const removeUploadEvents = uploaderHost?.onEvent((event) => {
+        if (event.name === 'failed') failures += 1;
+      }) ?? (() => {});
+      const removeUploadCount = uploaderHost?.onActiveCountChange((count) => {
+        if (count > 0) batchActive = true;
+        else if (batchActive) {
+          notifier.onDrained({ failures });
+          batchActive = false;
+          failures = 0;
+        }
+      }) ?? (() => {});
+      return () => {
+        removeTaskbar();
+        removeUploadEvents();
+        removeUploadCount();
+        if (uploaderContents === currentContents) uploaderContents = null;
+      };
     } });
   focus = windows.focus;
   protocol.registerSchemesAsPrivileged([{ scheme: 'oi-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
@@ -127,6 +175,11 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     uploaderHost = createUploaderHost({ transport: createUploadTransport(), resolveMediaFile: createMediaFileResolver({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache') }),
       timers: { setTimeout, clearTimeout }, random: Math.random, packaged: app.isPackaged });
     uploaderHost.onEvent((event) => { try { uploaderContents?.send(EVENT_CHANNELS.uploaderEvent, event); } catch { /* renderer lifecycle can race a completion */ } });
+    const disposePowerBridge = createPowerBridge({ powerMonitor, uploader: uploaderHost, emitActive: (active) => {
+      try { uploaderContents?.send(EVENT_CHANNELS.activeChange, active); } catch { /* renderer lifecycle can race a power transition */ }
+    } });
+    const disposePowerSaveGuard = createPowerSaveGuard({ blocker: powerSaveBlocker, uploader: uploaderHost });
+    app.once('will-quit', () => { disposePowerBridge(); disposePowerSaveGuard(); });
     protocol.handle('oi-media', createMediaProtocolHandler({
       mediaRoot: join(paths.userData, 'media'),
       fetchFile: createMediaFileResponse,

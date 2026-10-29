@@ -9,9 +9,11 @@ it('writes only closed safe event categories without secret-bearing fields or ex
   try {
     const log = createLogger(root);
     log('startup');
+    log('quit-shutdown-failed');
     Reflect.apply(log, null, ['auth-code=SECRET_TOKEN https://server/?token=SECRET_QUERY', { argv: ['SECRET_ARGV'], error: new Error('SECRET_ERROR') }]);
     const text = readFileSync(join(root, 'logs/main.log'), 'utf8');
     expect(text).toContain('startup');
+    expect(text).toContain('quit-shutdown-failed');
     expect(text).not.toContain('SECRET');
     expect(JSON.parse(text.trim())).toEqual({ time: expect.any(String), event: 'startup' });
   } finally { rmSync(root, { recursive: true, force: true }); }
