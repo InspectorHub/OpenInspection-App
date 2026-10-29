@@ -9,7 +9,7 @@ const root = await realpath(directory);
 
 const server = createServer(async (request, response) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405).end(); return; }
-  let requested: string;
+  let requested;
   try { requested = decodeURIComponent(new URL(request.url ?? '/', 'http://127.0.0.1').pathname.slice(1)); }
   catch { response.writeHead(400).end(); return; }
   if (!requested || requested.includes('\0')) { response.writeHead(404).end(); return; }
