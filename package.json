@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p electron",
     "build:electron": "node scripts/build-electron.mjs && npm run build:electron:renderer",
     "build:heic-helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-heic-helper.ps1",
+    "build:e2e-heic-helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-e2e-heic-helper.ps1",
     "build:electron:renderer": "vite build -c vite.electron.config.ts",
     "package:win": "npm run build && npm run build:electron && npm run build:heic-helper && electron-builder --config electron/builder/electron-builder.config.mjs --publish never",
     "check:electron-package": "node scripts/check-electron-package.mjs",

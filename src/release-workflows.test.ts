@@ -485,6 +485,21 @@ describe('release workflow job concurrency', () => {
 });
 
 describe('Windows workflow hardening', () => {
+  it('records the hosted Windows runner HEIF and HEVC extension inventory before building the helper', () => {
+    const steps = job(ci.wf, 'windows').steps;
+    const inventoryIndex = steps.findIndex((s) => s.name === 'Record Windows HEIF and HEVC codec inventory');
+    const helperIndex = steps.findIndex((s) => (s.run ?? '').includes('build:heic-helper'));
+    expect(inventoryIndex).toBeGreaterThanOrEqual(0);
+    expect(inventoryIndex).toBeLessThan(helperIndex);
+    const inventory = steps[inventoryIndex]?.run ?? '';
+    expect(inventory).toContain('Get-AppxPackage');
+    expect(inventory).toContain('Microsoft.HEIFImageExtension');
+    expect(inventory).toContain('Microsoft.HEVCVideoExtension');
+    expect(inventory).toContain('Get-AppxPackage -ErrorAction Stop');
+    expect(inventory).toContain('Query scope:');
+    expect(inventory).toContain('GITHUB_STEP_SUMMARY');
+  });
+
   it('builds the real HEIC helper before packaging in CI and release verify', () => {
     const ciWindows = job(ci.wf, 'windows');
     const verify = job(windows.wf, 'verify');

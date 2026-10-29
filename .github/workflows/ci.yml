@@ -57,6 +57,26 @@ jobs:
       - run: npm run build
       - run: npm run check:bundle
       - run: npm run build:electron
+      - name: Record Windows HEIF and HEVC codec inventory
+        shell: pwsh
+        run: |
+          $names = @('Microsoft.HEIFImageExtension', 'Microsoft.HEVCVideoExtension')
+          $queryScope = 'all users'
+          $packages = @()
+          try {
+            $packages = @(Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $_.Name -in $names })
+          } catch {
+            $allUsersError = $_.Exception.GetType().Name
+            $queryScope = "current user (all-users query: $allUsersError)"
+            try {
+              $packages = @(Get-AppxPackage -ErrorAction Stop | Where-Object { $_.Name -in $names })
+            } catch {
+              $currentUserError = $_.Exception.GetType().Name
+              $queryScope = "unavailable (all-users query: $allUsersError; current-user query: $currentUserError)"
+            }
+          }
+          $inventory = if ($packages.Count -eq 0) { @('- No installed HEIF or HEVC extension packages were returned in the query scope.') } else { @($packages | Sort-Object Name | ForEach-Object { "- $($_.Name) $($_.Version) $($_.Architecture)" }) }
+          @('### Windows HEIF and HEVC extension inventory', '', "- Query scope: $queryScope", '') + $inventory + @('') | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
       - name: Build the Windows HEIC helper
         run: npm run build:heic-helper
       - name: Record the helper SHA-256
@@ -74,4 +94,6 @@ jobs:
       - name: Build the unpacked Windows package
         run: npx electron-builder --dir --win --x64 --config electron/builder/electron-builder.config.mjs --publish never
       - run: npm run check:electron-package
+      - name: Build the E2E codec-missing helper
+        run: npm run build:e2e-heic-helper
       - run: npx playwright test -c e2e-electron/playwright.config.ts --project=ci

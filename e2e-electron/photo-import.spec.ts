@@ -25,6 +25,7 @@ test.beforeEach(async () => {
   environment.OI_USER_DATA_DIR = userData;
   environment.OI_RENDERER_ROOT = resolve('dist-electron/renderer');
   environment.OI_E2E_DISABLE_PROTOCOL_REGISTRATION = '1';
+  environment.OI_E2E_HEIC_HELPER = resolve('.superpowers/sdd/plan-d2-windows-electron/helper-codec-missing.exe');
   electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
   page = await electronApp.firstWindow();
   await expect(page.getByRole('heading', { name: 'Choose your server' })).toBeVisible();
@@ -147,6 +148,25 @@ test('imports valid photos and reports an unsupported neighbor in the same libra
   await page.getByRole('button', { name: 'Add from library' }).click();
   await (await narrowPicker).setFiles({ name: 'narrow.jpg', mimeType: 'image/jpeg', buffer: jpeg });
   await expect(page.getByText('3 photos', { exact: true })).toBeVisible();
+});
+
+test('a missing Windows codec skips only the HEIC while the JPEG in its batch uploads', async () => {
+  await signIn();
+  await seedEditorPackage();
+  const [heic, jpeg] = await Promise.all([
+    readFile(resolve('src/media/heic/fixtures/fixture-64x48.heic')),
+    readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg')),
+  ]);
+  const chooser = await openLibrary();
+  await chooser.setFiles([
+    { name: 'codec-missing.heic', mimeType: 'image/heic', buffer: heic },
+    { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+  ]);
+
+  await expect(page.getByText(/Windows cannot decode this HEIC photo.*Install HEIF Image Extensions.*HEVC Video Extensions.*export the photo from your phone as JPEG/s)).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
+  expect(engine.uploads.size).toBe(1);
+  expect(engine.uploadCounts.size).toBe(1);
 });
 
 test('offline import explains an unsupported file and still stores its valid neighbor', async () => {
@@ -293,6 +313,7 @@ test('original-quality keeps a large JPEG unchanged and rejects it, while normal
   await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBeNull();
   await input.setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg });
   await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
+  await expect.poll(() => engine.uploads.size).toBe(1);
   expect(engine.uploadContentLengths).toHaveLength(1);
   expect(engine.uploadContentLengths[0]).toBeLessThan(1024 * 1024);
   expect(engine.uploads.size).toBe(1);
