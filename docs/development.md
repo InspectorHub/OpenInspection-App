@@ -87,6 +87,18 @@ The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt 
 
 The desktop shell serves local renderer files from `https://localhost`. Its page, script, and Worker responses share one strict CSP, including in development: neither `unsafe-eval` nor `wasm-unsafe-eval` is allowed. An earlier plan relaxed the Worker policy for a bundled WASM HEIC decoder. The 2026-10-27 revision moved decoding to a main-process system helper and removed that relaxation entirely. A future bundled decoder (L2) must revisit this decision together with the CSP tests.
 
+### HEIC decoder H0 probe (2026-10-29)
+
+The development machine reported Windows 11 Pro, version `10.0.26300` (64-bit). The current-user AppX inventory contained `Microsoft.HEIFImageExtension` 1.2.62.0 and `Microsoft.HEVCVideoExtension` 2.5.48.0. A one-off WIC COM probe returned `S_OK` when creating both the HEIF decoder and encoder components. This confirms the components are registered on that machine; the synthetic decode result is described below.
+
+Initially, no HEIC fixture or `heif-enc` executable was available in the repository or on `PATH`. Three synthetic 64×48 WIC encoding variants using `WritePixels` failed with `0x80070057` (`E_INVALIDARG`). A follow-up using `CreateBitmapFromMemory` and `IWICBitmapFrameEncode::WriteSource` succeeded: a 3,115-byte synthetic HEIC decoded through WPF `BitmapDecoder` as one 64×48 Bgr32 frame. This validates only the small-image encode/decode path on this host.
+
+Separate WIC performance probes generated deterministic synthetic 12 MP and 48 MP HEIC files. On this host, five WPF `BitmapDecoder` samples for 12 MP had a median of 1,655.67 ms and nearest-rank IQR of 68.54 ms. Three native C++ WIC decode samples for 48 MP had a median of 3,031.63 ms and nearest-rank IQR of 190.73 ms; the largest whole-process peak working set was about 456.6 MiB. The 12 MP memory figures were also whole-process observations, not isolated decoder allocations. These measurements are not packaged-helper or iPhone-photo performance results.
+
+Rotation, grid/primary-image selection, Display P3, 10-bit/HDR, the no-extension HRESULT, native file-picker filtering, and Chromium `File.type` remain unmeasured. No codec was installed or removed. The extension inventory and WIC registration do not establish whether Windows 11 24H2 ships either extension by default.
+
+The Microsoft Store listings verified for the user-facing install guidance are [HEIF Image Extension](https://apps.microsoft.com/detail/9pmmsr1cgpwg) and [HEVC Video Extensions from Device Manufacturer](https://apps.microsoft.com/detail/9n4wgh0z6vhq). The paid [HEVC Video Extensions](https://apps.microsoft.com/detail/9nmzlz57r3t7) listing is separate. The user's Store availability and regional behavior were not tested.
+
 Run the shell smoke test after `npm run build:electron` with `npm run test:e2e:electron -- --project=ci shell.spec.ts`. The fixture checks renderer isolation, navigation, single-instance focus, and loopback WebSocket, HTTPS Range and streamed responses. Its loopback certificate and private key are public test fixtures, never production credentials. Real-server `wss://` coverage belongs to the Diagnostics collaboration-ticket checks in the later integration tasks.
 
 Development-only `OI_USER_DATA_DIR`, `OI_RENDERER_ROOT`, `OI_E2E_HEIC_HELPER`, and `OI_E2E_NO_HEIC_DECODER` overrides are ignored before access in packaged builds. Chromium's own `--user-data-dir` switch is separate from these test overrides.
