@@ -17,6 +17,7 @@
     "build:dev": "tsc --noEmit && node -e \"process.env.NODE_ENV='development';import('vite').then(v=>v.build({mode:'development'}))\"",
     "typecheck": "tsc --noEmit && tsc --noEmit -p electron",
     "build:electron": "node scripts/build-electron.mjs",
+    "test:e2e:electron": "playwright test -c e2e-electron/playwright.config.ts",
     "check:bundle": "node scripts/check-release-bundle.mjs",
     "test": "vitest run",
     "cap:sync": "cap sync",
@@ -58,6 +59,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.3",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

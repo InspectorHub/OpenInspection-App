@@ -1,5 +1,5 @@
 import { IpcError, isIpcErrorCode, type IpcEnvelope } from '../../shared/ipc-contract.ts';
-import { APP_ORIGIN } from '../app-origin.ts';
+import { isAppOrigin } from '../app-origin.ts';
 import { InvalidArgumentError } from './validate.ts';
 
 /** The part of Electron's `ipcMain` that is used. */
@@ -29,13 +29,7 @@ export interface RegisterDeps {
 export function isTrustedSender(event: SenderEvent): boolean {
   const frame = event.senderFrame;
   if (frame === null || frame.parent !== null) return false;
-  try {
-    const expected = new URL(APP_ORIGIN);
-    const url = new URL(frame.url);
-    return url.protocol === expected.protocol && url.host === expected.host && url.username === '' && url.password === '';
-  } catch {
-    return false;
-  }
+  return isAppOrigin(frame.url);
 }
 
 /**
