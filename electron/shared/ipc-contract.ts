@@ -70,7 +70,7 @@ export interface DecodeHeicRequest {
   maxLongEdge: number;
   keepOriginal?: { maxBytes: number };
 }
-export type DecodeHeicReply = { ok: true; jpeg: ArrayBuffer } | { ok: false; code: HeicDecodeCode };
+export type DecodeHeicReply = { ok: true; jpeg: Uint8Array } | { ok: false; code: HeicDecodeCode };
 
 export interface DesktopBridge {
   readonly apiVersion: 1;
@@ -198,14 +198,14 @@ export type IpcEnvelope = { ok: true; value: unknown } | { ok: false; code: IpcE
 
 export const isIpcErrorCode = (value: unknown): value is IpcErrorCode => (IPC_ERROR_CODES as readonly unknown[]).includes(value);
 
-const isArrayBuffer = (value: unknown): value is ArrayBuffer => Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+const isUint8Array = (value: unknown): value is Uint8Array => ArrayBuffer.isView(value) && Object.prototype.toString.call(value) === '[object Uint8Array]';
 
 /** The renderer-side check of a decode reply: a closed shape, a closed code, a real buffer. */
 export function isDecodeHeicReply(value: unknown): value is DecodeHeicReply {
   if (typeof value !== 'object' || value === null) return false;
   const reply = value as Record<string, unknown>;
   const keys = Object.keys(reply);
-  if (reply.ok === true) return keys.length === 2 && isArrayBuffer(reply.jpeg);
+  if (reply.ok === true) return keys.length === 2 && isUint8Array(reply.jpeg);
   if (reply.ok === false) return keys.length === 2 && (HEIC_DECODE_CODES as readonly unknown[]).includes(reply.code);
   return false;
 }

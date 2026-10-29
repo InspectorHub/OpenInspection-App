@@ -55,7 +55,7 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['updater.check', [], CHANNELS.updater.check],
   ['updater.download', [], CHANNELS.updater.download],
   ['updater.installAndRestart', [], CHANNELS.updater.installAndRestart],
-  ['media.decodeHeic', [{}], CHANNELS.media.decodeHeic],
+  ['media.decodeHeic', [{ bytes: new ArrayBuffer(8), maxLongEdge: 2560 }], CHANNELS.media.decodeHeic],
 ];
 const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState'];
 

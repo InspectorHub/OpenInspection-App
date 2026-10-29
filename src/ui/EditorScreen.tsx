@@ -19,7 +19,7 @@ import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
 
 /** What the editor screen reads of the app's services. */
-export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState'>;
+export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState' | 'decodeImage'>;
 
 export interface EditorScreenProps {
   services: EditorServices;
@@ -120,6 +120,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           stack,
           api,
           files: services.files,
+          ...(services.decodeImage === undefined ? {} : { decodeImage: services.decodeImage }),
           network: flag,
           registry,
           session,

@@ -19,4 +19,16 @@ describe('composeDesktop', () => {
     for (const request of requests) expect(new Headers(request.headers).get('X-Client-Platform')).toBe('windows');
     expect(await services.notifications.check()).toBe('unsupported');
   });
+
+  it('makes the Windows decoder available to the editor services', async () => {
+    const jpeg = Uint8Array.from([0xff, 0xd8, 0xff]);
+    const decodeHeic = vi.fn(async () => ({ ok: true as const, jpeg }));
+    const services = await composeDesktop({ media: { decodeHeic } } as unknown as DesktopBridge);
+    const heic = Uint8Array.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0]);
+
+    const decoded = await services.decodeImage?.(new Blob([heic]), { maxLongEdge: 1920 });
+
+    expect(decodeHeic).toHaveBeenCalledOnce();
+    expect(decoded?.blob.type).toBe('image/jpeg');
+  });
 });

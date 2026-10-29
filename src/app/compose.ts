@@ -12,6 +12,7 @@ import type { SecureStore } from '../platform/secure-store';
 import { recordRefreshed, recordVerified, setRevoked } from '../offline/lock-state';
 import type { Sharer } from '../export/share-package';
 import type { NotificationPermissionPort } from '../platform/notifications';
+import type { DecodeImage } from '@inspectorhub/field-ui';
 import { createClientState, type ClientStateController } from './client-state';
 import { createNotificationAsk, type NotificationAsk } from './notification-ask';
 
@@ -47,6 +48,8 @@ export interface AppServices {
   sharer: Sharer;
   /** Hands an https address to the system browser. Callers check the address first (`httpsHref`); rejects when it cannot be opened. */
   openExternal(url: string): Promise<void>;
+  /** Optional host decoder for image formats the renderer cannot decode, such as desktop HEIC. */
+  decodeImage?: DecodeImage;
   /**
    * Calls the listener after the server accepted this device (a token refresh or a session check) and the verification was
    * recorded. For flows that should look again once the grant is known to be good. Returns the unsubscribe function.
@@ -73,6 +76,8 @@ export interface ComposeParts {
   openExternal?: (url: string) => Promise<void>;
   /** Defaults to one that always rejects, for a build that cannot share. */
   sharer?: Sharer;
+  /** Optional host decoder for image formats the renderer cannot decode. */
+  decodeImage?: DecodeImage;
   closeDb?: () => Promise<void>;
 }
 
@@ -147,6 +152,7 @@ export function composeWith(parts: ComposeParts): AppServices {
     notificationAsk: createNotificationAsk({ kv, permission: notifications }),
     refreshCompat,
     openExternal: parts.openExternal ?? (() => Promise.reject(new Error('This build cannot open links'))),
+    ...(parts.decodeImage === undefined ? {} : { decodeImage: parts.decodeImage }),
     onTokenVerified,
     sharer: parts.sharer ?? { share: () => Promise.reject(new Error('This build cannot share files')) },
     close: parts.closeDb ?? (() => Promise.resolve()),

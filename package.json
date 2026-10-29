@@ -17,6 +17,7 @@
     "build:dev": "tsc --noEmit && node -e \"process.env.NODE_ENV='development';import('vite').then(v=>v.build({mode:'development'}))\"",
     "typecheck": "tsc --noEmit && tsc --noEmit -p electron",
     "build:electron": "node scripts/build-electron.mjs && npm run build:electron:renderer",
+    "build:heic-helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-heic-helper.ps1",
     "build:electron:renderer": "vite build -c vite.electron.config.ts",
     "dev:electron": "node scripts/dev-electron.mjs",
     "check:electron-bundle": "node scripts/check-electron-bundle.mjs",

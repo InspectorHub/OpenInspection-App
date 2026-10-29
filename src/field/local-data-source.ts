@@ -115,6 +115,8 @@ export interface LocalDataSourceDeps {
   onError?(error: unknown): void;
   /** The stack's document step for clips: bound to the real one here. */
   resolveVideo?: DeferredResolveVideo;
+  /** Optional host decoder for image formats the browser cannot decode. */
+  decodeImage?: FieldDataSource['media']['decodeImage'];
 }
 
 /** A host that is not a real one: presence is off, so this address is never opened. */
@@ -280,7 +282,11 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     isOnline: () => deps.network.isOnline(),
     onOnlineChange: (cb) => deps.network.onOnlineChange(cb),
     collab: withMediaCleanup(wrapCollab(stack.connector, deps.registry), { store: stack.store, onError: report }),
-    media: { store: mediaStore, uploader },
+    media: {
+      store: mediaStore,
+      uploader,
+      ...(deps.decodeImage === undefined ? {} : { decodeImage: deps.decodeImage }),
+    },
     urls: {
       photo: photoUrl,
       // The report preview, the PDFs and the video objects are server pages that need the web session; the app has none.

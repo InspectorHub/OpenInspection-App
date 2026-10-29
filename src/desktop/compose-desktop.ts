@@ -5,6 +5,7 @@ import { createDesktopFiles } from './files-ipc';
 import { createDesktopKeyValue } from './kv-ipc';
 import { createDesktopSharer } from './sharer-desktop';
 import { createDesktopSecureStore } from './secure-store-ipc';
+import { createDesktopDecodeImage } from './media/decode-heic';
 import { systemClock } from '../platform/clock';
 import { realFetch, composeWith, type AppServices } from '../app/compose';
 
@@ -23,6 +24,7 @@ export async function composeDesktop(bridge: DesktopBridge): Promise<AppServices
     builtAt: __APP_BUILT_AT__,
     kv: createDesktopKeyValue(bridge),
     openExternal: (url) => bridge.shell.openExternal(url),
+    decodeImage: createDesktopDecodeImage(bridge),
     sharer: createDesktopSharer(bridge),
     closeDb: () => bridge.db.close(),
   });

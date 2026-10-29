@@ -21,7 +21,7 @@ function setup(runner: (request: DecodeHeicRequest) => Promise<DecodeHeicReply>)
   return { call, log };
 }
 
-const jpegReply: DecodeHeicReply = { ok: true, jpeg: new ArrayBuffer(4) };
+const jpegReply: DecodeHeicReply = { ok: true, jpeg: Uint8Array.of(0xff, 0xd8, 0xff, 0xd9) };
 const request = (over: Record<string, unknown> = {}) => ({ bytes: new ArrayBuffer(16), maxLongEdge: 2560, ...over });
 
 describe('the media:decode-heic channel', () => {
@@ -83,7 +83,8 @@ describe('the media:decode-heic channel', () => {
     expect(isDecodeHeicReply({ ok: false, code: 'CODEC_MISSING' })).toBe(true);
     expect(isDecodeHeicReply({ ok: false, code: 'DISK_ON_FIRE' })).toBe(false);
     expect(isDecodeHeicReply({ ok: false, code: 'CORRUPT', message: 'C:\\x' })).toBe(false);
-    expect(isDecodeHeicReply({ ok: true, jpeg: new ArrayBuffer(2) })).toBe(true);
+    expect(isDecodeHeicReply({ ok: true, jpeg: Uint8Array.of(0xff, 0xd8, 0xff) })).toBe(true);
+    expect(isDecodeHeicReply({ ok: true, jpeg: new ArrayBuffer(2) })).toBe(false);
     expect(isDecodeHeicReply({ ok: true, jpeg: 'text' })).toBe(false);
     expect(isDecodeHeicReply(null)).toBe(false);
   });

@@ -10,6 +10,9 @@ import { createFilesHost } from './data/files-host.ts';
 import { createDialogsHost } from './dialogs.ts';
 import { createMediaFileResolver, createUploaderHost } from './net/uploader-host.ts';
 import { createUploadTransport } from './net/upload-transport.ts';
+import { createHeicHelperRunner } from './media/heic-helper.ts';
+import { createExecFileHelperSpawner } from './media/heic-helper-process.ts';
+import { createHeicHelperPathResolver } from './media/heic-helper-path.ts';
 import { createMediaFileResponse, createMediaProtocolHandler } from './data/media-protocol.ts';
 import { createSecretsHost, ensureSecretsDirectory, SecretsUnavailableError } from './data/secrets.ts';
 import { openDesktopDb, openNativeSqlite, setAsideUnreadableDatabase } from './data/db-open.ts';
@@ -169,6 +172,29 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       },
     });
     const registerDeps = { ipcMain, log };
+    const heicRunner = createHeicHelperRunner({
+      exePath: createHeicHelperPathResolver({
+        packaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+        developmentPath: paths.heicHelper ?? join(app.getAppPath(), 'dist-electron', 'native', 'win-heic-helper.exe'),
+        envOverride: paths.heicHelper,
+        readFile: async (filePath) => fs.readFile(filePath),
+        log,
+      }),
+      spawner: createExecFileHelperSpawner(),
+      timers: { setTimeout, clearTimeout },
+      log,
+    });
+    registerHandler(registerDeps, 'media:decode-heic', validators.media.decodeHeic, async (request) => {
+      const result = await heicRunner.run({
+        bytes: new Uint8Array(request.bytes),
+        maxLongEdge: request.maxLongEdge,
+        keepOriginal: request.keepOriginal,
+      });
+      if (!result.ok) return { ok: false, code: result.code };
+      return { ok: true, jpeg: result.jpeg };
+    });
     applyNavigationRequestPolicy(session.defaultSession);
     applyPermissionPolicy(session.defaultSession);
     protocol.handle('https', createAppOriginHandler({ rendererRoot: paths.rendererRoot, readFile, passthrough: createHttpsPassthrough(net), packaged: app.isPackaged }));

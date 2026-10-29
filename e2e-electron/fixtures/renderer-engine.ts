@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import type { Socket } from 'node:net';
 import { resolve } from 'node:path';
 
 export interface RendererEngine {
@@ -19,6 +20,7 @@ async function readBody(request: import('node:http').IncomingMessage): Promise<B
 export async function startRendererEngine(): Promise<RendererEngine> {
   let url = '';
   const requests: string[] = [];
+  const sockets = new Set<Socket>();
   const server: Server = createServer((request, response) => {
     response.setHeader('Access-Control-Allow-Origin', 'https://localhost');
     response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-client-platform,x-client-version');
@@ -75,11 +77,17 @@ export async function startRendererEngine(): Promise<RendererEngine> {
     json({ error: 'not-found' }, 404);
   });
   server.on('upgrade', (request, socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
     const key = request.headers['sec-websocket-key'];
     if (typeof key !== 'string' || !request.url?.startsWith('/api/inspections/insp-7/collab/ws?ticket=')) { socket.destroy(); return; }
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    socket.on('data', () => { socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe8])); socket.end(); });
+    socket.on('data', () => {
+      if (socket.destroyed || socket.writableEnded) return;
+      socket.end(Buffer.from([0x88, 0x02, 0x03, 0xe8]));
+    });
+    socket.on('error', () => {});
   });
   await new Promise<void>((resolveListen, reject) => {
     server.once('error', reject);
@@ -90,5 +98,9 @@ export async function startRendererEngine(): Promise<RendererEngine> {
   url = `http://127.0.0.1:${address.port}`;
   // The cert file is only read to ensure the public test fixture stays available with this E2E bundle.
   await readFile(resolve('e2e-electron/fixtures/loopback-cert.pem'));
-  return { url, requests, close: () => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }) };
+  return { url, requests, close: () => new Promise<void>((resolveClose) => {
+    for (const socket of sockets) socket.destroy();
+    server.close(() => resolveClose());
+    server.closeAllConnections();
+  }) };
 }
