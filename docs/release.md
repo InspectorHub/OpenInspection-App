@@ -15,6 +15,8 @@ git tags; two workflows do the building:
 > 0.3.0 or later in `package.json`). An older editor treats that answer as a failure, so a photo the server has already kept would be
 > reported as lost. Check the dependency before tagging.
 
+The current dependency is `@inspectorhub/field-ui` 0.5.0, which meets that prerequisite. Check it again when tagging a later version.
+
 ## The version
 
 `package.json` is the single source of the version. Nothing else carries a number you have to edit.
@@ -117,7 +119,10 @@ fingerprint never changes for a given signing key; if it differs from earlier re
 
 ## What the owner configures in GitHub
 
-None of this exists until you create it. The workflows assume it.
+Check this configuration before each release. As of 2026-10-28, GitHub has both environments restricted to `v*` tags, a required
+maintainer reviewer with self-review allowed, a `v*` tag ruleset, and the four Android environment secret names below. The iOS
+environment has no secrets or variables yet, so TestFlight signing and upload cannot run. Secret values and offline keystore backups
+cannot be verified from the repository API.
 
 All three items below are **required**, not suggestions. The workflows only gate who can reach a secret by naming an environment,
 so the settings are the actual protection.
