@@ -33,7 +33,7 @@ function ticketReply(n: number): HttpResponse {
 }
 
 /** The tables an inspection's data lives in, with the column that names the inspection (or its document). */
-export const PER_INSPECTION_TABLES = ['work_package', 'outbox', 'media', 'ydoc_updates', 'ydoc_sync', 'resource_cache'] as const;
+export const PER_INSPECTION_TABLES = ['work_package', 'outbox', 'media', 'ydoc_updates', 'ydoc_sync', 'resource_cache', 'item_tags'] as const;
 export type InspectionTable = (typeof PER_INSPECTION_TABLES)[number];
 
 export interface PurgeWorld extends ReconcileWorld {
@@ -128,6 +128,8 @@ export async function createPurgeWorld(): Promise<PurgeWorld> {
     await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, 'e', '{}', 5, ?)", [key, `/api/inspections/${id}`, id]);
     await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, 'e', '{}', 5, ?)", [key, `/api/inspections/${id}/results`, id]);
     await world.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, 'network', 5, ?)", [key, `$refresh_error:${id}`, id]);
+    // A tag the server already has: nothing to lose, and a purge must still take it.
+    await world.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, ?, 'item-1', 'tag-1', 'Urgent', NULL, 'synced', 5)", [key, id]);
   };
 
   const seedFull = async (id: string, options: { quarantine?: string | null; unsent?: boolean } = {}): Promise<void> => {
@@ -138,6 +140,8 @@ export async function createPurgeWorld(): Promise<PurgeWorld> {
       await mediaFile(id, `${id}-m2`, 'uploaded');
       await world.outbox(id, 'pending');
       await world.outbox(id, 'failed');
+      // A tag change the server has not been told about: unsent work like the rows above, so only the person's confirmation removes it.
+      await world.db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES (?, ?, 'item-2', 'tag-2', 'Follow Up', NULL, 'add', 6)", [accountKey(ALICE), id]);
     }
   };
 
@@ -152,6 +156,7 @@ export async function createPurgeWorld(): Promise<PurgeWorld> {
     parts.push(dump(await world.db.query('SELECT * FROM ydoc_updates WHERE doc_name = ? ORDER BY id', [`results-${id}`])));
     parts.push(dump(await world.db.query('SELECT * FROM ydoc_sync WHERE doc_name IN (?, ?) ORDER BY doc_name', [`results-${id}`, `ds:results-${id}`])));
     parts.push(dump(await world.db.query('SELECT * FROM resource_cache WHERE package_id = ? ORDER BY key', [id])));
+    parts.push(dump(await world.db.query('SELECT * FROM item_tags WHERE inspection_id = ? ORDER BY item_id, tag_id', [id])));
     return parts.join('|');
   };
 
@@ -166,6 +171,7 @@ export async function createPurgeWorld(): Promise<PurgeWorld> {
       ydoc_updates: await n('SELECT COUNT(*) AS n FROM ydoc_updates WHERE doc_name = ?', [`results-${id}`]),
       ydoc_sync: await n('SELECT COUNT(*) AS n FROM ydoc_sync WHERE doc_name IN (?, ?)', [`results-${id}`, `ds:results-${id}`]),
       resource_cache: await n('SELECT COUNT(*) AS n FROM resource_cache WHERE package_id = ? AND account_key = ?', [id, accountKey(ALICE)]),
+      item_tags: await n('SELECT COUNT(*) AS n FROM item_tags WHERE inspection_id = ? AND account_key = ?', [id, accountKey(ALICE)]),
       files: present,
     };
   };

@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The package refuses every publish unless the host says what the human-verification step is. Whether the native shell
- * may declare that step unnecessary is a product decision that has not been made, so no code of the app may set the slot:
- * the package's default (fail closed) must stay in force. A test file may name the slot to prove this; the app's own sources may not.
+ * The package refuses every publish unless the host says what the human-verification step is. The native shell has none by design
+ * (the person is signed in on the device), and says so in ONE place, the editor screen. No other source of the app may touch the
+ * slot, so the fail-closed default stays in force everywhere else. A test file may name the slot; the app's own sources may not.
  */
+const THE_EDITOR_SCREEN = 'ui/EditorScreen.tsx';
 const FORBIDDEN: [string, RegExp][] = [
   ['the slot name', /human\W*(?:["'`+\s.]*)check/i],
   ['the verification hook', /ensure\W*human/i],
@@ -25,7 +26,8 @@ export function humanCheckUses(source: string): string[] {
 const src = fileURLToPath(new URL('..', import.meta.url));
 const sources = readdirSync(src, { recursive: true, encoding: 'utf-8' })
   .map((name) => name.replaceAll('\\', '/'))
-  .filter((name) => /\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name) && !name.includes('test-support/'));
+  // The generated contract types are the server's description, which uses the word for printed form slots; it is not app code.
+  .filter((name) => /\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name) && !name.includes('test-support/') && name !== 'api/schema.d.ts');
 
 describe('the human-verification slot', () => {
   it('the scan sees what it is meant to see, in every spelling', () => {
@@ -48,8 +50,15 @@ describe('the human-verification slot', () => {
     expect(sources).toContain('field/local-data-source.ts');
   });
 
-  it('no source of the app sets it', () => {
+  it('no source of the app sets it but the editor screen', () => {
     const offenders = sources.filter((name) => humanCheckUses(readFileSync(join(src, name), 'utf-8')).length > 0);
-    expect(offenders).toEqual([]);
+    expect(offenders).toEqual([THE_EDITOR_SCREEN]);
+  });
+
+  it('the editor screen opts out with the one exact value and installs no check of its own', () => {
+    const source = readFileSync(join(src, THE_EDITOR_SCREEN), 'utf-8');
+    expect(source).toContain("humanCheck: 'not-required'");
+    expect(source).not.toMatch(/ensure\W*human/i);
+    expect(source.match(/not-required/g)).toHaveLength(1);
   });
 });

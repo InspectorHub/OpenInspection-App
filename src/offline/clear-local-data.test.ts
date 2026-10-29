@@ -7,7 +7,7 @@ import { DEVICE_STATE_KEYS, migrate } from '../platform/schema';
 import { clearLocalData, DEVICE_STATE_SURVIVORS, DEVICE_STATE_SURVIVOR_PREFIXES } from './clear-local-data';
 
 const NOW = 1_800_000_000_000;
-const DATA_TABLES = ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'work_package'] as const;
+const DATA_TABLES = ['ydoc_updates', 'media', 'outbox', 'resource_cache', 'item_tags', 'work_package'] as const;
 let db: Db;
 
 beforeEach(async () => {
@@ -20,6 +20,7 @@ async function seed(): Promise<void> {
   await db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at) VALUES (?, ?, ?, ?, ?)', ['t%3Au', 'k', 'e', '{}', 1]);
   await db.run('INSERT INTO outbox (idempotency_key, seq, op, payload, state, created_at) VALUES (?, ?, ?, ?, ?, ?)', ['o1', 1, 'save', '{}', 'pending', 1]);
   await db.run('INSERT INTO work_package (inspection_id, refreshed_at) VALUES (?, ?)', ['i1', 1]);
+  await db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES ('t%3Au', 'i1', 'item-1', 'tag-1', 'Urgent', NULL, 'add', 1)");
   for (const [id, path] of [
     ['m1', 'media/m1.jpg'],
     ['m2', 'media/m2.jpg'],
@@ -52,6 +53,17 @@ describe('clearLocalData', () => {
     await seed();
     await clearLocalData(db, createMemoryFiles(), NOW);
     expect(await stateKeys()).toEqual(['client_id:https://oi.example.test', 'client_id:https://other.example.test', 'device_id', 'install_marker', 'server_url']);
+  });
+
+  it('wipes a stored tag_rejected:* count while the client_id:* registrations stay', async () => {
+    await seed();
+    await db.run('INSERT INTO device_state (key, value) VALUES (?, ?)', ['tag_rejected:tenant-1:alice', '3']);
+    expect(await stateKeys()).toContain('tag_rejected:tenant-1:alice');
+    await clearLocalData(db, createMemoryFiles(), NOW);
+    const keys = await stateKeys();
+    expect(keys).not.toContain('tag_rejected:tenant-1:alice');
+    expect(keys).toContain('client_id:https://oi.example.test');
+    expect(keys).toContain('client_id:https://other.example.test');
   });
 
   it('the survivor list is declared device_state keys and everything else is removed (identity, lock marks, verification)', async () => {

@@ -33,7 +33,7 @@ function appendFile(form: FormData, field: string, blob: Blob, fallbackName: str
   form.append(field, blob, blob instanceof File && blob.name !== '' ? blob.name : fallbackName);
 }
 
-async function publish(deps: OnlineDeps, id: string, cmd: Extract<FieldCommand, { type: 'publish' }>): Promise<CommandResult<unknown>> {
+async function publish(deps: OnlineDeps, id: string, cmd: Extract<FieldCommand, { type: 'publish' }>, key: string | undefined): Promise<CommandResult<unknown>> {
   // Completing first is advisory and never a gate: a failure there does not stop the publish.
   if (cmd.markComplete === true) await deps.api.send({ method: 'POST', path: apiPath(id, 'complete') });
   // The sign flag is set BEFORE the publish and must have landed: the publish decides whether to sign by re-reading it,
@@ -43,7 +43,7 @@ async function publish(deps: OnlineDeps, id: string, cmd: Extract<FieldCommand, 
     if (flag.kind === 'problem' || !isSuccess(flag.status)) return flag.kind === 'problem' ? problemResult(flag.problem, MESSAGES.publishOutcomeUnknown) : failure(MESSAGES.requestFailed);
   }
   const summary = (cmd.summary ?? '').trim();
-  const res = await deps.api.send({ method: 'POST', path: apiPath(id, 'publish'), json: summary === '' ? {} : { summary } });
+  const res = await deps.api.send({ method: 'POST', path: apiPath(id, 'publish'), json: summary === '' ? {} : { summary }, ...(key === undefined ? {} : { idempotencyKey: key }) });
   if (res.kind === 'problem') return problemResult(res.problem, MESSAGES.publishOutcomeUnknown);
   if (isSuccess(res.status)) return { ok: true };
   // A precondition failure ("must be completed before publishing") is something the inspector has to read.
@@ -117,7 +117,8 @@ async function saveStructureTemplate(deps: OnlineDeps, cmd: Extract<FieldCommand
   const found = await deps.api.send({ method: 'GET', path });
   if (found.kind === 'problem') return problemResult(found.problem);
   if (!isSuccess(found.status)) return failure(MESSAGES.sourceTemplateUnreadable);
-  const name = bodyData(found.json)?.name;
+  const template = bodyData(found.json)?.template;
+  const name = isRec(template) ? template.name : undefined;
   // Without the name the PUT would rename the source template; failing is the safe side.
   if (typeof name !== 'string' || name.trim() === '') return failure(MESSAGES.sourceTemplateUnnamed);
   return plain(await deps.api.send({ method: 'PUT', path, json: { name: name.trim(), schema: cmd.snapshot } }));
@@ -156,7 +157,7 @@ async function route(deps: OnlineDeps, id: string, cmd: OnlineCommand, idempoten
   const { api } = deps;
   switch (cmd.type) {
     case 'publish':
-      return publish(deps, id, cmd);
+      return publish(deps, id, cmd, idempotencyKey);
     case 'save-property-facts':
       return plain(await api.send({ method: 'PATCH', path: apiPath(id, 'property-facts'), json: cmd.payload }));
     case 'autofill-property-facts':

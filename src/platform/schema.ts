@@ -99,6 +99,27 @@ export const MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    // The tags a person put on checklist items. One row per (inspection, item, tag); `state` says whether the server
+    // has it ('synced'), is still to be told about it ('add') or is still to be told it is gone ('remove'). It is a
+    // table of its own, not `resource_cache`: a cache row is replaced with its package and evicted when the
+    // inspection is unpinned, and a tag the server has not heard about yet must survive both.
+    toVersion: 2,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS item_tags (
+        account_key TEXT NOT NULL,
+        inspection_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        tag_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        color TEXT,
+        state TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (account_key, inspection_id, item_id, tag_id)
+      )`,
+      'CREATE INDEX IF NOT EXISTS idx_item_tags_inspection ON item_tags(account_key, inspection_id, state)',
+    ],
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.toVersion ?? 0;
@@ -236,8 +257,13 @@ export const DEVICE_STATE_KEYS = [
   'media_temp_sweep_at',
 ] as const;
 
-/** Families of per-server keys: the key is the prefix followed by a non-empty suffix. */
-export const DEVICE_STATE_KEY_PREFIXES = ['client_id:'] as const;
+/**
+ * Families of keyed values: the key is the prefix followed by a non-empty suffix.
+ *  - `client_id:<origin>`: the registered OAuth client of one server (survives a clear).
+ *  - `tag_rejected:<account key>`: how many tag changes the server refused for good during a background send, not yet
+ *    told to the person (`field/item-tags-notice.ts`). Wiped by a clear with the rest of the account's data.
+ */
+export const DEVICE_STATE_KEY_PREFIXES = ['client_id:', 'tag_rejected:'] as const;
 
 export type DeviceStateKey = (typeof DEVICE_STATE_KEYS)[number] | `${(typeof DEVICE_STATE_KEY_PREFIXES)[number]}${string}`;
 

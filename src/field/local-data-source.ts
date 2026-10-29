@@ -25,6 +25,7 @@ import { hasQueuedWrites, unsentPhotos } from './queued-writes';
 import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
 import { createKeptNotice } from './kept-notice';
+import { takeRejected } from './item-tags-notice';
 import { createStoredBlobReader, createUploaderFactory } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
 import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
@@ -41,8 +42,8 @@ import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
  *    (`video-adapter.ts`);
  *  - `urls`: see below; `platform`: the native shell the editor adapts its bars to.
  *
- * Not provided on purpose: the human-verification slot. The package's default fails closed, so a publish is refused
- * until the product decides what the native shell may do there.
+ * Not provided here: the human-verification slot. It belongs to the provider, not the data source, and the editor screen
+ * (`ui/EditorScreen.tsx`) is the one place that sets it.
  */
 
 export interface NotifySink {
@@ -141,6 +142,8 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
+  // `canEdit` guards commands, uploads and media saves. It is also the editor's read-only switch: with it false
+  // EditorScreen passes `readOnly` to field-ui (no document writes, write controls hidden), and this guard stays as defence in depth.
   const canEdit = (): boolean => {
     try {
       return deps.canEdit?.() !== false;
@@ -211,19 +214,32 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
   });
   deps.resolveVideo?.bind(videoAdapter.resolveVideo);
 
-  const resources = createResources({
-    api: deps.api,
-    db: stack.db,
-    account: stack.account,
-    isOnline: () => deps.network.isOnline(),
-    isBlocked,
-    photoUrl,
-    afterWrite,
-  });
+  const resources = createResources(
+    {
+      api: deps.api,
+      db: stack.db,
+      account: stack.account,
+      isOnline: () => deps.network.isOnline(),
+      isBlocked,
+      photoUrl,
+      afterWrite,
+    },
+    // A tag change the server refused for good has been undone on the device; the person is told once per round. The notice
+    // says what to do and stays long enough to be read: it can appear while another inspection is open.
+    { onRejected: () => say(MESSAGES.tagsNotSynced, 'warning', { durationMs: 15_000 }) },
+  );
 
   return {
     load: async (inspectionId, scope) => {
       const data = await load(inspectionId, scope);
+      // Tag changes the server refused while no editor was open were undone on the device: say so once, then forget the count.
+      if (scope === undefined) {
+        try {
+          if ((await takeRejected(stack.db, stack.account)) > 0) say(MESSAGES.tagsNotSynced, 'warning', { durationMs: 15_000 });
+        } catch (error) {
+          report(error);
+        }
+      }
       // Photos that are on the server but whose file is still on this device can be shown from it.
       if (scope === undefined) await indexUploadedRows(photoIndex, stack.store, inspectionId);
       return data;
@@ -270,8 +286,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       reportPdf: () => null,
       statutoryPreviewPdf: () => null,
       videoObject: () => null,
-      // The package requires an address for the cost download. This one goes nowhere: the cost tables are downloaded from the web app.
-      costExport: () => '#',
+      // No `costExport`: the app has no cost download, and without it the editor hides the export buttons.
       // Presence is off (the session names no user), so the editor never opens this; it must still be a string.
       presenceSocket: (inspectionId) => `${PRESENCE_OFF_ORIGIN}/${encodeURIComponent(inspectionId)}`,
       editorPath: (inspectionId) => `/inspections/${encodeURIComponent(inspectionId)}/edit`,

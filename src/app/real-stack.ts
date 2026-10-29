@@ -1,5 +1,6 @@
 import { realSocketFactory } from '../collab/real';
 import { realTimers } from '../collab/timers';
+import { editorRegistry } from '../field/editor-registry';
 import type { AppStatePort } from '../offline/lock-monitor';
 import { createRealNetwork } from '../platform/network';
 import { createRealUploaderPlugin } from '../platform/uploader';
@@ -59,5 +60,7 @@ export function createRealStackFactory(options: { appState: AppStatePort }): Sta
       // The list's first paint comes before the sweeps, replay, reconcile and refresh begin: they would queue its reads behind them.
       deferLaunchUntilPainted: true,
       onTiming: appTimings.record,
+      // The stack asks the editor whether an inspection is open and for its live document.
+      editor: editorRegistry,
     });
 }

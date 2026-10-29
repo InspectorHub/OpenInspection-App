@@ -32,6 +32,19 @@ describe('countAtRisk', () => {
     expect(await countAtRisk(db)).toEqual({ waiting: 3, orphaned: 1, createdHere: 1, unsyncedEdits: 1, total: 6 });
   });
 
+  // Signing out or clearing the device warns from this count. A tag change the server has not been told about is not in
+  // the queue, so it has to be counted here or it is destroyed without a word.
+  it('counts tag changes the server has not been told about, and not tags it already has', async () => {
+    const { db } = await createListWorld();
+    await seedPkg(db, { id: 'a' });
+    const row = (tag: string, state: string): Promise<unknown> =>
+      db.run("INSERT INTO item_tags (account_key, inspection_id, item_id, tag_id, name, color, state, updated_at) VALUES ('t%3Au', 'a', 'item-1', ?, 'Urgent', NULL, ?, 1)", [tag, state]);
+    await row('t-add', 'add');
+    await row('t-remove', 'remove');
+    await row('t-synced', 'synced');
+    expect(await countAtRisk(db)).toEqual({ waiting: 2, orphaned: 0, createdHere: 0, unsyncedEdits: 0, total: 2 });
+  });
+
   it('control: an uploaded photo and a package the server confirmed are not at risk by themselves', async () => {
     const { db } = await createListWorld();
     await seedPkg(db, { id: 'a', confirmed: 1 });
