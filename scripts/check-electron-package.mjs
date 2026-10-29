@@ -61,7 +61,7 @@ export function checkElectronPackage({ packageRoot = 'release-win', runFuses = (
   const allAppFiles = [...paths.map((path) => `asar/${path}`), ...walk(unpacked).map((path) => `unpacked/${relative(unpacked, path)}`), ...walk(resources).map((path) => `resources/${relative(resources, path)}`)];
   if (allAppFiles.some((path) => /libheif|libde265|\.wasm$|heic-worker\.js|(?:^|[\\/])(?:lgpl|gpl)(?:[-_. ]|$)/i.test(path))) fail('forbidden-codec-artifact');
   const noticeFiles = [
-    ...paths.filter((path) => /\.(?:txt|md|html)$/i.test(path)).map((path) => asar.extractFile(archive, path.replaceAll('/', '\\')).toString('utf8')),
+    ...paths.filter((path) => /\.(?:txt|md|html)$/i.test(path)).map((path) => asar.extractFile(archive, process.platform === 'win32' ? path.replaceAll('/', '\\') : path).toString('utf8')),
     ...walk(resources).filter((path) => /\.(?:txt|md|html)$/i.test(path)).map((path) => readFileSync(path, 'utf8')),
   ];
   if (noticeFiles.some((text) => /GNU Lesser General Public License|\bLGPL\b|GNU General Public License|\bGPL(?:-?\d|v[123])\b/i.test(text))) fail('forbidden-codec-license');

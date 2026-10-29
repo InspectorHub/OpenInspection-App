@@ -82,7 +82,7 @@ it('exits before installing handlers or creating a window when safeStorage is un
   expect(electron.app.exit).toHaveBeenCalledWith(1);
 });
 
-it('refuses a reparse-point secrets directory before ACL commands, handlers, or window setup', async () => {
+it.skipIf(process.platform !== 'win32')('refuses a reparse-point secrets directory before ACL commands, handlers, or window setup', async () => {
   state.secretsDirExists = true;
   state.secretsDirIsLink = true;
   const electron = await import('electron');
@@ -95,7 +95,7 @@ it('refuses a reparse-point secrets directory before ACL commands, handlers, or 
   expect(state.create).not.toHaveBeenCalled();
 });
 
-it('refuses a non-symbolic Windows reparse tag after read-only detection and before ACL or app setup', async () => {
+it.skipIf(process.platform !== 'win32')('refuses a non-symbolic Windows reparse tag after read-only detection and before ACL or app setup', async () => {
   state.secretsDirExists = true;
   state.secretsDirIsReparse = true;
   const electron = await import('electron');
@@ -108,7 +108,7 @@ it('refuses a non-symbolic Windows reparse tag after read-only detection and bef
   expect(state.create).not.toHaveBeenCalled();
 });
 
-it('does not continue startup after final ACL replacement fails behind the verified per-file ReadData barrier', async () => {
+it.skipIf(process.platform !== 'win32')('does not continue startup after final ACL replacement fails behind the verified per-file ReadData barrier', async () => {
   process.env.OI_TEST_FAIL_ACL_STEP = 'final-acl';
   const electron = await import('electron');
   const fsPromises = await import('node:fs/promises');

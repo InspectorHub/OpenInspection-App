@@ -105,7 +105,12 @@ describe('checkElectronPackage', () => {
 
 describe('Windows electron-builder configuration', () => {
   it('pins the app identity, x64 NSIS layout, safe fuses, updater metadata and helper copy', async () => {
-    const config = (await import('../electron/builder/electron-builder.config.mjs')).default;
+    const root = await mkdtemp(join(tmpdir(), 'oi-builder-config-'));
+    roots.push(root);
+    const helperPath = join(root, 'win-heic-helper.exe');
+    await writeFile(helperPath, 'configuration test helper');
+    const { createElectronBuilderConfig } = await import('../electron/builder/config-factory.mjs');
+    const config = createElectronBuilderConfig({ helperPath });
     expect(config).toMatchObject({
       appId: 'io.inspectorhub.app',
       productName: 'InspectorHub',
