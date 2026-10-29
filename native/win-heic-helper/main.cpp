@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cwchar>
+#include <cstring>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -65,6 +66,295 @@ bool IsSupportedHeif(const std::vector<BYTE>& bytes) {
       || IsBrand(brand, "hevs") || IsBrand(brand, "mif1") || IsBrand(brand, "msf1");
   }
   return foundHeif;
+}
+
+uint32_t ReadU32(const std::vector<BYTE>& bytes, size_t offset) {
+  return (static_cast<uint32_t>(bytes[offset]) << 24) | (static_cast<uint32_t>(bytes[offset + 1]) << 16)
+      | (static_cast<uint32_t>(bytes[offset + 2]) << 8) | static_cast<uint32_t>(bytes[offset + 3]);
+}
+
+void AppendU32(std::vector<BYTE>* bytes, uint32_t value) {
+  bytes->push_back(static_cast<BYTE>(value >> 24));
+  bytes->push_back(static_cast<BYTE>(value >> 16));
+  bytes->push_back(static_cast<BYTE>(value >> 8));
+  bytes->push_back(static_cast<BYTE>(value));
+}
+
+struct BoxView { size_t start; size_t size; size_t header; };
+
+bool FindBox(const std::vector<BYTE>& bytes, size_t begin, size_t end, const char* type, BoxView* found) {
+  for (size_t offset = begin; offset + 8 <= end;) {
+    uint64_t size = ReadU32(bytes, offset);
+    size_t header = 8;
+    if (size == 1) {
+      if (offset + 16 > end) return false;
+      size = (static_cast<uint64_t>(ReadU32(bytes, offset + 8)) << 32) | ReadU32(bytes, offset + 12);
+      header = 16;
+    } else if (size == 0) {
+      size = end - offset;
+    }
+    if (size < header || size > end - offset) return false;
+    if (memcmp(bytes.data() + offset + 4, type, 4) == 0) {
+      *found = {offset, static_cast<size_t>(size), header};
+      return true;
+    }
+    offset += static_cast<size_t>(size);
+  }
+  return false;
+}
+
+std::vector<BYTE> MakeBox(const char* type, const std::vector<BYTE>& body) {
+  std::vector<BYTE> box;
+  AppendU32(&box, static_cast<uint32_t>(body.size() + 8));
+  box.insert(box.end(), type, type + 4);
+  box.insert(box.end(), body.begin(), body.end());
+  return box;
+}
+
+// WIC reports the irot-adjusted size, but its HEIF decoder returns
+// WINCODEC_ERR_UNSUPPORTEDOPERATION when CopyPixels is called on such a frame.
+// Remove the item's transform property before decoding, then rotate the decoded
+// pixels ourselves. This keeps the source item and all other metadata intact.
+bool StripPrimaryIrot(std::vector<BYTE>* bytes, UINT* rotation, UINT* primaryWidth, UINT* primaryHeight) {
+  *rotation = 0;
+  *primaryWidth = 0;
+  *primaryHeight = 0;
+  BoxView meta{};
+  if (!FindBox(*bytes, 0, bytes->size(), "meta", &meta)) return true;
+  if (meta.size < meta.header + 4) return false;
+  const size_t metaBody = meta.start + meta.header + 4; // FullBox version and flags.
+  const size_t metaEnd = meta.start + meta.size;
+  BoxView pitm{}, iprp{};
+  if (!FindBox(*bytes, metaBody, metaEnd, "pitm", &pitm)
+      || !FindBox(*bytes, metaBody, metaEnd, "iprp", &iprp)) return false;
+  if (pitm.size < pitm.header + 4) return false;
+  const BYTE pitmVersion = (*bytes)[pitm.start + pitm.header];
+  if (pitmVersion > 1 || pitm.size < pitm.header + (pitmVersion == 0 ? 6 : 8)) return false;
+  const size_t pitmIdOffset = pitm.start + pitm.header + 4;
+  const uint32_t primaryId = pitmVersion == 0 ? (static_cast<uint32_t>((*bytes)[pitmIdOffset]) << 8) | (*bytes)[pitmIdOffset + 1]
+      : ((static_cast<uint32_t>((*bytes)[pitmIdOffset]) << 24) | (static_cast<uint32_t>((*bytes)[pitmIdOffset + 1]) << 16)
+         | (static_cast<uint32_t>((*bytes)[pitmIdOffset + 2]) << 8) | (*bytes)[pitmIdOffset + 3]);
+
+  const size_t iprpBegin = iprp.start + iprp.header;
+  const size_t iprpEnd = iprp.start + iprp.size;
+  BoxView ipco{}, ipma{};
+  if (!FindBox(*bytes, iprpBegin, iprpEnd, "ipco", &ipco) || !FindBox(*bytes, iprpBegin, iprpEnd, "ipma", &ipma)) return false;
+
+  std::vector<BoxView> properties;
+  for (size_t offset = ipco.start + ipco.header; offset < ipco.start + ipco.size;) {
+    if (offset + 8 > ipco.start + ipco.size) return false;
+    BoxView property{};
+    if (!FindBox(*bytes, offset, ipco.start + ipco.size, "irot", &property)) {
+      // FindBox searches forward; parse and retain this non-irot box directly.
+      uint64_t size = ReadU32(*bytes, offset);
+      size_t header = 8;
+      if (size == 1) { if (offset + 16 > ipco.start + ipco.size) return false; size = (static_cast<uint64_t>(ReadU32(*bytes, offset + 8)) << 32) | ReadU32(*bytes, offset + 12); header = 16; }
+      else if (size == 0) size = ipco.start + ipco.size - offset;
+      if (size < header || size > ipco.start + ipco.size - offset) return false;
+      properties.push_back({offset, static_cast<size_t>(size), header});
+      if (properties.size() > 0x7fffu) return false;
+      offset += static_cast<size_t>(size);
+      continue;
+    }
+    if (property.start != offset) {
+      uint64_t size = ReadU32(*bytes, offset);
+      size_t header = size == 1 ? 16 : 8;
+      if (size == 0) size = ipco.start + ipco.size - offset;
+      if (size < header || size > ipco.start + ipco.size - offset) return false;
+      properties.push_back({offset, static_cast<size_t>(size), header});
+      if (properties.size() > 0x7fffu) return false;
+      offset += static_cast<size_t>(size);
+      continue;
+    }
+    if (property.size != 9 || property.header != 8) return false;
+    properties.push_back(property);
+    if (properties.size() > 0x7fffu) return false;
+    offset += property.size;
+  }
+  bool hasIrot = false;
+  for (size_t index = 0; index < properties.size(); ++index) {
+    const BoxView property = properties[index];
+    if (memcmp(bytes->data() + property.start + 4, "irot", 4) == 0) hasIrot = true;
+  }
+  if (ipma.size < ipma.header + 8) return false;
+  const BYTE ipmaVersion = (*bytes)[ipma.start + ipma.header];
+  if (ipmaVersion > 1) return false;
+  const uint32_t ipmaFlags = (static_cast<uint32_t>((*bytes)[ipma.start + ipma.header + 1]) << 16)
+      | (static_cast<uint32_t>((*bytes)[ipma.start + ipma.header + 2]) << 8)
+      | (*bytes)[ipma.start + ipma.header + 3];
+  const bool wideAssociations = (ipmaFlags & 1u) != 0;
+  size_t cursor = ipma.start + ipma.header + 4;
+  if (cursor + 4 > ipma.start + ipma.size) return false;
+  const uint32_t entryCount = ReadU32(*bytes, cursor); cursor += 4;
+  std::vector<BYTE> newIpmaBody(bytes->begin() + static_cast<std::ptrdiff_t>(ipma.start + ipma.header), bytes->begin() + static_cast<std::ptrdiff_t>(ipma.start + ipma.header + 4));
+  AppendU32(&newIpmaBody, entryCount);
+  std::vector<bool> removeProperty(properties.size(), false);
+  for (size_t index = 0; index < properties.size(); ++index) {
+    const BoxView property = properties[index];
+    if (memcmp(bytes->data() + property.start + 4, "irot", 4) == 0) removeProperty[index] = true;
+  }
+  bool primaryHasRotation = false;
+  bool primaryHasImageSize = false;
+  for (uint32_t entry = 0; entry < entryCount; ++entry) {
+    const size_t idBytes = ipmaVersion < 1 ? 2 : 4;
+    const size_t entryStart = cursor;
+    if (cursor + idBytes + 1 > ipma.start + ipma.size) return false;
+    uint32_t itemId = idBytes == 2 ? (static_cast<uint32_t>((*bytes)[cursor]) << 8) | (*bytes)[cursor + 1] : ReadU32(*bytes, cursor);
+    cursor += idBytes;
+    const BYTE associationCount = (*bytes)[cursor++];
+    const size_t assocBytes = wideAssociations ? 2 : 1;
+    if (cursor + static_cast<size_t>(associationCount) * assocBytes > ipma.start + ipma.size) return false;
+    std::vector<uint16_t> associations;
+    for (BYTE item = 0; item < associationCount; ++item) {
+      const uint16_t association = wideAssociations
+          ? static_cast<uint16_t>(((*bytes)[cursor] << 8) | (*bytes)[cursor + 1]) : (*bytes)[cursor];
+      cursor += assocBytes;
+      const uint16_t propertyIndex = wideAssociations ? (association & 0x7fffu) : (association & 0x7fu);
+      const uint16_t essential = wideAssociations ? (association & 0x8000u) : (association & 0x80u);
+      if (propertyIndex == 0 || propertyIndex > properties.size()) return false;
+      const size_t propertyOffset = propertyIndex - 1;
+      const BoxView associatedProperty = properties[propertyOffset];
+      if (itemId == primaryId && memcmp(bytes->data() + associatedProperty.start + 4, "ispe", 4) == 0) {
+        if (primaryHasImageSize || associatedProperty.header != 8 || associatedProperty.size != 20) return false;
+        *primaryWidth = ReadU32(*bytes, associatedProperty.start + 12);
+        *primaryHeight = ReadU32(*bytes, associatedProperty.start + 16);
+        if (*primaryWidth == 0 || *primaryHeight == 0) return false;
+        primaryHasImageSize = true;
+      }
+      if (removeProperty[propertyOffset]) {
+        if (itemId == primaryId) {
+          if (primaryHasRotation) return false;
+          const BoxView rotationBox = properties[propertyOffset];
+          const BYTE encodedRotation = (*bytes)[rotationBox.start + rotationBox.header];
+          if ((encodedRotation & 0xfcu) != 0) return false;
+          *rotation = encodedRotation & 0x03u;
+          primaryHasRotation = true;
+        }
+        continue;
+      }
+      uint16_t adjusted = propertyIndex;
+      for (size_t removed = 0; removed < propertyOffset; ++removed) if (removeProperty[removed]) --adjusted;
+      associations.push_back(static_cast<uint16_t>(essential | adjusted));
+    }
+    newIpmaBody.insert(newIpmaBody.end(), bytes->begin() + static_cast<std::ptrdiff_t>(entryStart), bytes->begin() + static_cast<std::ptrdiff_t>(entryStart + idBytes));
+    newIpmaBody.push_back(static_cast<BYTE>(associations.size()));
+    for (uint16_t association : associations) {
+      if (wideAssociations) { newIpmaBody.push_back(static_cast<BYTE>(association >> 8)); newIpmaBody.push_back(static_cast<BYTE>(association)); }
+      else newIpmaBody.push_back(static_cast<BYTE>(association));
+    }
+  }
+  if (cursor != ipma.start + ipma.size) return false;
+  if (!hasIrot) return true;
+
+  std::vector<BYTE> newIpcoBody;
+  for (size_t index = 0; index < properties.size(); ++index) {
+    if (!removeProperty[index]) {
+      const BoxView property = properties[index];
+      newIpcoBody.insert(newIpcoBody.end(), bytes->begin() + static_cast<std::ptrdiff_t>(property.start), bytes->begin() + static_cast<std::ptrdiff_t>(property.start + property.size));
+    }
+  }
+  const auto newIpco = MakeBox("ipco", newIpcoBody);
+  const auto newIpma = MakeBox("ipma", newIpmaBody);
+  std::vector<BYTE> newIprpBody;
+  for (size_t offset = iprpBegin; offset < iprpEnd;) {
+    if (offset + 8 > iprpEnd) return false;
+    BoxView child{};
+    if (!FindBox(*bytes, offset, iprpEnd, "ipco", &child) || child.start != offset) {
+      if (memcmp(bytes->data() + offset + 4, "ipma", 4) == 0) child = ipma;
+      else {
+        uint64_t size = ReadU32(*bytes, offset);
+        size_t header = size == 1 ? 16 : 8;
+        if (size == 0) size = iprpEnd - offset;
+        if (size < header || size > iprpEnd - offset) return false;
+        child = {offset, static_cast<size_t>(size), header};
+      }
+    }
+    if (child.start == ipco.start) newIprpBody.insert(newIprpBody.end(), newIpco.begin(), newIpco.end());
+    else if (child.start == ipma.start) newIprpBody.insert(newIprpBody.end(), newIpma.begin(), newIpma.end());
+    else newIprpBody.insert(newIprpBody.end(), bytes->begin() + static_cast<std::ptrdiff_t>(child.start), bytes->begin() + static_cast<std::ptrdiff_t>(child.start + child.size));
+    offset += child.size;
+  }
+  const auto newIprp = MakeBox("iprp", newIprpBody);
+  std::vector<BYTE> newMetaBody(bytes->begin() + static_cast<std::ptrdiff_t>(meta.start + meta.header), bytes->begin() + static_cast<std::ptrdiff_t>(iprp.start));
+  newMetaBody.insert(newMetaBody.end(), newIprp.begin(), newIprp.end());
+  newMetaBody.insert(newMetaBody.end(), bytes->begin() + static_cast<std::ptrdiff_t>(iprpEnd), bytes->begin() + static_cast<std::ptrdiff_t>(metaEnd));
+  const auto newMeta = MakeBox("meta", newMetaBody);
+  std::vector<BYTE> rewritten;
+  rewritten.insert(rewritten.end(), bytes->begin(), bytes->begin() + static_cast<std::ptrdiff_t>(meta.start));
+  rewritten.insert(rewritten.end(), newMeta.begin(), newMeta.end());
+  rewritten.insert(rewritten.end(), bytes->begin() + static_cast<std::ptrdiff_t>(metaEnd), bytes->end());
+  *bytes = std::move(rewritten);
+  return true;
+}
+
+HRESULT CreateSrgbSource(IWICImagingFactory* factory, IWICBitmapFrameDecode* frame,
+                         ComPtr<IWICBitmapSource>* source) {
+  UINT contextCount = 0;
+  HRESULT result = frame->GetColorContexts(0, nullptr, &contextCount);
+  if (FAILED(result)) return result;
+  if (contextCount == 0) {
+    *source = frame; // HEIF without an embedded profile uses the sRGB default.
+    return S_OK;
+  }
+
+  std::vector<ComPtr<IWICColorContext>> contexts(contextCount);
+  std::vector<IWICColorContext*> rawContexts;
+  rawContexts.reserve(contextCount);
+  for (auto& context : contexts) {
+    result = factory->CreateColorContext(&context);
+    if (FAILED(result)) return result;
+    rawContexts.push_back(context.Get());
+  }
+  UINT actualCount = 0;
+  result = frame->GetColorContexts(contextCount, rawContexts.data(), &actualCount);
+  if (FAILED(result) || actualCount == 0) return FAILED(result) ? result : WINCODEC_ERR_BADMETADATAHEADER;
+
+  ComPtr<IWICColorContext> destination;
+  result = factory->CreateColorContext(&destination);
+  if (SUCCEEDED(result)) result = destination->InitializeFromExifColorSpace(1); // sRGB
+  ComPtr<IWICColorTransform> transform;
+  if (SUCCEEDED(result)) result = factory->CreateColorTransformer(&transform);
+  if (SUCCEEDED(result)) result = transform->Initialize(frame, contexts[0].Get(), destination.Get(), GUID_WICPixelFormat32bppBGRA);
+  if (SUCCEEDED(result)) *source = transform;
+  return result;
+}
+
+HRESULT CreateRotatedSource(IWICImagingFactory* factory, IWICBitmapSource* frame, UINT rotation,
+                            ComPtr<IWICBitmapSource>* source, UINT* width, UINT* height) {
+  UINT sourceWidth = 0, sourceHeight = 0;
+  HRESULT result = frame->GetSize(&sourceWidth, &sourceHeight);
+  if (FAILED(result) || sourceWidth == 0 || sourceHeight == 0) return FAILED(result) ? result : E_INVALIDARG;
+  *width = rotation % 2 == 0 ? sourceWidth : sourceHeight;
+  *height = rotation % 2 == 0 ? sourceHeight : sourceWidth;
+
+  ComPtr<IWICFormatConverter> converter;
+  result = factory->CreateFormatConverter(&converter);
+  if (SUCCEEDED(result)) result = converter->Initialize(frame, GUID_WICPixelFormat32bppBGRA,
+      WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+  if (FAILED(result)) return result;
+  const UINT sourceStride = sourceWidth * 4;
+  std::vector<BYTE> sourcePixels(static_cast<size_t>(sourceStride) * sourceHeight);
+  result = converter->CopyPixels(nullptr, sourceStride, static_cast<UINT>(sourcePixels.size()), sourcePixels.data());
+  if (FAILED(result)) return result;
+
+  const UINT outputStride = *width * 4;
+  std::vector<BYTE> outputPixels(static_cast<size_t>(outputStride) * *height);
+  for (UINT y = 0; y < sourceHeight; ++y) {
+    for (UINT x = 0; x < sourceWidth; ++x) {
+      UINT targetX = x, targetY = y;
+      if (rotation == 1) { targetX = y; targetY = sourceWidth - 1 - x; } // 90 degrees counterclockwise.
+      else if (rotation == 2) { targetX = sourceWidth - 1 - x; targetY = sourceHeight - 1 - y; }
+      else if (rotation == 3) { targetX = sourceHeight - 1 - y; targetY = x; }
+      const size_t sourceOffset = (static_cast<size_t>(y) * sourceWidth + x) * 4;
+      const size_t targetOffset = static_cast<size_t>(targetY) * outputStride + static_cast<size_t>(targetX) * 4;
+      memcpy(outputPixels.data() + targetOffset, sourcePixels.data() + sourceOffset, 4);
+    }
+  }
+  ComPtr<IWICBitmap> bitmap;
+  result = factory->CreateBitmapFromMemory(*width, *height, GUID_WICPixelFormat32bppBGRA,
+      outputStride, static_cast<UINT>(outputPixels.size()), outputPixels.data(), &bitmap);
+  if (SUCCEEDED(result)) *source = bitmap;
+  return result;
 }
 
 bool ParsePositiveInteger(const wchar_t* text, UINT* value) {
@@ -209,6 +499,44 @@ bool WriteOutput(const std::vector<BYTE>& bytes) {
   }
   return true;
 }
+
+class TempInputFile {
+ public:
+  TempInputFile() = default;
+  TempInputFile(const TempInputFile&) = delete;
+  TempInputFile& operator=(const TempInputFile&) = delete;
+  ~TempInputFile() { if (path_[0] != L'\0') DeleteFileW(path_); }
+
+  bool Write(const std::vector<BYTE>& bytes) {
+    wchar_t directory[MAX_PATH + 1] = {};
+    const DWORD length = GetTempPathW(static_cast<DWORD>(std::size(directory)), directory);
+    if (length == 0 || length >= std::size(directory)) return false;
+    if (GetTempFileNameW(directory, L"oihe", 0, path_) == 0) return false;
+
+    HANDLE file = CreateFileW(path_, GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING,
+                              FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    size_t offset = 0;
+    bool ok = true;
+    while (offset < bytes.size()) {
+      DWORD written = 0;
+      const DWORD count = static_cast<DWORD>(std::min<size_t>(bytes.size() - offset, MAXDWORD));
+      if (!WriteFile(file, bytes.data() + offset, count, &written, nullptr) || written == 0) {
+        ok = false;
+        break;
+      }
+      offset += written;
+    }
+    if (!CloseHandle(file)) ok = false;
+    if (!ok) DeleteFileW(path_);
+    return ok;
+  }
+
+  const wchar_t* path() const { return path_; }
+
+ private:
+  wchar_t path_[MAX_PATH + 1] = {};
+};
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -218,16 +546,20 @@ int wmain(int argc, wchar_t** argv) {
   std::vector<BYTE> input;
   if (!ReadInput(&input)) return kExitUnsupported;
   if (!IsSupportedHeif(input)) return kExitUnsupported;
+  UINT rotation = 0, primaryWidth = 0, primaryHeight = 0;
+  if (!StripPrimaryIrot(&input, &rotation, &primaryWidth, &primaryHeight)) return kExitCorrupt;
+  if (primaryWidth != 0 && primaryHeight != 0
+      && static_cast<uint64_t>(primaryWidth) * static_cast<uint64_t>(primaryHeight) > kMaxPixels) return kExitTooLarge;
 
   HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(result)) return kExitCorrupt;
+  TempInputFile inputFile;
+  if (!inputFile.Write(input)) { CoUninitialize(); return kExitCorrupt; }
   ComPtr<IWICImagingFactory> factory;
   result = MakeFactory(&factory);
-  ComPtr<IWICStream> stream;
-  if (SUCCEEDED(result)) result = factory->CreateStream(&stream);
-  if (SUCCEEDED(result)) result = stream->InitializeFromMemory(input.data(), static_cast<DWORD>(input.size()));
   ComPtr<IWICBitmapDecoder> decoder;
-  if (SUCCEEDED(result)) result = factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, &decoder);
+  if (SUCCEEDED(result)) result = factory->CreateDecoderFromFilename(inputFile.path(), nullptr, GENERIC_READ,
+      WICDecodeMetadataCacheOnLoad, &decoder);
   if (FAILED(result)) {
     const int exitCode = ClassifyCodecError(result);
     CoUninitialize();
@@ -243,9 +575,18 @@ int wmain(int argc, wchar_t** argv) {
   if (FAILED(result) || width == 0 || height == 0) { CoUninitialize(); return kExitCorrupt; }
   if (static_cast<uint64_t>(width) * static_cast<uint64_t>(height) > kMaxPixels) { CoUninitialize(); return kExitTooLarge; }
 
+  ComPtr<IWICBitmapSource> colorManagedSource;
+  result = CreateSrgbSource(factory.Get(), frame.Get(), &colorManagedSource);
+  if (FAILED(result)) { CoUninitialize(); return ClassifyCodecError(result); }
+
+  ComPtr<IWICBitmapSource> orientedSource = colorManagedSource;
+  if (rotation != 0) {
+    result = CreateRotatedSource(factory.Get(), colorManagedSource.Get(), rotation, &orientedSource, &width, &height);
+    if (FAILED(result)) { CoUninitialize(); return ClassifyCodecError(result); }
+  }
   ComPtr<IWICBitmapSource> bitmap;
   UINT outputWidth = 0, outputHeight = 0;
-  result = CreateBitmap(factory.Get(), frame.Get(), width, height, maxLongEdge, keepOriginal, &bitmap, &outputWidth, &outputHeight);
+  result = CreateBitmap(factory.Get(), orientedSource.Get(), width, height, maxLongEdge, keepOriginal, &bitmap, &outputWidth, &outputHeight);
   if (FAILED(result)) { CoUninitialize(); return ClassifyCodecError(result); }
   std::vector<BYTE> jpeg;
   const float qualities[] = {0.98f, 0.92f, 0.85f};

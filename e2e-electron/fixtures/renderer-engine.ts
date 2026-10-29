@@ -64,6 +64,12 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
     if (request.method === 'GET' && route === '/api/recommendations') { json({ success: true, data: [] }); return; }
     if (request.method === 'GET' && route === '/api/contractor-types') { json({ success: true, data: [] }); return; }
     if (request.method === 'GET' && route === '/api/admin/defect-categories') { json({ success: true, data: [] }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7') {
+      json({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyType: 'single_family', propertyAddress: '77 Test Photo Lane', reportStatus: 'in_progress', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } } } });
+      return;
+    }
+    if (request.method === 'GET' && route === '/api/inspections/templates') { json({ success: true, data: [], meta: { page: 1, totalPages: 1 } }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/media') { json({ success: true, data: [] }); return; }
     if (request.method === 'POST' && route === '/api/inspections/insp-7/media/upload-url') {
       void readBody(request).then((raw) => {
         const body = JSON.parse(raw.toString('utf8')) as { pendingId: string };
