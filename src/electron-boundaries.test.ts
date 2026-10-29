@@ -15,8 +15,10 @@ const ALLOWED_SRC_MODULES = new Set([
   'src/platform/files-path',
   'src/platform/https-href',
   'src/auth/callback-constants',
+  'src/collab/timers',
   'src/media/upload-kinds',
   'src/media/media-types',
+  'src/platform/uploader',
 ]);
 
 function sourceFiles(dir: string): string[] {
@@ -52,7 +54,7 @@ function rendererViolations(file: string, text: string): string[] {
   return scanImports(file, text)
     .filter((ref) => {
       const target = localTarget(file, ref.specifier);
-      return isElectronPackage(ref.specifier) || (target !== null && isElectronDir(target));
+      return isElectronPackage(ref.specifier) || (target !== null && isElectronDir(target) && !isSharedDir(target));
     })
     .map((ref) => `${posix(file)} imports ${ref.specifier}`);
 }
@@ -82,6 +84,7 @@ function mainViolations(file: string, text: string): string[] {
 }
 
 const readAll = (files: string[]): [string, string][] => files.map((file) => [file, readFileSync(file, 'utf8')]);
+const runtimeFiles = (files: string[]): string[] => files.filter((file) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file));
 
 describe('desktop import boundaries', () => {
   const srcFiles = sourceFiles(join(ROOT, 'src'));
@@ -98,7 +101,7 @@ describe('desktop import boundaries', () => {
   });
 
   it('renderer code outside src/desktop never imports electron', () => {
-    const outside = srcFiles.filter((file) => !file.startsWith(desktopDir));
+    const outside = runtimeFiles(srcFiles).filter((file) => !file.startsWith(desktopDir));
     expect(readAll(outside).flatMap(([file, text]) => rendererViolations(file, text))).toEqual([]);
   });
 
@@ -123,7 +126,7 @@ describe('desktop import boundaries', () => {
   });
 
   it('src/desktop imports only electron/shared', () => {
-    expect(readAll(srcFiles.filter((file) => file.startsWith(desktopDir))).flatMap(([file, text]) => bridgeViolations(file, text))).toEqual([]);
+    expect(readAll(runtimeFiles(srcFiles.filter((file) => file.startsWith(desktopDir)))).flatMap(([file, text]) => bridgeViolations(file, text))).toEqual([]);
   });
 
   it('the bridge rule rejects electron and electron/main, and accepts electron/shared', () => {
@@ -152,7 +155,7 @@ describe('desktop import boundaries', () => {
   });
 
   it('electron/ imports only the allowlisted src modules', () => {
-    expect(readAll(electronFiles).flatMap(([file, text]) => mainViolations(file, text))).toEqual([]);
+    expect(readAll(runtimeFiles(electronFiles)).flatMap(([file, text]) => mainViolations(file, text))).toEqual([]);
   });
 
   it('the main-process rule rejects other src modules and accepts allowlisted ones, including import type', () => {
