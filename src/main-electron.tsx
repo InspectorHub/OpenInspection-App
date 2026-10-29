@@ -21,6 +21,12 @@ const diagnostics = createDesktopDiagDeps(bridge);
 const openDesktopServices = () => composeDesktop(bridge);
 followSystemColorScheme(document.documentElement, window.matchMedia('(prefers-color-scheme: dark)'));
 
+// Disk imports use the native file chooser. Cancel Chromium's default file-drop
+// navigation so dropping a file cannot replace the app renderer document.
+const preventFileDropNavigation = (event: DragEvent): void => event.preventDefault();
+document.addEventListener('dragover', preventFileDropNavigation);
+document.addEventListener('drop', preventFileDropNavigation);
+
 function DesktopRenderer() {
   const [updater, setUpdater] = useState<UpdaterState>({ kind: 'disabled', reason: 'dev' });
   useEffect(() => {
