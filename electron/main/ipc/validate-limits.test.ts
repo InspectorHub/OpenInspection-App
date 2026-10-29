@@ -13,7 +13,7 @@ const uploadOptions = {
   fileField: 'file',
   mimeType: 'image/jpeg',
   maxRetries: 3,
-  headers: { Authorization: 'Bearer x' },
+  headers: { 'x-client-platform': 'windows', 'x-client-version': '1.0.0' },
   notificationTitle: 'Uploading',
 };
 
@@ -88,8 +88,8 @@ describe('maxLongEdge', () => {
 describe('upload headers', () => {
   const start = (headers: Record<string, string>) => validators.uploader.start([{ ...uploadOptions, headers }]);
 
-  it('accepts ordinary headers (control)', () => {
-    expect(() => start({ Authorization: 'Bearer abc', 'X-Client-Version': '1.2.3' })).not.toThrow();
+  it('accepts the allowlisted client headers (control)', () => {
+    expect(() => start({ 'x-client-platform': 'windows', 'x-client-version': '1.2.3' })).not.toThrow();
   });
 
   it.each([
@@ -113,8 +113,8 @@ describe('upload headers', () => {
   });
 
   it('returns the headers as a prototype-free copy', () => {
-    const [options] = validators.uploader.start([{ ...uploadOptions, headers: { A: 'b' } }]);
+    const [options] = validators.uploader.start([{ ...uploadOptions, headers: { 'x-client-platform': 'windows' } }]);
     expect(Object.getPrototypeOf(options.headers)).toBeNull();
-    expect({ ...options.headers }).toEqual({ A: 'b' });
+    expect({ ...options.headers }).toEqual({ 'x-client-platform': 'windows' });
   });
 });

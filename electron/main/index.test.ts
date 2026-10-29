@@ -53,7 +53,7 @@ it('registers media privileges before readiness and sets up once after readiness
   expect(state.create).not.toHaveBeenCalled();
   ready();
   await vi.waitFor(() => expect(state.create).toHaveBeenCalledOnce());
-  expect(state.order).toEqual(['mkdir', 'set-path', 'lock', 'privileged', 'ready', 'mkdir-secrets', 'handler']);
+  expect(state.order).toEqual(['mkdir', 'set-path', 'lock', 'privileged', 'ready', 'mkdir-secrets', 'handler', 'handler']);
   expect(state.create).toHaveBeenCalledOnce();
 });
 

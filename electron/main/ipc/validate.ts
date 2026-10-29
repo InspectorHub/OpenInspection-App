@@ -90,7 +90,17 @@ function uploadOptions(value: unknown): UploaderStartOptions {
   keysOnly(value, ['filePath', 'serverUrl', 'method', 'uploadType', 'fileField', 'mimeType', 'maxRetries', 'headers', 'notificationTitle']);
   const headers = checkedHeaders(value.headers);
   const retries = value.maxRetries;
-  if (typeof retries !== 'number' || !Number.isInteger(retries) || retries < 0 || retries > 20) return fail();
+  if (typeof retries !== 'number' || !Number.isInteger(retries) || retries < 0 || retries > 5) return fail();
+  if (Object.keys(headers).some((name) => name !== 'x-client-version' && name !== 'x-client-platform')) return fail();
+  if (Object.keys(headers).some((name) => name !== name.toLowerCase())) return fail();
+  if (headers['x-client-platform'] !== 'windows' || (headers['x-client-version'] !== undefined && !/^[0-9A-Za-z.+-]{1,32}$/.test(headers['x-client-version']))) return fail();
+  if (typeof value.fileField !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(value.fileField)) return fail();
+  if (typeof value.mimeType !== 'string' || !['image/jpeg', 'image/png', 'image/heic', 'video/mp4', 'video/quicktime'].includes(value.mimeType)) return fail();
+  if (typeof value.notificationTitle !== 'string' || value.notificationTitle.length < 1 || value.notificationTitle.length > 80 || CONTROL_CHARACTERS.test(value.notificationTitle)) return fail();
+  if (typeof value.serverUrl !== 'string' || CONTROL_CHARACTERS.test(value.serverUrl)) return fail();
+  let serverUrl: URL;
+  try { serverUrl = new URL(value.serverUrl); } catch { return fail(); }
+  if ((serverUrl.protocol !== 'https:' && serverUrl.protocol !== 'http:') || serverUrl.username || serverUrl.password || serverUrl.hash) return fail();
   return {
     filePath: nonEmptyText(URL_MAX)(value.filePath),
     serverUrl: nonEmptyText(URL_MAX)(value.serverUrl),

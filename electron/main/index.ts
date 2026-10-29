@@ -7,12 +7,14 @@ import { join } from 'node:path';
 import { createAppOriginHandler, createHttpsPassthrough } from './app-origin.ts';
 import { createKvHost } from './data/kv.ts';
 import { createFilesHost } from './data/files-host.ts';
+import { createMediaFileResolver, createUploaderHost } from './net/uploader-host.ts';
+import { createUploadTransport } from './net/upload-transport.ts';
 import { createMediaFileResponse, createMediaProtocolHandler } from './data/media-protocol.ts';
 import { createSecretsHost, ensureSecretsDirectory, SecretsUnavailableError } from './data/secrets.ts';
 import { openDesktopDb, openNativeSqlite, setAsideUnreadableDatabase } from './data/db-open.ts';
 import { watchRendererDbLifecycle, type DbHost } from './data/db-host.ts';
 import { secureSecretsAcl, type SecurityCommand } from './data/windows-security.ts';
-import { IpcError } from '../shared/ipc-contract.ts';
+import { EVENT_CHANNELS, IpcError } from '../shared/ipc-contract.ts';
 import { registerHandler } from './ipc/register.ts';
 import { validators } from './ipc/validate.ts';
 import { createLogger } from './logger.ts';
@@ -35,6 +37,8 @@ let focus = (): void => {};
 let onSecond = (_argv: readonly string[]): void => {};
 let dbHost: DbHost | null = null;
 let filesHost: ReturnType<typeof createFilesHost> | null = null;
+let uploaderHost: ReturnType<typeof createUploaderHost> | null = null;
+let uploaderContents: { send(channel: string, payload: unknown): void } | null = null;
 let dbOpening: Promise<{ outcome: Awaited<ReturnType<typeof openDesktopDb>>['outcome']; host: DbHost | null }> | null = null;
 
 if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () => focus() })) {
@@ -44,10 +48,12 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     create: (options) => new BrowserWindow(options), setApplicationMenu: (menu) => Menu.setApplicationMenu(menu),
     openExternal: (url) => shell.openExternal(url), log,
     onCreated: (win) => {
+      const currentContents = win.webContents as unknown as { send(channel: string, payload: unknown): void };
+      uploaderContents = currentContents;
       const contents = win.webContents as unknown as { on(event: string, listener: () => void): unknown };
       watchRendererDbLifecycle(contents, () => dbHost);
-      contents.on('destroyed', () => { void filesHost?.abortAll(); });
-      contents.on('render-process-gone', () => { void filesHost?.abortAll(); });
+      contents.on('destroyed', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); if (uploaderContents === currentContents) uploaderContents = null; });
+      contents.on('render-process-gone', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); });
     } });
   focus = windows.focus;
   protocol.registerSchemesAsPrivileged([{ scheme: 'oi-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
@@ -85,6 +91,9 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     applyPermissionPolicy(session.defaultSession);
     protocol.handle('https', createAppOriginHandler({ rendererRoot: paths.rendererRoot, readFile, passthrough: createHttpsPassthrough(net), packaged: app.isPackaged }));
     filesHost = createFilesHost({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
+    uploaderHost = createUploaderHost({ transport: createUploadTransport(), resolveMediaFile: createMediaFileResolver({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache') }),
+      timers: { setTimeout, clearTimeout }, random: Math.random, packaged: app.isPackaged });
+    uploaderHost.onEvent((event) => { try { uploaderContents?.send(EVENT_CHANNELS.uploaderEvent, event); } catch { /* renderer lifecycle can race a completion */ } });
     protocol.handle('oi-media', createMediaProtocolHandler({
       mediaRoot: join(paths.userData, 'media'),
       fetchFile: createMediaFileResponse,
@@ -103,6 +112,9 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     registerHandler(registerDeps, 'files:stream-open', validators.files.streamOpen, async (area, path) => files.stream.open(area, path));
     registerHandler(registerDeps, 'files:stream-append', validators.files.streamAppend, async (handle, chunk) => files.stream.append(handle, chunk));
     registerHandler(registerDeps, 'files:stream-finish', validators.files.streamFinish, async (handle, outcome) => files.stream.finish(handle, outcome));
+    const uploader = uploaderHost;
+    registerHandler(registerDeps, 'uploader:start', validators.uploader.start, async (options) => uploader.start(options));
+    registerHandler(registerDeps, 'uploader:remove', validators.uploader.remove, async (id) => uploader.remove(id));
     const secrets = createSecretsHost({ safeStorage, fs, dir: secretsDir });
     if (!secrets.available) throw new SecretsUnavailableError();
     const kv = createKvHost({ fs, file: join(paths.userData, 'kv.json') });

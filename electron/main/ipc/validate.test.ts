@@ -13,7 +13,7 @@ const uploadOptions = {
   fileField: 'file',
   mimeType: 'image/jpeg',
   maxRetries: 3,
-  headers: { Authorization: 'Bearer x' },
+  headers: { 'x-client-platform': 'windows', 'x-client-version': '1.0.0' },
   notificationTitle: 'Uploading',
 };
 
@@ -47,7 +47,7 @@ const TABLE: [channel: string, validate: Validator, valid: unknown[][], invalid:
   ['files:stream-open', validators.files.streamOpen, [['media', 'a.jpg'], ['cache', 'b.zip']], [['media'], ['elsewhere', 'a.jpg'], [1, 'a.jpg']]],
   ['files:stream-append', validators.files.streamAppend, [['h1', bytes(3)]], [['h1'], ['h1', 'text'], [1, bytes(1)]]],
   ['files:stream-finish', validators.files.streamFinish, [['h1', 'commit'], ['h1', 'abort']], [['h1'], ['h1', 'keep'], [1, 'commit']]],
-  ['uploader:start', validators.uploader.start, [[uploadOptions]], [[], ['text'], [{ ...uploadOptions, method: 'PUT' }], [{ ...uploadOptions, maxRetries: -1 }], [{ ...uploadOptions, headers: { a: 1 } }], [{ ...uploadOptions, extra: true }], [{ ...uploadOptions, fileField: undefined }]]],
+  ['uploader:start', validators.uploader.start, [[uploadOptions]], [[], ['text'], [{ ...uploadOptions, method: 'PUT' }], [{ ...uploadOptions, maxRetries: -1 }], [{ ...uploadOptions, maxRetries: 6 }], [{ ...uploadOptions, headers: { authorization: 'secret' } }], [{ ...uploadOptions, headers: { ...uploadOptions.headers, 'X-Client-Platform': 'windows' } }], [{ ...uploadOptions, extra: true }], [{ ...uploadOptions, fileField: undefined }], [{ ...uploadOptions, mimeType: 'application/octet-stream' }], [{ ...uploadOptions, notificationTitle: 'x'.repeat(81) }]]],
   ['uploader:remove', validators.uploader.remove, [['id-1']], [[], [1]]],
   ['shell:open-external', validators.shell.openExternal, [['https://example.com/a']], [[], [1], ['u'.repeat(3000)]]],
   ['shell:open-logs', validators.shell.openLogs, [[]], [[1]]],
