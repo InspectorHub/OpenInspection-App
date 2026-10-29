@@ -8,14 +8,29 @@ git tags; two workflows do the building:
 | `.github/workflows/release-android.yml` | a pushed tag `vX.Y.Z`, or a manual run | on a tag: a signed APK, `SHA256SUMS` and a **draft** GitHub Release; from a branch: an unsigned APK as a pipeline check |
 | `.github/workflows/release-ios.yml` | a pushed tag `vX.Y.Z`, or a manual run on a tag | a signed build uploaded to TestFlight |
 
-> **The iOS workflow is written to the release plan and has never been run.** It needs an Apple developer account and the items
-> listed under "iOS: what the workflow cannot do for you" below. Treat the first run as a trial, and expect to adjust it.
+> **The iOS workflow has not uploaded a build to TestFlight.** The `v0.1.0` tag run passed its verification job, then waited at the
+> protected TestFlight environment. It needs an Apple developer account and the items listed under "iOS: what the workflow cannot do
+> for you" below. Treat the first upload as a trial, and expect to adjust it.
 
 > **Do not cut a release before the editor package that understands the `kept` upload answer is adopted** (`@inspectorhub/field-ui`
 > 0.3.0 or later in `package.json`). An older editor treats that answer as a failure, so a photo the server has already kept would be
 > reported as lost. Check the dependency before tagging.
 
 The current dependency is `@inspectorhub/field-ui` 0.5.0, which meets that prerequisite. Check it again when tagging a later version.
+
+## First tag run (`v0.1.0`, 2026-10-29)
+
+The Android `verify`, `build`, `sign` and `release` jobs all passed. The signed APK passed v2/v3 signature verification and reports
+`versionName` `0.1.0` and `versionCode` `1000`. Certificate SHA-256:
+`5a320a607b0be568400c23fce6daf61b1bdd4f4defb5a3e015a1cd5a7825d738`. APK SHA-256:
+`76a04984235dec02221688dbfdbd112258715d1bdd4e58fba2d7de6bee1f2c64`. The GitHub Release is a draft; compare the certificate with
+the offline record before publishing.
+
+The iOS `verify` job passed, but `testflight` is waiting for its protected environment. No Apple signing or upload was approved or
+performed because the Apple credentials and variables are not configured.
+
+Keep the Android draft unpublished until the large-package tag-pull fairness correction is included in a later patch release. A
+120-inspection test showed that the 400-request ceiling could repeatedly leave the same inspections without a tag read.
 
 ## The version
 
