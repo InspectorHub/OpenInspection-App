@@ -74,6 +74,16 @@ describe('the preload script', () => {
     expect(Object.keys(ns(api, 'media'))).toEqual(['decodeHeic']);
   });
 
+  it('omits the optional decoder bridge when the development-only window argument is present', async () => {
+    process.argv.push('--oi-no-heic-decoder');
+    try {
+      const api = await exposed();
+      expect(Object.keys(ns(api, 'media'))).toEqual([]);
+    } finally {
+      process.argv.pop();
+    }
+  });
+
   it('delivers an event listener the payload only, never the event', async () => {
     const api = await exposed();
     const listener = vi.fn();

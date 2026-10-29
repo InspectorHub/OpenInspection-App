@@ -17,6 +17,7 @@ export interface ShellWindow extends WindowLike {
 
 export function createWindowController(deps: {
   packaged: boolean;
+  noHeicDecoder?: boolean;
   preload: string;
   create(options: BrowserWindowConstructorOptions): ShellWindow;
   setApplicationMenu(menu: null): void;
@@ -34,6 +35,7 @@ export function createWindowController(deps: {
       const created = deps.create({
         width: 1280, height: 800, minWidth: 480, minHeight: 640, title: 'InspectorHub',
         webPreferences: { preload: deps.preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true,
+          ...(deps.noHeicDecoder ? { additionalArguments: ['--oi-no-heic-decoder'] } : {}),
           allowRunningInsecureContent: false, backgroundThrottling: false, devTools: !deps.packaged, spellcheck: false, webviewTag: false },
       });
       window = created;

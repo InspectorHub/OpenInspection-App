@@ -11,7 +11,7 @@ describe('composeDesktop', () => {
       requests.push(init);
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
-    const services = await composeDesktop({} as DesktopBridge);
+    const services = await composeDesktop({ media: {} } as unknown as DesktopBridge);
     expect(services.platform).toBe('windows');
     await services.http.request({ url: 'https://example.test/ping', method: 'GET' });
     await services.refreshCompat('https://example.test');
@@ -30,5 +30,10 @@ describe('composeDesktop', () => {
 
     expect(decodeHeic).toHaveBeenCalledOnce();
     expect(decoded?.blob.type).toBe('image/jpeg');
+  });
+
+  it('keeps the optional editor decoder absent when preload does not expose the bridge method', async () => {
+    const services = await composeDesktop({ media: {} } as unknown as DesktopBridge);
+    expect(services.decodeImage).toBeUndefined();
   });
 });

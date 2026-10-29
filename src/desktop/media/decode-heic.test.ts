@@ -4,8 +4,8 @@ import { createDesktopDecodeImage, HEIC_INSTALL_LINKS } from './decode-heic';
 
 const heicBytes = Uint8Array.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0]);
 const file = (bytes: Uint8Array, type = 'image/heic'): Blob => new Blob([bytes.slice().buffer as ArrayBuffer], { type });
-type DecodeHeic = DesktopBridge['media']['decodeHeic'];
-const bridgeFor = (decodeHeic: DecodeHeic): Pick<DesktopBridge, 'media'> => ({ media: { decodeHeic } });
+type DecodeHeic = NonNullable<DesktopBridge['media']['decodeHeic']>;
+const bridgeFor = (decodeHeic: DecodeHeic) => ({ media: { decodeHeic } });
 const decodeReply = (reply: DecodeHeicReply): DecodeHeic => vi.fn(async (_request: DecodeHeicRequest) => reply);
 
 afterEach(() => vi.unstubAllGlobals());

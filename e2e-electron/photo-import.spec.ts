@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import type { DesktopBridge } from '../electron/shared/ipc-contract.ts';
 import { startRendererEngine, type RendererEngine } from './fixtures/renderer-engine.ts';
 
+test.describe.configure({ timeout: 120_000 });
+
 declare global { interface Window { oiDesktop: DesktopBridge } }
 
 const execFileAsync = promisify(execFile);

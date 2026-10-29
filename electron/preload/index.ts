@@ -85,6 +85,8 @@ function listen<T>(channel: string, listener: (payload: T) => void): () => void 
 /** An omitted optional argument is left out, not sent as `undefined`. */
 const optional = (value: unknown): unknown[] => (value === undefined ? [] : [value]);
 
+const noHeicDecoder = process.argv.includes('--oi-no-heic-decoder');
+
 const bridge: DesktopBridge = {
   apiVersion: 1,
   db: {
@@ -149,7 +151,7 @@ const bridge: DesktopBridge = {
     download: () => call(CHANNELS.updater.download),
     installAndRestart: () => call(CHANNELS.updater.installAndRestart),
   },
-  media: {
+  media: noHeicDecoder ? {} : {
     decodeHeic: async (request) => {
       const reply = await call<unknown>(CHANNELS.media.decodeHeic, request);
       if (!isDecodeHeicReply(reply)) throw new IpcError('internal');

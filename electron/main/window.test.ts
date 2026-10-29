@@ -8,7 +8,7 @@ import { createWindowController, type ShellWindow } from './window.ts';
 
 type TestShellWindow = ShellWindow & EventEmitter;
 
-function setup(packaged = false) {
+function setup(packaged = false, noHeicDecoder = false) {
   const order: string[] = [];
   let destroyed = false;
   const webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler: vi.fn() });
@@ -16,7 +16,7 @@ function setup(packaged = false) {
   const create = vi.fn((_options: BrowserWindowConstructorOptions): ShellWindow => win);
   const setApplicationMenu = vi.fn();
   const log = vi.fn();
-  const controller = createWindowController({ packaged, preload: '/preload.cjs', create, setApplicationMenu, openExternal: async () => {}, log });
+  const controller = createWindowController({ packaged, noHeicDecoder, preload: '/preload.cjs', create, setApplicationMenu, openExternal: async () => {}, log });
   return { controller, create, setApplicationMenu, order, win, log, destroy: () => { destroyed = true; } };
 }
 
@@ -40,6 +40,15 @@ it('logs window-ready only after the renderer entry finishes loading', async () 
   finish();
   await Promise.resolve();
   expect(log).toHaveBeenCalledWith('window-ready');
+});
+
+it('passes the decoder-disabled marker to preload only when requested by an unpackaged test launch', () => {
+  const { controller, create } = setup(false, true);
+  controller.ensure();
+  expect(create.mock.calls[0]![0].webPreferences?.additionalArguments).toEqual(['--oi-no-heic-decoder']);
+  const regular = setup(false);
+  regular.controller.ensure();
+  expect(regular.create.mock.calls[0]![0].webPreferences?.additionalArguments).toBeUndefined();
 });
 
 it('keeps renderer timers active and maps focus/restore/show and minimize/hide to app state', () => {

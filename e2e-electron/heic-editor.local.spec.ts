@@ -98,6 +98,20 @@ async function openEditorWithRealHeicHelper(): Promise<void> {
   await page.getByRole('button', { name: 'Open Roof cover' }).click();
 }
 
+async function openEditorWithNoHeicDecoder(): Promise<void> {
+  await electronApp.close();
+  environment.OI_E2E_NO_HEIC_DECODER = '1';
+  electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
+  page = await electronApp.firstWindow();
+  await electronApp.evaluate(({ shell }) => { shell.openExternal = async (url) => { Reflect.set(globalThis, 'rendererExternalUrl', url); }; });
+  await signIn();
+  await seedEditorPackage();
+  await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
+  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+}
+
 function withIrotRotation(fixture: Buffer, rotation: 1 | 2 | 3): Buffer {
   const propertyName = Buffer.from('irot');
   const propertyOffset = fixture.indexOf(propertyName);
@@ -204,6 +218,30 @@ test('an over-10-MiB HEIC is converted and stored as JPEG with original quality 
   const jpeg = await readFile(join(userData, 'media', relativeMediaPath));
   expect([...jpeg.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
   expect(jpeg.byteLength).toBeLessThanOrEqual(10 * 1024 * 1024);
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+});
+
+test('an over-10-MiB HEIC is refused when the development decoder is disabled', async () => {
+  test.setTimeout(120_000);
+  await openEditorWithNoHeicDecoder();
+  await page.getByRole('button', { name: 'Report settings' }).click();
+  await page.getByTestId('original-quality-uploads').check();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+
+  const source = await readFile(resolve('src/media/heic/fixtures/fixture-64x48.heic'));
+  const freeBox = Buffer.alloc(12 * 1024 * 1024);
+  freeBox.writeUInt32BE(freeBox.length, 0);
+  freeBox.write('free', 4, 'ascii');
+  const oversizedHeic = Buffer.concat([source, freeBox]);
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Add photo', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Add from library' }).click();
+  await (await chooserPromise).setFiles({ name: 'large-without-decoder.heic', mimeType: 'image/heic', buffer: oversizedHeic });
+
+  await expect(page.getByText('1 photo could not be added because each exceeds the 10 MB limit.', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => page.evaluate(() => window.oiDesktop.db.query('SELECT content_type FROM media'))).toEqual([]);
   expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 });
 

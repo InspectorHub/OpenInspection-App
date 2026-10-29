@@ -12,6 +12,7 @@ import { realFetch, composeWith, type AppServices } from '../app/compose';
 /** Composes the shared app services over the Electron preload's narrow, validated bridge. */
 export async function composeDesktop(bridge: DesktopBridge): Promise<AppServices> {
   const db = createDesktopDb(bridge);
+  const decodeHeic = bridge.media.decodeHeic;
   return composeWith({
     db,
     files: createDesktopFiles(bridge),
@@ -24,7 +25,7 @@ export async function composeDesktop(bridge: DesktopBridge): Promise<AppServices
     builtAt: __APP_BUILT_AT__,
     kv: createDesktopKeyValue(bridge),
     openExternal: (url) => bridge.shell.openExternal(url),
-    decodeImage: createDesktopDecodeImage(bridge),
+    ...(decodeHeic === undefined ? {} : { decodeImage: createDesktopDecodeImage({ media: { decodeHeic } }) }),
     sharer: createDesktopSharer(bridge),
     closeDb: () => bridge.db.close(),
   });

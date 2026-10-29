@@ -106,7 +106,7 @@ export interface DesktopBridge {
     installAndRestart(): Promise<'restarting' | 'blocked-uploads'>;
   };
   /** The one way the renderer reaches the system HEIC decoder. It cannot name an executable, a path or an argument. */
-  media: { decodeHeic(request: DecodeHeicRequest): Promise<DecodeHeicReply> };
+  media: { decodeHeic?: (request: DecodeHeicRequest) => Promise<DecodeHeicReply> };
 }
 
 export type BridgeNamespace = Exclude<keyof DesktopBridge, 'apiVersion'>;

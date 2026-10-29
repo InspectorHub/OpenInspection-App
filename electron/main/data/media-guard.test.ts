@@ -56,7 +56,10 @@ describe('media byte guard', () => {
   it('allows the 10,000th media file and refuses the 10,001st', async () => {
     // Seed pre-existing files directly to exercise the startup count without 10,000 IPC writes.
     await (await import('node:fs/promises')).mkdir(join(root, 'media'), { recursive: true });
-    for (let i = 0; i < 9999; i += 1) await (await import('node:fs/promises')).writeFile(join(root, 'media', `seed-${i}.bin`), 'x');
+    const disk = await import('node:fs/promises');
+    for (let start = 0; start < 9999; start += 250) {
+      await Promise.all(Array.from({ length: Math.min(250, 9999 - start) }, (_, offset) => disk.writeFile(join(root, 'media', `seed-${start + offset}.bin`), 'x')));
+    }
     await files.dispose?.();
     files = createFilesHost({ fs: await import('node:fs/promises'), mediaRoot: join(root, 'media'), cacheRoot: join(root, 'cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
     await expect(files.write('tenthousand.jpg', jpg)).resolves.toMatch(/^file:/);

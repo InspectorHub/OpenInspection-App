@@ -29,7 +29,7 @@ function decodeError(code: HeicDecodeCode): DecodeImageError {
 }
 
 /** Adapts the narrow desktop IPC response to field-ui's optional photo decoder contract. */
-export function createDesktopDecodeImage(bridge: Pick<DesktopBridge, 'media'>): DecodeImage {
+export function createDesktopDecodeImage(bridge: { media: { decodeHeic: NonNullable<DesktopBridge['media']['decodeHeic']> } }): DecodeImage {
   return async (file, options) => {
     if (file.size > MAX_DECODE_INPUT_BYTES) throw new DecodeImageError('UNSUPPORTED', inputTooLargeMessage);
 
