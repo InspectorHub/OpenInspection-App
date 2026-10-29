@@ -66,5 +66,3 @@ export function createElectronBuilderConfig({ helperPath = join(process.cwd(), '
   },
   };
 }
-
-export default createElectronBuilderConfig();
