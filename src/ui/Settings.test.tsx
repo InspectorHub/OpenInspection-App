@@ -26,6 +26,18 @@ describe('Settings structure', () => {
     expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
   });
 
+  it('only renders the desktop settings panel when a desktop port is provided', async () => {
+    const world = await createSignedInWorld();
+    const renderSettings = (desktop?: { appVersion: string; updater: { kind: 'disabled'; reason: 'unsigned' }; checkForUpdates(): void; openLogs(): void; openDataFolder(): void }) => render(
+      <Settings services={world.services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} {...(desktop === undefined ? {} : { desktop })} />,
+    );
+    const view = renderSettings();
+    expect(screen.queryByText('Desktop app')).not.toBeInTheDocument();
+    view.unmount();
+    renderSettings({ appVersion: '0.1.1', updater: { kind: 'disabled', reason: 'unsigned' }, checkForUpdates: vi.fn(), openLogs: vi.fn(), openDataFolder: vi.fn() });
+    expect(screen.getByText('Desktop app')).toBeInTheDocument();
+  });
+
   it('moves focus to the title when it opens', async () => {
     const world = await createSignedInWorld();
     await open(world);

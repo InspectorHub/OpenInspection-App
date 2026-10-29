@@ -1,0 +1,1 @@
+export const RELEASE_FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]', 'Seed demo data', 'Remove demo data', 'diag-quarantined', 'diag-photo-unattached', 'issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'];

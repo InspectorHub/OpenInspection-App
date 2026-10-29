@@ -9,6 +9,8 @@ import { createUnlockEmitter } from './app/lock-events';
 import { OfflineStackContext } from './app/stack-context';
 import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
 import type { Network } from './platform/network';
+import type { DesktopSettingsPort } from './desktop/updater-port';
+import type { DiagDeps } from './dev/checks/types';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
 import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
@@ -36,6 +38,10 @@ export interface AppProps {
   offline?: StackFactory;
   /** Link state for the editor and foreground version checks. Omitted: the editor uses browser link state. */
   network?: Network;
+  /** Desktop-only Settings controls. Capacitor entry never supplies this. */
+  desktopSettings?: DesktopSettingsPort;
+  /** Platform diagnostics dependencies; Electron supplies browser/filesystem-backed adapters. */
+  diagnostics?: DiagDeps;
 }
 
 /** Consecutive failed mid-session evaluations after which the work screen is locked. */
@@ -70,7 +76,7 @@ async function backToLock(services: AppServices, origin: string, held: StoredIde
   setScreen(await screenForSignedIn(services, origin, identity).catch((): Screen => ({ kind: 'locked', origin, identity, reason: 'expired' })));
 }
 
-export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline, network }: AppProps) {
+export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline, network, desktopSettings, diagnostics }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const [lockedExport, setLockedExport] = useState(false);
@@ -200,6 +206,8 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             identity={screen.identity}
             onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
             onWiping={setWiping}
+            desktopSettings={desktopSettings}
+            diagnostics={diagnostics}
             {...(network === undefined ? {} : { network })}
           />
         </OfflineStackContext.Provider>

@@ -9,6 +9,7 @@ describe('the desktop import graph', () => {
   it('walks a real set of files from both entries (an empty walk would pass vacuously)', () => {
     expect(importGraph('src/App.tsx').files.size).toBeGreaterThan(100);
     expect(importGraph('src/main.tsx').files.size).toBeGreaterThan(100);
+    expect(importGraph('src/main-electron.tsx').files.size).toBeGreaterThan(100);
   });
 
   it('control: the Android entry reaches Capacitor', () => {
@@ -17,5 +18,9 @@ describe('the desktop import graph', () => {
 
   it('src/App.tsx reaches no Capacitor module', () => {
     expect(capacitorFilesFrom('src/App.tsx')).toEqual([]);
+  });
+
+  it('the Electron renderer entry reaches no Capacitor module', () => {
+    expect(capacitorFilesFrom('src/main-electron.tsx')).toEqual([]);
   });
 });

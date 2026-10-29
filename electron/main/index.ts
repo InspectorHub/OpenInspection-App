@@ -211,6 +211,10 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       if (!isAllowedExternalUrl(url, { packaged: app.isPackaged })) throw new IpcError('invalid-argument');
       await shell.openExternal(url);
     });
+    registerHandler(registerDeps, 'shell:open-logs', validators.shell.openLogs, async () => {
+      const result = await shell.openPath(join(paths.userData, 'logs'));
+      if (result !== '') throw new Error('open-logs-failed');
+    });
     const uploader = uploaderHost;
     registerHandler(registerDeps, 'uploader:start', validators.uploader.start, async (options) => uploader.start(options));
     registerHandler(registerDeps, 'uploader:remove', validators.uploader.remove, async (id) => uploader.remove(id));
