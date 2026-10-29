@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createAppOriginHandler, createHttpsPassthrough } from './app-origin.ts';
 import { createKvHost } from './data/kv.ts';
+import { createFilesHost } from './data/files-host.ts';
+import { createMediaFileResponse, createMediaProtocolHandler } from './data/media-protocol.ts';
 import { createSecretsHost, ensureSecretsDirectory, SecretsUnavailableError } from './data/secrets.ts';
 import { openDesktopDb, openNativeSqlite, setAsideUnreadableDatabase } from './data/db-open.ts';
 import { watchRendererDbLifecycle, type DbHost } from './data/db-host.ts';
@@ -32,6 +34,7 @@ app.setPath('userData', paths.userData);
 let focus = (): void => {};
 let onSecond = (_argv: readonly string[]): void => {};
 let dbHost: DbHost | null = null;
+let filesHost: ReturnType<typeof createFilesHost> | null = null;
 let dbOpening: Promise<{ outcome: Awaited<ReturnType<typeof openDesktopDb>>['outcome']; host: DbHost | null }> | null = null;
 
 if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () => focus() })) {
@@ -40,7 +43,12 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
   const windows = createWindowController({ packaged: app.isPackaged, preload: join(__dirname, '../preload/index.cjs'),
     create: (options) => new BrowserWindow(options), setApplicationMenu: (menu) => Menu.setApplicationMenu(menu),
     openExternal: (url) => shell.openExternal(url), log,
-    onCreated: (win) => watchRendererDbLifecycle(win.webContents as unknown as { on(event: string, listener: () => void): unknown }, () => dbHost) });
+    onCreated: (win) => {
+      const contents = win.webContents as unknown as { on(event: string, listener: () => void): unknown };
+      watchRendererDbLifecycle(contents, () => dbHost);
+      contents.on('destroyed', () => { void filesHost?.abortAll(); });
+      contents.on('render-process-gone', () => { void filesHost?.abortAll(); });
+    } });
   focus = windows.focus;
   protocol.registerSchemesAsPrivileged([{ scheme: 'oi-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
   void app.whenReady().then(async () => {
@@ -72,13 +80,32 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
         return paths;
       },
     });
+    const registerDeps = { ipcMain, log };
     applyNavigationRequestPolicy(session.defaultSession);
     applyPermissionPolicy(session.defaultSession);
     protocol.handle('https', createAppOriginHandler({ rendererRoot: paths.rendererRoot, readFile, passthrough: createHttpsPassthrough(net), packaged: app.isPackaged }));
+    filesHost = createFilesHost({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
+    protocol.handle('oi-media', createMediaProtocolHandler({
+      mediaRoot: join(paths.userData, 'media'),
+      fetchFile: createMediaFileResponse,
+    }));
+    const files = filesHost;
+    registerHandler(registerDeps, 'files:write', validators.files.write, async (path, bytes) => files.write(path, bytes));
+    registerHandler(registerDeps, 'files:size', validators.files.size, async (path) => files.size(path));
+    registerHandler(registerDeps, 'files:read', validators.files.read, async (path) => files.read(path));
+    registerHandler(registerDeps, 'files:remove', validators.files.remove, async (path) => files.remove(path));
+    registerHandler(registerDeps, 'files:display-url', validators.files.displayUrl, async (path) => files.displayUrl(path));
+    registerHandler(registerDeps, 'files:file-uri', validators.files.fileUri, async (path) => files.fileUri(path));
+    registerHandler(registerDeps, 'files:exists', validators.files.exists, async (path) => files.exists(path));
+    registerHandler(registerDeps, 'files:list', validators.files.list, async (path) => files.list(path));
+    registerHandler(registerDeps, 'files:remove-cache', validators.files.removeCache, async (path) => files.removeCache(path));
+    registerHandler(registerDeps, 'files:list-cache', validators.files.listCache, async () => files.listCache());
+    registerHandler(registerDeps, 'files:stream-open', validators.files.streamOpen, async (area, path) => files.stream.open(area, path));
+    registerHandler(registerDeps, 'files:stream-append', validators.files.streamAppend, async (handle, chunk) => files.stream.append(handle, chunk));
+    registerHandler(registerDeps, 'files:stream-finish', validators.files.streamFinish, async (handle, outcome) => files.stream.finish(handle, outcome));
     const secrets = createSecretsHost({ safeStorage, fs, dir: secretsDir });
     if (!secrets.available) throw new SecretsUnavailableError();
     const kv = createKvHost({ fs, file: join(paths.userData, 'kv.json') });
-    const registerDeps = { ipcMain, log };
     registerHandler(registerDeps, 'secrets:get', validators.secrets.get, async (key) => secrets.get(key));
     registerHandler(registerDeps, 'secrets:set', validators.secrets.set, async (key, value) => {
       try { await secrets.set(key, value); }

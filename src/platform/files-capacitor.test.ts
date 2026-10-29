@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { createFiles, type FilesystemLike, WRITE_SLICE_BYTES } from './files-capacitor';
 import { assertSafeRelativePath } from './files-path';
+import { describeFilesContract } from './test-support/files-contract';
 
 function fakeFs() {
   const store = new Map<string, Uint8Array>();
@@ -53,7 +54,7 @@ function fakeFs() {
     },
     readdir: ({ path, directory }) => {
       dirLog.push(`readdir:${directory}`);
-      const prefix = `${path}/`;
+      const prefix = path === '' ? '' : `${path}/`;
       const names = [...store.keys()].filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes('/'));
       if (names.length === 0) return Promise.reject(new Error('Directory does not exist'));
       return Promise.resolve({ files: names.map((key, index) => (index === 0 ? { name: key.slice(prefix.length), mtime: 5_000 } : { name: key.slice(prefix.length) })) });
@@ -69,6 +70,8 @@ const make = () => {
   const f = fakeFs();
   return { ...f, files: createFiles({ fs: f.fs, convertFileSrc: (u) => `https://localhost/_capacitor_file_${u.slice(7)}` }) };
 };
+
+describeFilesContract(() => make().files);
 
 describe('base64 helpers', () => {
   it('round-trips arbitrary bytes, including large inputs', () => {
