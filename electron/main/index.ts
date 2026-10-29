@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, net, protocol, safeStorage, session, shell, ipcMain, powerMonitor, powerSaveBlocker, dialog, Notification } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { mkdirSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -34,6 +35,7 @@ import { createQuitGuard } from './lifecycle/quit-guard.ts';
 import { createUploadNotifier } from './lifecycle/notify.ts';
 import { createTaskbarProgress } from './lifecycle/taskbar.ts';
 import { shutdownDesktop } from './lifecycle/shutdown.ts';
+import { createUpdaterHost, readBuildMeta, type AutoUpdaterLike } from './updater.ts';
 
 app.setAppUserModelId('io.inspectorhub.app');
 
@@ -208,6 +210,35 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     });
     uploaderHost = createUploaderHost({ transport: createUploadTransport(), resolveMediaFile: createMediaFileResolver({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache') }),
       timers: { setTimeout, clearTimeout }, random: Math.random, packaged: app.isPackaged });
+    const buildMeta = readBuildMeta(app.getAppPath());
+    const update = createUpdaterHost({
+      autoUpdater: autoUpdater as unknown as AutoUpdaterLike,
+      enabled: buildMeta.oiSigned,
+      packaged: app.isPackaged,
+      uploads: () => uploaderHost?.activeCount() ?? 0,
+      shutdown: () => shutdownDesktop({
+        abortUploads: () => uploaderHost?.abortAll('quit'),
+        state: {
+          get opening() { return dbOpening; },
+          set opening(value) { dbOpening = value; },
+          get host() { return dbHost; },
+          set host(value) { dbHost = value; },
+        },
+      }),
+      timers: {
+        setTimeout: (callback, delayMs) => {
+          const timer = setTimeout(callback, delayMs);
+          timer.unref();
+          return timer;
+        },
+        clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      },
+      random: Math.random,
+      log,
+    });
+    update.onState((state) => {
+      try { uploaderContents?.send(EVENT_CHANNELS.updaterState, state); } catch { /* renderer lifecycle can race an update */ }
+    });
     uploaderHost.onEvent((event) => { try { uploaderContents?.send(EVENT_CHANNELS.uploaderEvent, event); } catch { /* renderer lifecycle can race a completion */ } });
     const disposePowerBridge = createPowerBridge({ powerMonitor, uploader: uploaderHost, emitActive: (active) => {
       try { uploaderContents?.send(EVENT_CHANNELS.activeChange, active); } catch { /* renderer lifecycle can race a power transition */ }
@@ -219,6 +250,10 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       fetchFile: createMediaFileResponse,
     }));
     const files = filesHost;
+    registerHandler(registerDeps, 'updater:state', validators.updater.state, async () => update.state());
+    registerHandler(registerDeps, 'updater:check', validators.updater.check, async () => update.check());
+    registerHandler(registerDeps, 'updater:download', validators.updater.download, async () => update.download());
+    registerHandler(registerDeps, 'updater:install-and-restart', validators.updater.installAndRestart, async () => update.installAndRestart());
     registerHandler(registerDeps, 'dialogs:save-export', validators.dialogs.saveExport, async (fileUri, suggestedName) => dialogsHost.saveExport(fileUri, suggestedName));
     registerHandler(registerDeps, 'files:write', validators.files.write, async (path, bytes) => files.write(path, bytes));
     registerHandler(registerDeps, 'files:size', validators.files.size, async (path) => files.size(path));

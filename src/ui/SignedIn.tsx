@@ -65,7 +65,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
   const stack = useOfflineStack();
   const reconcile = useMemo(() => (stack === null ? undefined : reconcileGateFor(stack.reconciler)), [stack]);
   // After the first-level heading: the notices have second-level ones.
-  const notices = <ClientNotices services={services} origin={origin} />;
+  const notices = <ClientNotices services={services} origin={origin} desktop={desktopSettings} />;
 
   // Back from Settings lands on the button that opened it.
   useEffect(() => {

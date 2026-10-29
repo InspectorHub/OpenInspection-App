@@ -5,6 +5,8 @@ export interface DesktopSettingsPort {
   appVersion: string;
   updater: UpdaterState;
   checkForUpdates(): void;
+  downloadUpdate?(): void;
+  installAndRestart?(): Promise<'restarting' | 'blocked-uploads'>;
   openLogs(): void;
   openDataFolder(): void;
 }

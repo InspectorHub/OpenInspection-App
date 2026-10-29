@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppServices } from '../app/compose';
 import { createSignedInWorld, type World } from '../app/test-support/world';
 import type { CompatInfo } from '../auth/server-config';
+import type { DesktopSettingsPort } from '../desktop/updater-port';
 import { touchMaxSeen } from '../offline/lock-state';
 import { ClientNotices } from './ClientNotices';
 import { ServerTooOld } from './ServerTooOld';
@@ -20,6 +21,9 @@ const DAY = 86_400_000;
 const BUILT = '2026-10-01T12:00:00.000Z';
 const BUILT_MS = Date.parse(BUILT);
 const APK = 'https://downloads.example.test/app.apk';
+const desktopUpdater = (updater: DesktopSettingsPort['updater'], over: Partial<DesktopSettingsPort> = {}): DesktopSettingsPort => ({
+  appVersion: '0.1.1', updater, checkForUpdates: vi.fn(), downloadUpdate: vi.fn(), installAndRestart: vi.fn(async () => 'restarting' as const), openLogs: vi.fn(), openDataFolder: vi.fn(), ...over,
+});
 
 /** Lets every already-resolved promise run, inside act. Microtasks only: no timer, no clock. */
 async function settle(): Promise<void> {
@@ -82,6 +86,14 @@ describe('UpgradeRequired', () => {
     expect(screen.getAllByText(/ask your administrator/i).length).toBeGreaterThan(0);
     const ios = render(<UpgradeRequired platform="ios" downloadUrl={null} openExternal={vi.fn()} />);
     expect(ios.container).toHaveTextContent(/testflight/i);
+  });
+
+  it('Windows upgrade-required screen uses the packaged updater and reports upload guard blocks', async () => {
+    const controls = desktopUpdater({ kind: 'ready', version: '0.2.0' }, { installAndRestart: vi.fn(async () => 'blocked-uploads' as const) });
+    render(<UpgradeRequired platform="windows" downloadUrl={APK} openExternal={vi.fn()} desktop={controls} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(controls.installAndRestart).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Finish uploading before restarting to update.')).toBeInTheDocument();
   });
 
   it('iOS: the button is named for TestFlight and opens the address the server gave', async () => {
@@ -194,6 +206,21 @@ describe('UpdateRecommended', () => {
     windows.unmount();
     render(<UpdateRecommended platform="ios" downloadUrl={APK} openExternal={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Open TestFlight' })).toBeInTheDocument();
+  });
+
+  it('Windows uses the packaged updater when an update is ready, and blocks restart feedback when uploads remain', async () => {
+    const controls = desktopUpdater({ kind: 'ready', version: '0.2.0' }, { installAndRestart: vi.fn(async () => 'blocked-uploads' as const) });
+    render(<UpdateRecommended platform="windows" downloadUrl={APK} openExternal={vi.fn()} onDismiss={vi.fn()} desktop={controls} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(controls.installAndRestart).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Finish uploading before restarting to update.')).toBeInTheDocument();
+  });
+
+  it('Windows falls back to the server link when the packaged updater is disabled', async () => {
+    const openExternal = vi.fn();
+    render(<UpdateRecommended platform="windows" downloadUrl={APK} openExternal={openExternal} onDismiss={vi.fn()} desktop={desktopUpdater({ kind: 'disabled', reason: 'unsigned' })} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Download update' }));
+    expect(openExternal).toHaveBeenCalledWith(APK);
   });
 
   it('without a usable address only Dismiss is offered', () => {

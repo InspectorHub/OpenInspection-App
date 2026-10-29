@@ -41,6 +41,8 @@ function DesktopRenderer() {
   const desktop = useMemo<DesktopSettingsPort>(() => ({
     appVersion: __APP_VERSION__, updater,
     checkForUpdates: () => { void bridge.updater.check(); },
+    downloadUpdate: () => { void bridge.updater.download(); },
+    installAndRestart: () => bridge.updater.installAndRestart(),
     openLogs: () => { void bridge.shell.openLogs(); },
     openDataFolder: () => { void bridge.shell.openDataFolder(); },
   }), [updater]);
