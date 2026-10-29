@@ -138,8 +138,8 @@ export const validators = {
   db: {
     open: none,
     execute: one(sql),
-    query: (raw: unknown[]): [string, DbParam[]?] => typed<[string, DbParam[]?]>(raw, [sql, dbParams], 1),
-    run: (raw: unknown[]): [string, DbParam[]?] => typed<[string, DbParam[]?]>(raw, [sql, dbParams], 1),
+    query: (raw: unknown[]): [string, DbParam[] | undefined] => typed<[string, DbParam[] | undefined]>(raw, [sql, dbParams], 1),
+    run: (raw: unknown[]): [string, DbParam[] | undefined] => typed<[string, DbParam[] | undefined]>(raw, [sql, dbParams], 1),
     begin: none,
     commit: none,
     rollback: none,

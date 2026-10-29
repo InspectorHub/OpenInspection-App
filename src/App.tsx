@@ -161,7 +161,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
     if (screen.kind === 'schema_drift') return <SchemaDrift />;
-    if (screen.kind === 'open_failed') return <OpenFailed />;
+    if (screen.kind === 'open_failed') return <OpenFailed reason={screen.reason} />;
     return <Booting />;
   }
 

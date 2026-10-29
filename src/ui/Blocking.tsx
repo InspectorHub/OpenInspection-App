@@ -1,5 +1,9 @@
 import { SCHEMA_DRIFT_MESSAGE } from '../platform/schema';
-import { Body, Heading, Notice, Screen } from './kit';
+import type { OpenReason } from '../../electron/shared/ipc-contract.ts';
+import { getDesktopBridge } from '../desktop/bridge';
+import { useState } from 'react';
+import { ConfirmDialog } from './ConfirmDialog';
+import { Body, Button, Heading, Notice, Screen } from './kit';
 
 export function Booting() {
   return (
@@ -32,11 +36,59 @@ export function SchemaDrift() {
   );
 }
 
-export function OpenFailed() {
+export function OpenFailed({ reason }: { reason?: OpenReason }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const isUnreadable = reason === 'key-unreadable';
+  const copy = reason === 'key-unreadable'
+    ? 'This Windows account cannot unlock the data stored on this computer'
+    : reason === 'encryption-unavailable'
+      ? 'Database encryption is unavailable on this computer. Your data has not been changed.'
+      : reason === 'corrupt'
+        ? 'The local data could not be read. Your data has not been changed.'
+        : 'InspectorHub could not open its local data. Your data has not been changed.';
+  const quit = (): void => { window.close(); };
+  const openDataFolder = (): void => {
+    try { void getDesktopBridge().shell.openDataFolder().catch(() => setMessage('The data folder could not be opened. You can quit and try again later.')); }
+    catch { setMessage('The data folder could not be opened. You can quit and try again later.'); }
+  };
+  const setAside = async (): Promise<void> => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await getDesktopBridge().db.setAsideUnreadable();
+      window.location.reload();
+    } catch {
+      setBusy(false);
+      setMessage('The old data could not be moved. It has not been deleted.');
+    }
+  };
   return (
     <Screen>
-      <Heading>InspectorHub could not open</Heading>
-      <Body>The app could not open its storage on this device. Close the app and open it again. Your data has not been changed.</Body>
+      <Heading>{isUnreadable ? 'Your existing data is locked' : 'InspectorHub could not open'}</Heading>
+      <Body>{copy}</Body>
+      {isUnreadable && <Body>Set the old data aside to create a new local database. The existing files will be kept on this computer.</Body>}
+      {message && <Notice tone="bad">{message}</Notice>}
+      <div className="flex flex-col gap-3">
+        <Button onClick={quit}>Quit</Button>
+        {isUnreadable
+          ? <Button variant="danger" onClick={() => setConfirming(true)}>Set the old data aside and start fresh</Button>
+          : <Button variant="secondary" onClick={openDataFolder}>Open data folder</Button>}
+      </div>
+      {confirming && (
+        <ConfirmDialog
+          title="Set the old data aside?"
+          description="InspectorHub will move the existing local data files into a new unreadable folder. It will not delete them. The app will then start with a new empty database."
+          confirmLabel="Set old data aside"
+          cancelLabel="Cancel"
+          destructive
+          busy={busy}
+          error={message}
+          onConfirm={() => { void setAside(); }}
+          onCancel={() => { if (!busy) setConfirming(false); }}
+        />
+      )}
     </Screen>
   );
 }

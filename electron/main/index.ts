@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { createAppOriginHandler, createHttpsPassthrough } from './app-origin.ts';
 import { createKvHost } from './data/kv.ts';
 import { createSecretsHost, ensureSecretsDirectory, SecretsUnavailableError } from './data/secrets.ts';
+import { openDesktopDb, openNativeSqlite, setAsideUnreadableDatabase } from './data/db-open.ts';
+import { watchRendererDbLifecycle, type DbHost } from './data/db-host.ts';
 import { secureSecretsAcl, type SecurityCommand } from './data/windows-security.ts';
 import { IpcError } from '../shared/ipc-contract.ts';
 import { registerHandler } from './ipc/register.ts';
@@ -29,13 +31,16 @@ mkdirSync(paths.userData, { recursive: true });
 app.setPath('userData', paths.userData);
 let focus = (): void => {};
 let onSecond = (_argv: readonly string[]): void => {};
+let dbHost: DbHost | null = null;
+let dbOpening: Promise<{ outcome: Awaited<ReturnType<typeof openDesktopDb>>['outcome']; host: DbHost | null }> | null = null;
 
 if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () => focus() })) {
   const log = createLogger(paths.userData);
   onSecond = () => log('second-instance');
   const windows = createWindowController({ packaged: app.isPackaged, preload: join(__dirname, '../preload/index.cjs'),
     create: (options) => new BrowserWindow(options), setApplicationMenu: (menu) => Menu.setApplicationMenu(menu),
-    openExternal: (url) => shell.openExternal(url), log });
+    openExternal: (url) => shell.openExternal(url), log,
+    onCreated: (win) => watchRendererDbLifecycle(win.webContents as unknown as { on(event: string, listener: () => void): unknown }, () => dbHost) });
   focus = windows.focus;
   protocol.registerSchemesAsPrivileged([{ scheme: 'oi-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
   void app.whenReady().then(async () => {
@@ -82,6 +87,39 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     registerHandler(registerDeps, 'secrets:remove', validators.secrets.remove, async (key) => secrets.remove(key));
     registerHandler(registerDeps, 'kv:get', validators.kv.get, async (key) => kv.get(key));
     registerHandler(registerDeps, 'kv:set', validators.kv.set, async (key, value) => kv.set(key, value));
+    const openDb = async () => {
+      dbOpening ??= openDesktopDb({ dbDir: join(paths.userData, 'db'), secrets, fs, open: openNativeSqlite, now: Date.now, log });
+      const result = await dbOpening;
+      dbHost = result.host;
+      return result.outcome;
+    };
+    const requireDb = (): DbHost => {
+      if (dbHost === null) throw new IpcError('unavailable');
+      return dbHost;
+    };
+    registerHandler(registerDeps, 'db:open', validators.db.open, async () => openDb());
+    registerHandler(registerDeps, 'db:execute', validators.db.execute, async (sql) => { requireDb().execute(sql); });
+    registerHandler(registerDeps, 'db:query', validators.db.query, async (sql, params) => requireDb().query(sql, params ?? []));
+    registerHandler(registerDeps, 'db:run', validators.db.run, async (sql, params) => requireDb().run(sql, params ?? []));
+    registerHandler(registerDeps, 'db:begin', validators.db.begin, async () => { requireDb().begin(); });
+    registerHandler(registerDeps, 'db:commit', validators.db.commit, async () => { requireDb().commit(); });
+    registerHandler(registerDeps, 'db:rollback', validators.db.rollback, async () => { requireDb().rollback(); });
+    registerHandler(registerDeps, 'db:in-transaction', validators.db.inTransaction, async () => requireDb().inTransaction());
+    registerHandler(registerDeps, 'db:close', validators.db.close, async () => { dbHost?.close(); dbHost = null; dbOpening = null; });
+    registerHandler(registerDeps, 'db:set-aside-unreadable', validators.db.setAsideUnreadable, async () => {
+      const result = await openDb();
+      if (result.ok || result.reason !== 'key-unreadable') throw new IpcError('unavailable');
+      try {
+        await setAsideUnreadableDatabase({ dbDir: join(paths.userData, 'db'), secrets, fs, now: Date.now });
+      } catch {
+        throw new IpcError('unavailable');
+      }
+      dbOpening = null; dbHost = null;
+    });
+    registerHandler(registerDeps, 'shell:open-data-folder', validators.shell.openDataFolder, async () => {
+      const result = await shell.openPath(join(paths.userData, 'db'));
+      if (result !== '') throw new Error('open-data-folder-failed');
+    });
     log('startup');
     windows.ensure();
     app.on('activate', windows.ensure);

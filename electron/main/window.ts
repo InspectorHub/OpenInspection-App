@@ -20,6 +20,7 @@ export function createWindowController(deps: {
   setApplicationMenu(menu: null): void;
   openExternal(url: string): Promise<void>;
   log(event: LogEvent): void;
+  onCreated?(window: ShellWindow): void;
 }): { ensure(): void; focus(): void } {
   let window: ShellWindow | undefined;
   let closing = false;
@@ -33,6 +34,7 @@ export function createWindowController(deps: {
           allowRunningInsecureContent: false, backgroundThrottling: false, devTools: !deps.packaged, spellcheck: false, webviewTag: false },
       });
       window = created;
+      deps.onCreated?.(created);
       closing = false;
       applyNavigationGuards(created, deps);
       let closeAttempt = 0;
