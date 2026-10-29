@@ -4,6 +4,7 @@ import { DB_PARAM_STRING_MAX, DB_PARAMS_MAX, IPC_BYTES_MAX } from '../shared/ipc
 import {
   CHANNELS,
   EVENT_CHANNELS,
+  AUTH_CALLBACK_READY_CHANNEL,
   IpcError,
   isDecodeHeicReply,
   isIpcErrorCode,
@@ -134,7 +135,11 @@ const bridge: DesktopBridge = {
     openLogs: () => call(CHANNELS.shell.openLogs),
     openDataFolder: () => call(CHANNELS.shell.openDataFolder),
   },
-  auth: { onCallback: (listener) => listen(EVENT_CHANNELS.authCallback, listener) },
+  auth: { onCallback: (listener) => {
+    const remove = listen(EVENT_CHANNELS.authCallback, listener);
+    ipcRenderer.send(AUTH_CALLBACK_READY_CHANNEL);
+    return remove;
+  } },
   app: { onActiveChange: (listener) => listen(EVENT_CHANNELS.activeChange, listener) },
   dialogs: { saveExport: (fileUri, suggestedName) => call(CHANNELS.dialogs.saveExport, fileUri, suggestedName) },
   updater: {

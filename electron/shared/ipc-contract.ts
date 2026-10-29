@@ -177,6 +177,9 @@ export const EVENT_CHANNELS = {
   updaterState: 'updater:state-changed',
 } as const;
 
+/** Preload tells main that its appUrlOpen listener is ready to receive callbacks. */
+export const AUTH_CALLBACK_READY_CHANNEL = 'auth:ready';
+
 /** The only error codes that cross the boundary. A message, a stack or a path never does. */
 export const IPC_ERROR_CODES = ['invalid-argument', 'untrusted-sender', 'not-found', 'disk-full', 'unavailable', 'internal'] as const;
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

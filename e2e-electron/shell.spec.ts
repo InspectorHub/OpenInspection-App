@@ -21,6 +21,7 @@ test.beforeEach(async () => {
   delete environment.ELECTRON_RUN_AS_NODE;
   environment.OI_USER_DATA_DIR = directory;
   environment.OI_RENDERER_ROOT = 'e2e-electron/fixtures/shell-page';
+  environment.OI_E2E_DISABLE_PROTOCOL_REGISTRATION = '1';
   electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
   page = await electronApp.firstWindow();
   await expect(page.locator('#status')).toHaveText('Shell checks complete');

@@ -9,5 +9,8 @@ export default defineConfig({
   fullyParallel: false,
   reporter: 'list',
   outputDir: '../.superpowers/sdd/plan-d2-windows-electron/test-results',
-  projects: [{ name: 'ci' }],
+  projects: [
+    { name: 'ci', testIgnore: '**/*.local.spec.ts' },
+    { name: 'local', testMatch: '**/*.local.spec.ts' },
+  ],
 });

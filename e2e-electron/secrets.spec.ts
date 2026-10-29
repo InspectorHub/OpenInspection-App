@@ -47,6 +47,7 @@ async function launch(extraEnv: Record<string, string> = {}): Promise<void> {
   delete env.ELECTRON_RUN_AS_NODE;
   env.OI_USER_DATA_DIR = userData;
   env.OI_RENDERER_ROOT = 'e2e-electron/fixtures/shell-page';
+  env.OI_E2E_DISABLE_PROTOCOL_REGISTRATION = '1';
   Object.assign(env, extraEnv);
   electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env });
 }

@@ -75,6 +75,8 @@ npx electron dist-electron/main/index.cjs
 
 `build:electron` bundles the main process and preload script to CommonJS with esbuild. `npm run typecheck` checks `src/` and `electron/` with separate tsconfigs, so Node and DOM types never mix.
 
+The desktop client registers `io.inspectorhub.app` for OAuth callbacks when it starts. Development builds register Electron's executable and the current main script with Windows; a crash can leave Windows' protocol mapping pointing at that development build until the next clean exit removes it or another build registers the scheme.
+
 Import boundaries, enforced by `src/electron-boundaries.test.ts`:
 
 - Code in `src/` outside `src/desktop/` never imports `electron`.

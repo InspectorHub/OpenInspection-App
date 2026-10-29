@@ -5,13 +5,14 @@ import { BRIDGE_METHODS, CHANNELS, EVENT_CHANNELS, type BridgeNamespace, type De
 const electron = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
   invoke: vi.fn(),
+  send: vi.fn(),
   on: vi.fn(),
   removeListener: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: electron.exposeInMainWorld },
-  ipcRenderer: { invoke: electron.invoke, on: electron.on, removeListener: electron.removeListener },
+  ipcRenderer: { invoke: electron.invoke, send: electron.send, on: electron.on, removeListener: electron.removeListener },
 }));
 
 async function exposed(): Promise<Record<string, unknown>> {
@@ -29,6 +30,7 @@ const ns = (api: Record<string, unknown>, name: string) => api[name] as Record<s
 describe('the preload script', () => {
   beforeEach(() => {
     electron.invoke.mockReset();
+    electron.send.mockReset();
     electron.on.mockReset();
     electron.removeListener.mockReset();
   });
@@ -97,6 +99,7 @@ describe('the preload script', () => {
     expect(electron.on.mock.calls[0]![0]).toBe(channel);
     wrapped({}, payload);
     expect(listener.mock.calls[0]).toEqual([payload]);
+    if (name === 'auth') expect(electron.send).toHaveBeenCalledWith('auth:ready');
   });
 
   it('unwraps a successful reply', async () => {

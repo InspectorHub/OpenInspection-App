@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = await vi.hoisted(async () => {
   const { EventEmitter } = await import('node:events');
-  return { locked: true, safeStorageAvailable: true, secretsDirExists: false, secretsDirIsLink: false, secretsDirIsReparse: false, aclDenied: false, order: [] as string[], ready: Promise.resolve(), create: vi.fn(), handle: vi.fn(), spawn: vi.fn((command: string, args: string[] = []) => {
+  return { locked: true, safeStorageAvailable: true, secretsDirExists: false, secretsDirIsLink: false, secretsDirIsReparse: false, aclDenied: false, order: [] as string[], ready: Promise.resolve(), create: vi.fn(), handle: vi.fn(), on: vi.fn(), send: vi.fn(), spawn: vi.fn((command: string, args: string[] = []) => {
     if (command === 'icacls.exe' && args.includes('/deny')) state.aclDenied = true;
     if (command === 'icacls.exe' && args.includes('/remove:d')) state.aclDenied = false;
     if (command === 'powershell.exe') state.aclDenied = args[3]?.includes("$mode = 'barrier'") ?? false;
@@ -25,10 +25,11 @@ vi.mock('electron', () => ({
     isPackaged: false,
     getPath: () => 'appdata', getAppPath: () => process.cwd(), setPath: vi.fn(() => { state.order.push('set-path'); }),
     requestSingleInstanceLock: () => { state.order.push('lock'); return state.locked; },
+    setAsDefaultProtocolClient: vi.fn(() => true), removeAsDefaultProtocolClient: vi.fn(() => true),
     exit: vi.fn(), quit: vi.fn(), whenReady: () => { state.order.push('ready'); return state.ready; },
   }),
   protocol: { registerSchemesAsPrivileged: vi.fn(() => { state.order.push('privileged'); }), handle: vi.fn(() => { state.order.push('handler'); }) },
-  ipcMain: { handle: state.handle }, safeStorage: { isEncryptionAvailable: () => state.safeStorageAvailable, encryptString: (s: string) => Buffer.from(s), decryptString: (b: Buffer) => b.toString() },
+  ipcMain: { handle: state.handle, on: state.on }, safeStorage: { isEncryptionAvailable: () => state.safeStorageAvailable, encryptString: (s: string) => Buffer.from(s), decryptString: (b: Buffer) => b.toString() },
   session: { defaultSession: { webRequest: { onBeforeRequest: vi.fn() }, setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } },
   BrowserWindow: class { constructor(options: unknown) { state.create(options); } },
   Menu: { setApplicationMenu: vi.fn() }, net: { fetch: vi.fn() }, shell: { openExternal: vi.fn() },
@@ -36,7 +37,7 @@ vi.mock('electron', () => ({
 vi.mock('./window.ts', () => ({ createWindowController: () => ({ ensure: () => state.create(), focus: vi.fn() }) }));
 vi.mock('./logger.ts', () => ({ createLogger: () => vi.fn() }));
 
-beforeEach(() => { vi.resetModules(); state.order.length = 0; state.app.removeAllListeners(); state.create.mockClear(); state.handle.mockClear(); state.spawn.mockClear(); state.locked = true; state.safeStorageAvailable = true; state.secretsDirExists = false; state.secretsDirIsLink = false; state.secretsDirIsReparse = false; state.aclDenied = false; state.ready = Promise.resolve(); });
+beforeEach(() => { vi.resetModules(); state.order.length = 0; state.app.removeAllListeners(); state.create.mockClear(); state.handle.mockClear(); state.on.mockClear(); state.send.mockClear(); state.spawn.mockClear(); state.locked = true; state.safeStorageAvailable = true; state.secretsDirExists = false; state.secretsDirIsLink = false; state.secretsDirIsReparse = false; state.aclDenied = false; state.ready = Promise.resolve(); });
 
 it('stops all ready/protocol/window setup after a failed lock', async () => {
   state.locked = false;

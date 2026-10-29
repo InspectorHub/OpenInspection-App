@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createAppOriginHandler, createHttpsPassthrough } from './app-origin.ts';
+import { createAppOriginHandler, createHttpsPassthrough, isAppOrigin } from './app-origin.ts';
 import { createKvHost } from './data/kv.ts';
 import { createFilesHost } from './data/files-host.ts';
 import { createMediaFileResolver, createUploaderHost } from './net/uploader-host.ts';
@@ -14,7 +14,7 @@ import { createSecretsHost, ensureSecretsDirectory, SecretsUnavailableError } fr
 import { openDesktopDb, openNativeSqlite, setAsideUnreadableDatabase } from './data/db-open.ts';
 import { watchRendererDbLifecycle, type DbHost } from './data/db-host.ts';
 import { secureSecretsAcl, type SecurityCommand } from './data/windows-security.ts';
-import { EVENT_CHANNELS, IpcError } from '../shared/ipc-contract.ts';
+import { AUTH_CALLBACK_READY_CHANNEL, EVENT_CHANNELS, IpcError } from '../shared/ipc-contract.ts';
 import { registerHandler } from './ipc/register.ts';
 import { validators } from './ipc/validate.ts';
 import { createLogger } from './logger.ts';
@@ -22,6 +22,9 @@ import { resolveStartupPaths } from './paths.ts';
 import { applyNavigationRequestPolicy, applyPermissionPolicy } from './security.ts';
 import { createSingleInstance } from './single-instance.ts';
 import { createWindowController } from './window.ts';
+import { createDeepLinkHub, extractCallbackUrl } from './auth/deep-link.ts';
+import { isAllowedExternalUrl } from './auth/open-external.ts';
+import { registerProtocolClient } from './auth/protocol-client.ts';
 
 const paths = resolveStartupPaths({ packaged: app.isPackaged, appData: app.getPath('appData'), appPath: app.getAppPath(), env: process.env });
 const runSecurityCommand: SecurityCommand = (command, args) => {
@@ -40,13 +43,39 @@ let filesHost: ReturnType<typeof createFilesHost> | null = null;
 let uploaderHost: ReturnType<typeof createUploaderHost> | null = null;
 let uploaderContents: { send(channel: string, payload: unknown): void } | null = null;
 let dbOpening: Promise<{ outcome: Awaited<ReturnType<typeof openDesktopDb>>['outcome']; host: DbHost | null }> | null = null;
+const deepLinks = createDeepLinkHub();
+const coldCallback = extractCallbackUrl(process.argv);
+if (coldCallback) deepLinks.push(coldCallback);
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  deepLinks.push(url);
+});
 
 if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () => focus() })) {
   const log = createLogger(paths.userData);
-  onSecond = () => log('second-instance');
+  const callbackSubscriptions = new WeakMap<object, () => void>();
+  ipcMain.on(AUTH_CALLBACK_READY_CHANNEL, (event) => {
+    if (event.senderFrame === null || event.senderFrame.parent !== null || !isAppOrigin(event.senderFrame.url)) return;
+    const sender = event.sender;
+    callbackSubscriptions.get(sender)?.();
+    const unsubscribe = deepLinks.subscribe((url) => {
+      if (!sender.isDestroyed()) sender.send(EVENT_CHANNELS.authCallback, url);
+    });
+    callbackSubscriptions.set(sender, unsubscribe);
+    sender.once('destroyed', () => {
+      unsubscribe();
+      callbackSubscriptions.delete(sender);
+    });
+  });
+  onSecond = (argv) => {
+    const callback = extractCallbackUrl(argv);
+    if (callback) deepLinks.push(callback);
+    log('second-instance');
+  };
   const windows = createWindowController({ packaged: app.isPackaged, preload: join(__dirname, '../preload/index.cjs'),
     create: (options) => new BrowserWindow(options), setApplicationMenu: (menu) => Menu.setApplicationMenu(menu),
-    openExternal: (url) => shell.openExternal(url), log,
+    openExternal: (url) => isAllowedExternalUrl(url, { packaged: app.isPackaged }) ? shell.openExternal(url) : Promise.resolve(), log,
     onCreated: (win) => {
       const currentContents = win.webContents as unknown as { send(channel: string, payload: unknown): void };
       uploaderContents = currentContents;
@@ -58,6 +87,10 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
   focus = windows.focus;
   protocol.registerSchemesAsPrivileged([{ scheme: 'oi-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
   void app.whenReady().then(async () => {
+    if (app.isPackaged || process.env.OI_E2E_DISABLE_PROTOCOL_REGISTRATION !== '1') {
+      const removeProtocolRegistration = registerProtocolClient({ app, packaged: app.isPackaged, execPath: process.execPath, argv: process.argv });
+      app.on('will-quit', removeProtocolRegistration);
+    }
     const forcedUnavailable = !app.isPackaged && process.env.OI_TEST_SAFE_STORAGE_UNAVAILABLE === '1';
     if (forcedUnavailable || !safeStorage.isEncryptionAvailable()) throw new SecretsUnavailableError();
     const secretsDir = join(paths.userData, 'secrets');
@@ -112,6 +145,10 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     registerHandler(registerDeps, 'files:stream-open', validators.files.streamOpen, async (area, path) => files.stream.open(area, path));
     registerHandler(registerDeps, 'files:stream-append', validators.files.streamAppend, async (handle, chunk) => files.stream.append(handle, chunk));
     registerHandler(registerDeps, 'files:stream-finish', validators.files.streamFinish, async (handle, outcome) => files.stream.finish(handle, outcome));
+    registerHandler(registerDeps, 'shell:open-external', validators.shell.openExternal, async (url) => {
+      if (!isAllowedExternalUrl(url, { packaged: app.isPackaged })) throw new IpcError('invalid-argument');
+      await shell.openExternal(url);
+    });
     const uploader = uploaderHost;
     registerHandler(registerDeps, 'uploader:start', validators.uploader.start, async (options) => uploader.start(options));
     registerHandler(registerDeps, 'uploader:remove', validators.uploader.remove, async (id) => uploader.remove(id));
