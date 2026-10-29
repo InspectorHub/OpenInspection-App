@@ -16,9 +16,8 @@ export class InvalidArgumentError extends Error {
 
 /** The ceiling of SQL text only; a bound value has its own ceilings below. */
 const SQL_MAX = 100_000;
-const KEY_MAX = 256;
 const SECRET_VALUE_MAX = 64 * 1024;
-const KV_VALUE_MAX = 1024 * 1024;
+const KV_VALUE_MAX = 64 * 1024;
 const PATH_MAX = 1024;
 const URL_MAX = 2048;
 const NAME_MAX = 255;
@@ -127,8 +126,13 @@ function decodeRequest(value: unknown): DecodeHeicRequest {
 }
 
 const path = nonEmptyText(PATH_MAX);
-const key = nonEmptyText(KEY_MAX);
+const KEY_PATTERN = /^(?!.*\.\.[\\/])[\x21-\x7e]{1,256}$/;
+const key = (value: unknown): string => (typeof value === 'string' && KEY_PATTERN.test(value) ? value : fail());
 const sql = nonEmptyText(SQL_MAX);
+const utf8Text = (maxBytes: number) => (value: unknown): string => {
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > maxBytes) return fail();
+  return value;
+};
 
 export const validators = {
   db: {
@@ -145,12 +149,12 @@ export const validators = {
   },
   secrets: {
     get: one(key),
-    set: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [key, text(SECRET_VALUE_MAX)]),
+    set: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [key, utf8Text(SECRET_VALUE_MAX)]),
     remove: one(key),
   },
   kv: {
     get: one(key),
-    set: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [key, text(KV_VALUE_MAX)]),
+    set: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [key, utf8Text(KV_VALUE_MAX)]),
   },
   files: {
     write: (raw: unknown[]): [string, Uint8Array] => typed<[string, Uint8Array]>(raw, [path, uint8]),
