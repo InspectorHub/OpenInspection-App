@@ -66,16 +66,57 @@ When you are done, stop the dev servers first, then run `adb reverse --remove-al
 
 ## Windows (Electron)
 
-The desktop client lives in `electron/` (main process, preload script, shared IPC types) and reuses the same `src/` app as Android.
+The Windows pilot runs the same `src/` app as Android in an Electron shell. Use Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0` (see `package.json`); on Windows, install the dependencies from the repository root with `npm ci`.
 
 ```
+npm run dev:electron
+```
+
+`dev:electron` watches and builds the Electron renderer and main/preload bundles, then launches Electron. It does not start the web Vite development server: the desktop shell must exercise the same local `https://localhost` protocol handler and strict CSP used by the packaged app. For the normal local sign-in flow, start the OpenInspection engine separately with `NATIVE_CLIENT_ENABLED=1` in its `.dev.vars`; its default local address is `http://localhost:8787`. In the app, enter that address as the server URL. The desktop app uses the system browser for OAuth and returns through the registered `io.inspectorhub.app` protocol.
+
+`npm run build:electron` builds the main process and preload script to CommonJS with esbuild, then builds the renderer. `npm run typecheck` checks `src/` and `electron/` with separate tsconfigs, so Node and DOM types never mix.
+
+### Local data, logs, and reset
+
+By default, the app stores its profile under `%APPDATA%\InspectorHub` (typically `C:\Users\<you>\AppData\Roaming\InspectorHub`). The profile includes the encrypted database under `db/`, OS-protected secrets under `secrets/`, media/cache files, `kv.json`, and rotating logs under `logs/`. Settings → Open logs opens the log directory. Do not copy the `secrets/` directory to another Windows account or machine: Electron `safeStorage` protects it with the current Windows user context.
+
+To run an isolated development instance, pass Electron's standard `--user-data-dir` switch, for example:
+
+```powershell
 npm run build:electron
-npx electron dist-electron/main/index.cjs
+npx electron . --user-data-dir="$env:TEMP\InspectorHub-dev-profile"
 ```
 
-`build:electron` bundles the main process and preload script to CommonJS with esbuild. `npm run typecheck` checks `src/` and `electron/` with separate tsconfigs, so Node and DOM types never mix.
+The switch changes only that instance's profile; it is separate from the development-only `OI_USER_DATA_DIR` override. To reset a profile, quit the app first, rename or back up its whole profile directory, then start the app again. Resetting or uninstalling deletes local offline work only if you delete that profile yourself. The NSIS uninstaller is configured to preserve AppData.
 
-The desktop client registers `io.inspectorhub.app` for OAuth callbacks when it starts. Development builds register Electron's executable and the current main script with Windows; a crash can leave Windows' protocol mapping pointing at that development build until the next clean exit removes it or another build registers the scheme.
+Development builds register `io.inspectorhub.app` to the Electron executable and current app script. A forced process termination can leave that Windows protocol registration pointing to the development tree; start and cleanly quit the same development build, or install another build, to refresh/remove it. Packaged builds register the installed app. Avoid launching a stale development checkout from OAuth callbacks.
+
+### Electron tests and installer smoke
+
+Run the desktop Playwright suite against the fake loopback engine with:
+
+```powershell
+npm run test:e2e:electron
+```
+
+This launches a development build and uses isolated temporary profiles and test-only engine routes; it does not test a production server or real Windows HEIF codecs. To create and inspect a local unsigned x64 installer:
+
+```powershell
+npm run package:win
+npm run check:electron-package
+```
+
+Then run the install/launch/protocol/uninstall smoke (it uses a temporary install and profile, and checks that user data survives uninstall):
+
+```powershell
+scripts\smoke-installer.ps1
+```
+
+The smoke script stops if the current-user `io.inspectorhub.app` protocol handler already exists. `-Force` is only for a maintainer who has verified that the existing registry entry can be restored; the script exports and restores that entry. An unsigned pilot installer may trigger Microsoft SmartScreen; the pilot has no signing certificate and automatic updates are disabled for unsigned builds.
+
+Budget 0.5–1 GB for the Electron app itself. Packaging and Playwright are also memory intensive: on a 16 GB development machine, do not run a full engine type-check, Gradle build, or emulator at the same time as `npm run package:win` or the full Electron E2E suite.
+
+When recording acceptance evidence, keep screenshots in `.superpowers/sdd/<plan>/screenshots/<task>/`, use descriptive names, and record the window size and light/dark scheme in the matching progress note. Capture only synthetic or otherwise non-sensitive test data; Playwright screenshots show renderer content, not Windows-native dialogs, title bars, installer UI, taskbar, notifications, or SmartScreen.
 
 Import boundaries, enforced by `src/electron-boundaries.test.ts`:
 
@@ -86,6 +127,12 @@ Import boundaries, enforced by `src/electron-boundaries.test.ts`:
 The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt binaries for Electron's N-API ABI; no native compiler is needed.
 
 The desktop shell serves local renderer files from `https://localhost`. Its page, script, and Worker responses share one strict CSP, including in development: neither `unsafe-eval` nor `wasm-unsafe-eval` is allowed. An earlier plan relaxed the Worker policy for a bundled WASM HEIC decoder. The 2026-10-27 revision moved decoding to a main-process system helper and removed that relaxation entirely. A future bundled decoder (L2) must revisit this decision together with the CSP tests.
+
+### HEIC photos on Windows
+
+HEIC import relies on Microsoft's Windows HEIF Image Extensions and HEVC Video Extensions. The app ships no HEVC decoder: `native/win-heic-helper/` builds a small native WIC helper, which is individually signed in Azure-signed builds. The main process checks the helper's SHA-256 against the value recorded in the packaged app before starting it. If Windows cannot create the required WIC decoder, the app rejects that photo with a short explanation and links to the Microsoft Store extension guidance; exporting the photo as JPEG on the phone is another option. The renderer has no bundled WASM decoder, which is why its CSP does not allow WASM execution. HDR PQ/HLG is not tone-mapped.
+
+The only H0 extension-positive measurement recorded below is on Windows 11 Pro build 26300 with both extensions present. Windows 10 22H2, Windows 11 without one or both extensions, and default extension availability have not been compared, so do not infer a preinstall difference from that measurement.
 
 ### HEIC decoder H0 probe (2026-10-29)
 
