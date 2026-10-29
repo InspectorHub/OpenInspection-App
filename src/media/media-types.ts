@@ -66,6 +66,7 @@ export function sniffMediaKind(bytes: Uint8Array): 'jpeg' | 'png' | 'heic' | nul
   if ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, index) => bytes[index] === byte)) return 'png';
   if (brandAt(bytes, 4) !== 'ftyp') return null;
   const boxSize = ((bytes[0] ?? 0) * 2 ** 24) + ((bytes[1] ?? 0) << 16) + ((bytes[2] ?? 0) << 8) + (bytes[3] ?? 0);
+  if (boxSize < 16) return null;
   const end = Math.min(bytes.length, boxSize);
   const brands = [brandAt(bytes, 8)];
   for (let offset = 16; offset + 4 <= end; offset += 4) brands.push(brandAt(bytes, offset));

@@ -45,6 +45,17 @@ describe('sniffMediaKind', () => {
     const withTrailer = Uint8Array.from([...bytes, ...ascii('heic')]);
     expect(sniffMediaKind(withTrailer)).toBeNull();
   });
+
+  it('rejects a 12-byte input whose ftyp box declares only 8 bytes', () => {
+    const bytes = Uint8Array.from([0, 0, 0, 8, ...ascii('ftyp'), ...ascii('heic')]);
+    expect(sniffMediaKind(bytes)).toBeNull();
+  });
+
+  it.each([12, 15])('rejects an ftyp box declaring %i bytes without room for its required fields', (size) => {
+    const bytes = ftyp('heic');
+    bytes[3] = size;
+    expect(sniffMediaKind(bytes)).toBeNull();
+  });
 });
 
 describe('decode limits', () => {
