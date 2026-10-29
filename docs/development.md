@@ -94,9 +94,9 @@ The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt 
 | Its prebuilds | `win32-x64.node` and `win32-arm64.node` are both present, plus darwin, linux and linuxmusl | `prebuilds/` listing in the tarball |
 | `electron-builder` / `electron-updater` | 26.15.3 and 6.8.9 exist; the registry's latest is 26.18.0 and 6.8.11 | `npm view`; neither is a dependency yet |
 | `@playwright/test`, `@electron/fuses` | latest 1.64.1 and 2.1.3 | `npm view`; not dependencies yet |
-| Minimum Windows | Windows 10 and later, `x64` and `arm64` binaries | `node_modules/electron/README.md` of the pinned package |
+| Electron upstream Windows floor | Windows 10 or later for Electron v23.0.0 and higher | [Electron breaking changes](https://www.electronjs.org/docs/latest/breaking-changes) |
 
-This client is only tested on Windows 11 and on the `windows-latest` CI image. The first release targets `x64`; an `arm64` machine runs it under Windows 11's x64 emulation. A native `arm64` build is possible later because the database module ships a `win32-arm64` prebuild.
+InspectorHub's pilot support target is Windows 10 22H2 or later, or Windows 11, on `x64`; the first packaged build targets `x64`. This client is only tested on Windows 11 and on the `windows-latest` CI image. An `arm64` machine runs the x64 build under Windows 11's x64 emulation. A native `arm64` build is possible later because the database module ships a `win32-arm64` prebuild.
 
 ## Memory
 
