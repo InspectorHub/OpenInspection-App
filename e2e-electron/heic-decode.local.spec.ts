@@ -16,7 +16,7 @@ test.beforeEach(async () => {
   env.OI_USER_DATA_DIR = userData;
   env.OI_RENDERER_ROOT = 'e2e-electron/fixtures/shell-page';
   env.OI_E2E_DISABLE_PROTOCOL_REGISTRATION = '1';
-  env.OI_E2E_HEIC_HELPER = resolve('dist-electron/native/win-heic-helper.exe');
+  env.OI_E2E_HEIC_HELPER = process.env.OI_E2E_HEIC_HELPER ?? resolve('dist-electron/native/win-heic-helper.exe');
   electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env });
   page = await electronApp.firstWindow();
   await expect(page.locator('#status')).toHaveText('Shell checks complete');
