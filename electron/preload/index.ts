@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { MAX_DECODE_INPUT_BYTES } from '../../src/media/media-types.ts';
+import { DB_PARAM_STRING_MAX, DB_PARAMS_MAX, IPC_BYTES_MAX } from '../shared/ipc-byte-limits.ts';
 import {
   CHANNELS,
   EVENT_CHANNELS,
@@ -8,11 +10,56 @@ import {
   type DesktopBridge,
 } from '../shared/ipc-contract.ts';
 
+const tag = (value: unknown): string => Object.prototype.toString.call(value);
+
+function invalid(): never {
+  throw new IpcError('invalid-argument');
+}
+
+/** The backing can be large here: only the checked visible bytes will be copied into IPC storage. */
+function visibleBytes(value: unknown): Uint8Array {
+  if (!ArrayBuffer.isView(value) || tag(value) !== '[object Uint8Array]' || value.byteLength > IPC_BYTES_MAX) return invalid();
+  return value as Uint8Array;
+}
+
+function compactDbParams(value: unknown): unknown[] {
+  if (!Array.isArray(value) || value.length > DB_PARAMS_MAX) return invalid();
+  let payloadBytes = 0;
+  // Validate the entire budget first, so an invalid request allocates no binary copies.
+  for (const item of value) {
+    if (item === null || (typeof item === 'number' && Number.isFinite(item))) continue;
+    if (typeof item === 'string' && item.length <= DB_PARAM_STRING_MAX) payloadBytes += item.length * 2;
+    else payloadBytes += visibleBytes(item).byteLength;
+    if (payloadBytes > IPC_BYTES_MAX) return invalid();
+  }
+  return value.map((item: unknown) => (ArrayBuffer.isView(item) ? new Uint8Array(visibleBytes(item)) : item));
+}
+
+/** contextBridge may already have copied inputs; this bounds the subsequent invoke transfer. */
+function prepareBytes(channel: string, args: unknown[]): unknown[] {
+  if (channel === CHANNELS.files.write || channel === CHANNELS.files.streamAppend) {
+    return [args[0], new Uint8Array(visibleBytes(args[1]))];
+  }
+  if ((channel === CHANNELS.db.query || channel === CHANNELS.db.run) && args.length > 1) {
+    return [args[0], compactDbParams(args[1])];
+  }
+  if (channel === CHANNELS.media.decodeHeic) {
+    const request = args[0];
+    if (typeof request !== 'object' || request === null) return invalid();
+    const bytes = (request as { bytes?: unknown }).bytes;
+    if (tag(bytes) !== '[object ArrayBuffer]') return invalid();
+    const length = (bytes as ArrayBuffer).byteLength;
+    if (!(length > 0 && length <= MAX_DECODE_INPUT_BYTES)) return invalid();
+  }
+  return args;
+}
+
 /** Sends one request and unwraps the reply. A failure surfaces as an `IpcError` whose message is a closed code. */
 async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const prepared = prepareBytes(channel, args);
   let reply: unknown;
   try {
-    reply = await ipcRenderer.invoke(channel, ...args);
+    reply = await ipcRenderer.invoke(channel, ...prepared);
   } catch {
     // Electron words a rejection as "Error invoking remote method ...: <the original message>", which can carry a path.
     throw new IpcError('internal');

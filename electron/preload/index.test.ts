@@ -144,4 +144,118 @@ describe('the preload script', () => {
     electron.invoke.mockResolvedValue({ ok: true, value: { ok: false, code: 'DISK_ON_FIRE' } });
     await expect(ns(api, 'media').decodeHeic!(request)).rejects.toThrow(/^internal$/);
   });
+
+  describe('byte transfer bounds', () => {
+    const MIB = 1024 * 1024;
+    const fileChannels = [CHANNELS.files.write, CHANNELS.files.streamAppend];
+
+    async function binaryMethod(channel: string): Promise<(...args: unknown[]) => unknown> {
+      const api = await exposed();
+      if (channel === CHANNELS.files.write) return ns(api, 'files').write!;
+      return (ns(api, 'files').stream as unknown as Record<string, (...args: unknown[]) => unknown>).append!;
+    }
+
+    it.each(fileChannels)('%s compacts a nonzero-offset view of a 64 MiB backing before invoke and clone', async (channel) => {
+      const method = await binaryMethod(channel);
+      electron.invoke.mockResolvedValue({ ok: true, value: undefined });
+      const backing = new Uint8Array(64 * MIB);
+      backing.set([99, 4, 8, 15, 77], 100);
+      const view = backing.subarray(101, 104);
+      await method('a', view);
+      const sent = electron.invoke.mock.calls[0]![2] as Uint8Array;
+      expect(electron.invoke.mock.calls[0]![0]).toBe(channel);
+      expect(sent.byteOffset).toBe(0);
+      expect(sent.buffer.byteLength).toBe(3);
+      expect([...sent]).toEqual([4, 8, 15]);
+      expect(sent.buffer).not.toBe(view.buffer);
+      const cloned = structuredClone(sent);
+      expect(cloned.byteOffset).toBe(0);
+      expect(cloned.buffer.byteLength).toBe(3);
+      expect([...cloned]).toEqual([4, 8, 15]);
+      expect(view.byteOffset).toBe(101);
+    });
+
+    it.each(fileChannels)('%s accepts the visible 16 MiB boundary with compact storage', async (channel) => {
+      const method = await binaryMethod(channel);
+      electron.invoke.mockResolvedValue({ ok: true, value: undefined });
+      await method('a', new Uint8Array(16 * MIB));
+      const sent = electron.invoke.mock.calls[0]![2] as Uint8Array;
+      expect(sent.byteLength).toBe(16 * MIB);
+      expect(sent.buffer.byteLength).toBe(16 * MIB);
+    });
+
+    it.each(fileChannels)('%s refuses an oversized visible view or wrong binary type without invoke', async (channel) => {
+      const method = await binaryMethod(channel);
+      electron.invoke.mockResolvedValue({ ok: true, value: undefined });
+      for (const value of [new Uint8Array(16 * MIB + 1), new ArrayBuffer(8), [1, 2]]) {
+        await expect(method('a', value)).rejects.toThrow(/^invalid-argument$/);
+      }
+      expect(electron.invoke).not.toHaveBeenCalled();
+    });
+
+    it.each(['query', 'run'])('db.%s compacts binary params nested in its params array before invoke', async (method) => {
+      const api = await exposed();
+      electron.invoke.mockResolvedValue({ ok: true, value: [] });
+      const backing = new Uint8Array(64 * MIB);
+      backing.set([21, 34, 55], 57);
+      const view = backing.subarray(57, 60);
+      const params = [null, 'text', 7, view];
+      await ns(api, 'db')[method]!('SELECT ?', params);
+      const sentParams = electron.invoke.mock.calls[0]![2] as unknown[];
+      expect(electron.invoke.mock.calls[0]![0]).toBe(CHANNELS.db[method as 'query' | 'run']);
+      expect(sentParams.slice(0, 3)).toEqual([null, 'text', 7]);
+      const sent = sentParams[3] as Uint8Array;
+      expect(sentParams).not.toBe(params);
+      expect(sent.byteOffset).toBe(0);
+      expect(sent.buffer.byteLength).toBe(3);
+      expect([...sent]).toEqual([21, 34, 55]);
+      const cloned = structuredClone(sentParams)[3] as Uint8Array;
+      expect(cloned.buffer.byteLength).toBe(3);
+      expect([...cloned]).toEqual([21, 34, 55]);
+    });
+
+    it.each(['query', 'run'])('db.%s accepts exactly 16 MiB of estimated params payload', async (method) => {
+      const api = await exposed();
+      electron.invoke.mockResolvedValue({ ok: true, value: [] });
+      const strings = new Array<string>(7).fill('x'.repeat(MIB));
+      await ns(api, 'db')[method]!('SELECT ?', [...strings, new Uint8Array(2 * MIB)]);
+      expect(electron.invoke).toHaveBeenCalledOnce();
+    });
+
+    it.each(['query', 'run'])('db.%s refuses aggregate overflow, oversized params and invalid shapes before invoke', async (method) => {
+      const api = await exposed();
+      electron.invoke.mockResolvedValue({ ok: true, value: [] });
+      const strings = new Array<string>(7).fill('x'.repeat(MIB));
+      const badParams = [
+        [...strings, new Uint8Array(2 * MIB + 1)],
+        new Array<string>(8).fill('x'.repeat(MIB)).concat('x'),
+        [new Uint8Array(16 * MIB + 1)],
+        ['x'.repeat(MIB + 1)],
+        new Array<number>(1001).fill(0),
+        [[new Uint8Array(1)]],
+        [{}], [true], [Infinity], [1, , 3], 'text',
+      ];
+      for (const params of badParams) {
+        await expect(ns(api, 'db')[method]!('SELECT ?', params)).rejects.toThrow(/^invalid-argument$/);
+      }
+      expect(electron.invoke).not.toHaveBeenCalled();
+    });
+
+    it('media.decodeHeic refuses oversized, empty and wrong byte types before invoke', async () => {
+      const api = await exposed();
+      electron.invoke.mockResolvedValue({ ok: true, value: { ok: false, code: 'CORRUPT' } });
+      for (const bytes of [new ArrayBuffer(50 * MIB + 1), new ArrayBuffer(0), new Uint8Array(8), 'bytes', null]) {
+        await expect(ns(api, 'media').decodeHeic!({ bytes, maxLongEdge: 2560 })).rejects.toThrow(/^invalid-argument$/);
+      }
+      expect(electron.invoke).not.toHaveBeenCalled();
+    });
+
+    it('media.decodeHeic accepts an ArrayBuffer exactly at 50 MiB', async () => {
+      const api = await exposed();
+      electron.invoke.mockResolvedValue({ ok: true, value: { ok: false, code: 'CORRUPT' } });
+      const request = { bytes: new ArrayBuffer(50 * MIB), maxLongEdge: 2560 };
+      await ns(api, 'media').decodeHeic!(request);
+      expect(electron.invoke).toHaveBeenCalledWith(CHANNELS.media.decodeHeic, request);
+    });
+  });
 });

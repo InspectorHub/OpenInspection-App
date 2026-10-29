@@ -5,6 +5,7 @@
  */
 import { MAX_DECODE_INPUT_BYTES, MAX_MEDIA_BYTES } from '../../../src/media/media-types.ts';
 import type { DbParam, DecodeHeicRequest, UploaderStartOptions } from '../../shared/ipc-contract.ts';
+import { DB_PARAM_STRING_MAX, DB_PARAMS_MAX, IPC_BYTES_MAX } from '../../shared/ipc-byte-limits.ts';
 
 export class InvalidArgumentError extends Error {
   constructor() {
@@ -15,16 +16,12 @@ export class InvalidArgumentError extends Error {
 
 /** The ceiling of SQL text only; a bound value has its own ceilings below. */
 const SQL_MAX = 100_000;
-/** A string parameter may be cached JSON in a TEXT column, so it is allowed far more than a statement is. */
-const PARAM_STRING_MAX = 1024 * 1024;
 const KEY_MAX = 256;
 const SECRET_VALUE_MAX = 64 * 1024;
 const KV_VALUE_MAX = 1024 * 1024;
 const PATH_MAX = 1024;
 const URL_MAX = 2048;
 const NAME_MAX = 255;
-const BYTES_MAX = 16 * 1024 * 1024;
-const PARAMS_MAX = 1000;
 const HEADERS_MAX = 32;
 /** The longest edge a photo may be scaled to; the engine's own ceiling is far below it. */
 const MAX_LONG_EDGE = 16_384;
@@ -40,13 +37,20 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const text = (max: number) => (value: unknown): string => (typeof value === 'string' && value.length <= max ? value : fail());
 const nonEmptyText = (max: number) => (value: unknown): string => (typeof value === 'string' && value.length > 0 && value.length <= max ? value : fail());
 const oneOf = <T extends string>(...allowed: readonly T[]) => (value: unknown): T => (allowed.includes(value as T) ? (value as T) : fail());
-const uint8 = (value: unknown): Uint8Array => (tag(value) === '[object Uint8Array]' && (value as Uint8Array).byteLength <= BYTES_MAX ? (value as Uint8Array) : fail());
+function uint8(value: unknown): Uint8Array {
+  if (!ArrayBuffer.isView(value) || tag(value) !== '[object Uint8Array]') return fail();
+  if (value.byteLength > IPC_BYTES_MAX || value.buffer.byteLength > IPC_BYTES_MAX) return fail();
+  return value as Uint8Array;
+}
 
 function dbParams(value: unknown): DbParam[] {
-  if (!Array.isArray(value) || value.length > PARAMS_MAX) return fail();
+  if (!Array.isArray(value) || value.length > DB_PARAMS_MAX) return fail();
+  let payloadBytes = 0;
   for (const item of value) {
-    const ok = item === null || (typeof item === 'string' && item.length <= PARAM_STRING_MAX) || (typeof item === 'number' && Number.isFinite(item)) || (tag(item) === '[object Uint8Array]' && (item as Uint8Array).byteLength <= BYTES_MAX);
-    if (!ok) return fail();
+    if (item === null || (typeof item === 'number' && Number.isFinite(item))) continue;
+    if (typeof item === 'string' && item.length <= DB_PARAM_STRING_MAX) payloadBytes += item.length * 2;
+    else payloadBytes += uint8(item).byteLength;
+    if (payloadBytes > IPC_BYTES_MAX) return fail();
   }
   return value as DbParam[];
 }

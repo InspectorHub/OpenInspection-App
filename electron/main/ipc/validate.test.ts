@@ -79,4 +79,36 @@ describe('channel validators', () => {
     expect(validators.db.query(['SELECT 1'])).toEqual(['SELECT 1']);
     expect(validators.db.query(['SELECT ?', [1]])).toEqual(['SELECT ?', [1]]);
   });
+
+  describe('byte transfer bounds', () => {
+    const MIB = 1024 * 1024;
+
+    it.each([
+      ['files:write', (view: Uint8Array) => validators.files.write(['a', view])],
+      ['files:stream-append', (view: Uint8Array) => validators.files.streamAppend(['h', view])],
+      ['db:query', (view: Uint8Array) => validators.db.query(['SELECT ?', [view]])],
+      ['db:run', (view: Uint8Array) => validators.db.run(['INSERT', [view]])],
+    ] as const)('%s rejects oversized backing independently of visible length', (_channel, validate) => {
+      expect(() => validate(new Uint8Array(new ArrayBuffer(64 * MIB), 103, 3))).toThrow(InvalidArgumentError);
+      expect(() => validate(new Uint8Array(16 * MIB + 1))).toThrow(InvalidArgumentError);
+      expect(() => validate(new Uint8Array(new ArrayBuffer(16 * MIB), 103, 3))).not.toThrow();
+      expect(() => validate(new Uint8Array(16 * MIB))).not.toThrow();
+    });
+
+    it.each(['query', 'run'] as const)('db.%s enforces the aggregate 16 MiB params budget', (method) => {
+      const strings = new Array<string>(7).fill('x'.repeat(MIB));
+      expect(() => validators.db[method](['SELECT ?', [...strings, bytes(2 * MIB)]])).not.toThrow();
+      expect(() => validators.db[method](['SELECT ?', [...strings, bytes(2 * MIB + 1)]])).toThrow(InvalidArgumentError);
+      expect(() => validators.db[method](['SELECT ?', new Array<string>(8).fill('x'.repeat(MIB))])).not.toThrow();
+      expect(() => validators.db[method](['SELECT ?', [...new Array<string>(8).fill('x'.repeat(MIB)), 'x']])).toThrow(InvalidArgumentError);
+      expect(() => validators.db[method](['SELECT ?', [bytes(8 * MIB), bytes(8 * MIB + 1)]])).toThrow(InvalidArgumentError);
+    });
+
+    it('media.decodeHeic independently enforces its ArrayBuffer boundary', () => {
+      for (const value of [new ArrayBuffer(0), new ArrayBuffer(50 * MIB + 1), new Uint8Array(8), null]) {
+        expect(() => validators.media.decodeHeic([{ bytes: value, maxLongEdge: 2560 }])).toThrow(InvalidArgumentError);
+      }
+      expect(() => validators.media.decodeHeic([{ bytes: new ArrayBuffer(50 * MIB), maxLongEdge: 2560 }])).not.toThrow();
+    });
+  });
 });
