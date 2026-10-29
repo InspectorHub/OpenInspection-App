@@ -31,7 +31,7 @@ import { createDeepLinkHub, extractCallbackUrl } from './auth/deep-link.ts';
 import { isAllowedExternalUrl } from './auth/open-external.ts';
 import { registerProtocolClient } from './auth/protocol-client.ts';
 import { createPowerBridge, createPowerSaveGuard } from './lifecycle/power.ts';
-import { createQuitGuard } from './lifecycle/quit-guard.ts';
+import { createQuitGuard, developmentQuitAnswer } from './lifecycle/quit-guard.ts';
 import { createUploadNotifier } from './lifecycle/notify.ts';
 import { createTaskbarProgress } from './lifecycle/taskbar.ts';
 import { shutdownDesktop } from './lifecycle/shutdown.ts';
@@ -101,6 +101,8 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       const quitGuard = createQuitGuard({
         uploads: () => uploaderHost?.activeCount() ?? 0,
         confirm: async () => {
+          const e2eAnswer = developmentQuitAnswer(app.isPackaged, process.env.OI_E2E_QUIT_ANSWER);
+          if (e2eAnswer !== null) return e2eAnswer;
           const answer = await dialog.showMessageBox({ type: 'warning', title: 'Uploads are still running',
             message: 'Uploads are still running. Quit InspectorHub?', buttons: ['Quit', 'Stay'], defaultId: 1, cancelId: 1, noLink: true });
           return answer.response === 0 ? 'quit' : 'stay';

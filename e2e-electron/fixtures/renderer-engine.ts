@@ -7,6 +7,10 @@ import { resolve } from 'node:path';
 export interface RendererEngine {
   url: string;
   requests: string[];
+  uploads: Map<string, Buffer>;
+  uploadCounts: Map<string, number>;
+  uploadContentLengths: Array<number | null>;
+  activeUploadCount: number;
   close(): Promise<void>;
 }
 
@@ -17,10 +21,15 @@ async function readBody(request: import('node:http').IncomingMessage): Promise<B
 }
 
 /** Loopback engine for renderer visual QA and the real Diagnostics check path. */
-export async function startRendererEngine(): Promise<RendererEngine> {
+export async function startRendererEngine(options: { uploadDelayMs?: number; showInspection?: boolean } = {}): Promise<RendererEngine> {
   let url = '';
   const requests: string[] = [];
   const sockets = new Set<Socket>();
+  const uploads = new Map<string, Buffer>();
+  const uploadCounts = new Map<string, number>();
+  const uploadContentLengths: Array<number | null> = [];
+  const activeUploadResponses = new Set<import('node:http').ServerResponse>();
+  const uploadTokens = new Map<string, string>();
   const server: Server = createServer((request, response) => {
     response.setHeader('Access-Control-Allow-Origin', 'https://localhost');
     response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-client-platform,x-client-version');
@@ -58,19 +67,44 @@ export async function startRendererEngine(): Promise<RendererEngine> {
     if (request.method === 'POST' && route === '/api/inspections/insp-7/media/upload-url') {
       void readBody(request).then((raw) => {
         const body = JSON.parse(raw.toString('utf8')) as { pendingId: string };
-        json({ success: true, data: { url: `${url}/api/public/uploads/photo?token=renderer123.upload123`, key: `renderer-tenant/inspections/insp-7/photos/${body.pendingId}.jpg` } });
+        const key = `renderer-tenant/inspections/insp-7/photos/${body.pendingId}.jpg`;
+        const token = `renderer123.${Math.random().toString(36).slice(2)}`;
+        uploadTokens.set(token, key);
+        json({ success: true, data: { url: `${url}/api/public/uploads/photo?token=${token}`, key } });
       });
       return;
     }
     if (request.method === 'POST' && route === '/api/public/uploads/photo') {
-      void readBody(request).then(() => response.writeHead(201).end());
+      const token = new URL(request.url ?? '/', url).searchParams.get('token') ?? '';
+      const key = uploadTokens.get(token);
+      const length = request.headers['content-length'];
+      if (key === undefined) { response.writeHead(403).end(); return; }
+      uploadCounts.set(key, (uploadCounts.get(key) ?? 0) + 1);
+      activeUploadResponses.add(response);
+      const releaseUploadSlot = () => activeUploadResponses.delete(response);
+      response.once('close', releaseUploadSlot);
+      response.once('finish', releaseUploadSlot);
+      uploadContentLengths.push(length === undefined ? null : Number(length));
+      void readBody(request).then((body) => {
+        const finish = () => { uploads.set(key, body); response.writeHead(length === undefined ? 411 : 201).end(); };
+        if ((options.uploadDelayMs ?? 0) > 0) setTimeout(finish, options.uploadDelayMs);
+        else finish();
+      });
       return;
     }
     if (request.method === 'POST' && route === '/api/inspections/insp-7/collab/ticket') {
       json({ success: true, data: { ticket: 'renderer-collab-ticket-1234' } });
       return;
     }
-    if (route === '/api/inspections' || route === '/api/client/inspections/visible') {
+    if (request.method === 'POST' && route === '/api/client/inspections/visible') {
+      void readBody(request).then((raw) => {
+        const body = JSON.parse(raw.toString('utf8')) as { ids?: unknown };
+        const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string') : [];
+        json({ success: true, data: { visible: options.showInspection ? ids : [] } });
+      });
+      return;
+    }
+    if (route === '/api/inspections') {
       json({ success: true, data: [] });
       return;
     }
@@ -98,7 +132,7 @@ export async function startRendererEngine(): Promise<RendererEngine> {
   url = `http://127.0.0.1:${address.port}`;
   // The cert file is only read to ensure the public test fixture stays available with this E2E bundle.
   await readFile(resolve('e2e-electron/fixtures/loopback-cert.pem'));
-  return { url, requests, close: () => new Promise<void>((resolveClose) => {
+  return { url, requests, uploads, uploadCounts, uploadContentLengths, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {
     for (const socket of sockets) socket.destroy();
     server.close(() => resolveClose());
     server.closeAllConnections();

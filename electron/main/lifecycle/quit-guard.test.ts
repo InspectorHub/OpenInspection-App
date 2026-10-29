@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createQuitGuard } from './quit-guard.ts';
+import { developmentQuitAnswer } from './quit-guard.ts';
+
+describe('development quit answer', () => {
+  it('can answer the native quit prompt in a development-only E2E run', () => {
+    expect(developmentQuitAnswer(false, 'stay')).toBe('stay');
+    expect(developmentQuitAnswer(false, 'quit')).toBe('quit');
+    expect(developmentQuitAnswer(false, 'unexpected')).toBeNull();
+  });
+
+  it('ignores the E2E answer in a packaged app', () => {
+    expect(developmentQuitAnswer(true, 'stay')).toBeNull();
+  });
+});
 
 describe('desktop quit guard', () => {
   it('waits for confirmation and shutdown before requesting one allowed quit', async () => {

@@ -3,7 +3,7 @@ import type { AppServices } from '../app/compose';
 import { appTimings } from '../app/timings';
 import { Body, Button, Heading, INPUT_CLASSES, Screen } from '../ui/kit';
 import { useActionLatch } from '../ui/latch';
-import { CHECKS, EXTRAS, stopKillSession } from './checks';
+import { CHECKS, EXTRAS, stopDesktopKillSession, stopKillSession } from './checks';
 import type { CheckDef, CheckResult, DiagContext, DiagDeps } from './checks/types';
 import { logResult } from './log';
 import { createRealDiagDeps } from './real-deps';
@@ -62,6 +62,7 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
   useEffect(() => {
     return () => {
       void stopKillSession();
+      void stopDesktopKillSession();
     };
   }, []);
 

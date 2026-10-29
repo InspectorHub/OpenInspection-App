@@ -1,3 +1,9 @@
+/** E2E can answer the native confirmation in development; packaged clients always show the real dialog. */
+export function developmentQuitAnswer(isPackaged: boolean, answer: string | undefined): 'quit' | 'stay' | null {
+  if (isPackaged) return null;
+  return answer === 'quit' || answer === 'stay' ? answer : null;
+}
+
 export function createQuitGuard(deps: {
   uploads(): number;
   confirm(): Promise<'quit' | 'stay'>;
