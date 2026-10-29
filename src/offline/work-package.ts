@@ -148,6 +148,12 @@ export const DEFAULT_REFRESH_LIMITS: RefreshLimits = {
 
 /** Requests in flight at once, for the whole run. The engine's free tier is the reason; a caller cannot raise it. */
 export const MAX_CONCURRENCY = 3;
+
+const TAG_PULL_CURSOR_PREFIX = 'item_tags_pull_cursor:';
+
+function tagPullCursorKey(account: string): string {
+  return `${TAG_PULL_CURSOR_PREFIX}${account}`;
+}
 export const DEFAULT_FALLBACK_INTERVAL_MS = 600_000;
 const MIN_WAIT_MS = 1000;
 const LEASE_BUSY_RETRY_BASE_MS = 2000;
@@ -674,6 +680,15 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
    */
   async function pullTags(run: Run): Promise<void> {
     const ids = run.replacedIds.splice(0);
+    if (ids.length === 0) return;
+    try {
+      const cursor = (await deps.db.query<{ value: string }>('SELECT value FROM device_state WHERE key = ?', [tagPullCursorKey(run.key)]))[0]?.value;
+      const last = cursor === undefined ? -1 : ids.indexOf(cursor);
+      if (last >= 0) ids.push(...ids.splice(0, last + 1));
+    } catch (error) {
+      // The cursor only improves fairness. If its local state is unavailable, this run still pulls in list order.
+      report(error);
+    }
     for (const id of ids) {
       if (run.halted !== null || stopped) return;
       if (run.summary.requests >= limits.maxRequests) return;
@@ -708,6 +723,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     if (row === null || !isRefreshable(row, run.account)) return;
     if ((await gate(run, false)) !== null) return;
     await mergeFromServer(deps.db, run.key, id, tags, deps.clock.now());
+    await deps.db.run('INSERT OR REPLACE INTO device_state (key, value) VALUES (?, ?)', [tagPullCursorKey(run.key), id]);
   }
 
   async function evict(run: Run): Promise<number> {

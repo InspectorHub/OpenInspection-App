@@ -163,6 +163,36 @@ describe('a refresh brings the tags onto the device', () => {
     expect((await rows('t1')).length + (await rows('t2')).length).toBe(1);
   });
 
+  it('rotates the tag pull budget across repeated package refreshes, including after refresher restart', async () => {
+    const count = 120;
+    for (let n = 0; n < count; n += 1) {
+      const id = `large-${String(n).padStart(3, '0')}`;
+      w.serve(id);
+      serveTags(id, map({}));
+    }
+
+    const pulled = new Set<string>();
+    const batches: string[][] = [];
+    for (let round = 0; round < 5; round += 1) {
+      if (round > 0) w.clock.set(NOW + round * 300_001);
+      // A new refresher on each pass models an app restart while the local database remains.
+      const refresher = w.build();
+      const start = w.pkg.requests.length;
+      const summary = await refresher.refresh({ reason: round === 0 ? 'manual' : 'foreground' });
+      const batch = w.pkg.requests.slice(start)
+        .filter((request) => /^\/api\/inspections\/large-\d{3}\/tags$/.test(request.path))
+        .map((request) => request.path.split('/')[3] ?? '');
+      batches.push(batch);
+      batch.forEach((id) => pulled.add(id));
+      expect(summary).toMatchObject({ refreshed: count, halted: null });
+      expect(summary.requests).toBeLessThanOrEqual(400);
+    }
+
+    expect(batches[0]?.length).toBeGreaterThan(0);
+    expect(new Set(batches.flat()).size).toBe(count);
+    expect(pulled.size).toBe(count);
+  });
+
   it('a single-inspection refresh (after a write) pulls its tags too', async () => {
     w.serve('t1');
     await w.seed('t1');
