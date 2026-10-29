@@ -13,7 +13,7 @@ import { createLocalDataSource } from '../field/local-data-source';
 import { MESSAGES } from '../field/messages';
 import { openNetworkFlag } from '../field/network-flag';
 import { loadSessionInfo } from '../field/session-info';
-import { createRealNetwork, type Network } from '../platform/network';
+import type { Network } from '../platform/network';
 import { useToasts } from './EditorToasts';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
@@ -30,7 +30,7 @@ export interface EditorScreenProps {
   inspectionId: string;
   /** Leaves the editor for the work list. */
   onExit(): void;
-  /** Link state for the editor's own online checks. Defaults to the device's. */
+  /** Link state for the editor's own online checks. Defaults to the browser's. */
   network?: Network;
   timers?: TimerPort;
   registry?: EditorRegistry;
@@ -48,6 +48,20 @@ export interface EditorScreenProps {
 export const READ_ONLY_NOTICE = 'Some actions are turned off until you update the app. You can still read this inspection.';
 
 const SLOTS: FieldHostSlots = { humanCheck: 'not-required' };
+
+/** Browser link state only; this does not check whether the server is reachable. */
+const browserNetwork: Network = {
+  online: async () => navigator.onLine,
+  onChange: (cb) => {
+    const notify = () => cb(navigator.onLine);
+    window.addEventListener('online', notify);
+    window.addEventListener('offline', notify);
+    return () => {
+      window.removeEventListener('online', notify);
+      window.removeEventListener('offline', notify);
+    };
+  },
+};
 
 type Phase = { kind: 'loading' } | { kind: 'ready'; source: FieldDataSource; data: EditorData } | { kind: 'failed'; message: string };
 
@@ -86,7 +100,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
   useEffect(() => {
     let live = true;
     const release = registry.register(inspectionId);
-    const flag = openNetworkFlag(network ?? createRealNetwork(), { timers });
+    const flag = openNetworkFlag(network ?? browserNetwork, { timers });
     const stopEvents = stack.onEditorEvent((event) => {
       if (event.inspectionId === inspectionId && event.kind !== 'unquarantined') leave.current();
     });

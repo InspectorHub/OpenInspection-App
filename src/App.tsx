@@ -34,8 +34,8 @@ export interface AppProps {
    * work screen appears and stopped when it goes away (sign-out, lock, another account or server). Omitted: no stack is built.
    */
   offline?: StackFactory;
-  /** Link state. When given, a return to the foreground while offline does not look at the server's version policy. */
-  network?: Pick<Network, 'online'>;
+  /** Link state for the editor and foreground version checks. Omitted: the editor uses browser link state. */
+  network?: Network;
 }
 
 /** Consecutive failed mid-session evaluations after which the work screen is locked. */
@@ -200,6 +200,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             identity={screen.identity}
             onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
             onWiping={setWiping}
+            {...(network === undefined ? {} : { network })}
           />
         </OfflineStackContext.Provider>
       );
