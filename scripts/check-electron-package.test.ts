@@ -113,7 +113,7 @@ describe('Windows electron-builder configuration', () => {
       npmRebuild: false,
       asarUnpack: ['node_modules/better-sqlite3-multiple-ciphers/prebuilds/**'],
       electronLanguages: ['en-US'],
-      win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'electron/builder/icon.png' },
+      win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'electron/builder/icon.png', signExts: ['!win-heic-helper.exe'] },
       nsis: { oneClick: true, perMachine: false, deleteAppDataOnUninstall: false, artifactName: '${productName}-Setup-${version}.${ext}' },
       protocols: [{ name: 'InspectorHub sign-in', schemes: ['io.inspectorhub.app'] }],
       publish: { provider: 'github', owner: 'InspectorHub', repo: 'OpenInspection-App' },

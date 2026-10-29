@@ -33,6 +33,9 @@ const config = {
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
     icon: 'electron/builder/icon.png',
+    // The Azure job signs this helper before electron-builder reads the helper hash into app.asar.
+    // Keep the already-signed bytes intact while still signing the main app and NSIS installer.
+    signExts: ['!win-heic-helper.exe'],
     ...(signing === 'azure' ? {
       azureSignOptions: {
         endpoint: process.env.AZURE_SIGNING_ENDPOINT,

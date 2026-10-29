@@ -192,6 +192,9 @@ jobs:
     needs: sign
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: release-assets-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
