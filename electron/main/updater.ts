@@ -57,9 +57,7 @@ function updateVersion(value: unknown): string {
 export function readBuildMeta(appPath: string): { oiSigned: boolean } {
   try {
     const value: unknown = JSON.parse(readFileSync(join(appPath, 'package.json'), 'utf8'));
-    if (typeof value !== 'object' || value === null || !('extraMetadata' in value)) return { oiSigned: false };
-    const metadata = (value as { extraMetadata?: unknown }).extraMetadata;
-    return { oiSigned: typeof metadata === 'object' && metadata !== null && 'oiSigned' in metadata && (metadata as { oiSigned?: unknown }).oiSigned === true };
+    return { oiSigned: typeof value === 'object' && value !== null && 'oiSigned' in value && (value as { oiSigned?: unknown }).oiSigned === true };
   } catch {
     return { oiSigned: false };
   }

@@ -113,7 +113,7 @@ describe('desktop updater host', () => {
     const root = await mkdtemp(join(tmpdir(), 'oi-updater-meta-'));
     try {
       await mkdir(join(root, 'resources'), { recursive: true });
-      await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.1.1', extraMetadata: { oiSigned: true, token: 'not-used' } }));
+      await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.1.1', oiSigned: true, token: 'not-used' }));
       expect(readBuildMeta(root)).toEqual({ oiSigned: true });
       await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.1.1' }));
       expect(readBuildMeta(root)).toEqual({ oiSigned: false });
