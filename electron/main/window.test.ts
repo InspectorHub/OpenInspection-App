@@ -15,8 +15,9 @@ function setup(packaged = false) {
   const win = Object.assign(new EventEmitter(), { webContents, isDestroyed: () => destroyed, isMinimized: () => true, isFocused: () => false, setProgressBar: vi.fn(), restore: () => { order.push('restore'); }, focus: () => { order.push('focus'); }, loadURL: vi.fn(async () => {}) });
   const create = vi.fn((_options: BrowserWindowConstructorOptions): ShellWindow => win);
   const setApplicationMenu = vi.fn();
-  const controller = createWindowController({ packaged, preload: '/preload.cjs', create, setApplicationMenu, openExternal: async () => {}, log: vi.fn() });
-  return { controller, create, setApplicationMenu, order, win, destroy: () => { destroyed = true; } };
+  const log = vi.fn();
+  const controller = createWindowController({ packaged, preload: '/preload.cjs', create, setApplicationMenu, openExternal: async () => {}, log });
+  return { controller, create, setApplicationMenu, order, win, log, destroy: () => { destroyed = true; } };
 }
 
 it.each([true, false])('creates one isolated window with the fixed entry: packaged=%s', async (packaged) => {
@@ -28,6 +29,17 @@ it.each([true, false])('creates one isolated window with the fixed entry: packag
   expect(create.mock.calls[0]![0]).toEqual({ width: 1280, height: 800, minWidth: 480, minHeight: 640, title: 'InspectorHub', webPreferences: { preload: '/preload.cjs', contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, backgroundThrottling: false, devTools: !packaged, spellcheck: false, webviewTag: false } });
   expect(win.loadURL).toHaveBeenCalledExactlyOnceWith('https://localhost');
   expect(setApplicationMenu.mock.calls).toEqual(packaged ? [[null]] : []);
+});
+
+it('logs window-ready only after the renderer entry finishes loading', async () => {
+  const { controller, win, log } = setup(true);
+  let finish!: () => void;
+  win.loadURL.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  controller.ensure();
+  expect(log).not.toHaveBeenCalledWith('window-ready');
+  finish();
+  await Promise.resolve();
+  expect(log).toHaveBeenCalledWith('window-ready');
 });
 
 it('keeps renderer timers active and maps focus/restore/show and minimize/hide to app state', () => {

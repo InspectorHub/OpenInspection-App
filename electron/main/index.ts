@@ -39,7 +39,8 @@ import { createUpdaterHost, readBuildMeta, type AutoUpdaterLike } from './update
 
 app.setAppUserModelId('io.inspectorhub.app');
 
-const paths = resolveStartupPaths({ packaged: app.isPackaged, appData: app.getPath('appData'), appPath: app.getAppPath(), env: process.env });
+const paths = resolveStartupPaths({ packaged: app.isPackaged, appData: app.getPath('appData'), appPath: app.getAppPath(),
+  requestedUserData: app.commandLine.hasSwitch('user-data-dir') ? app.getPath('userData') : undefined, env: process.env });
 const runSecurityCommand: SecurityCommand = (command, args) => {
   if (!app.isPackaged && command === 'powershell.exe' && args[3]?.includes("$mode = 'final'") && process.env.OI_TEST_FAIL_ACL_STEP === 'final-acl') {
     return { status: 5, stdout: '', stderr: 'injected ACL failure' };

@@ -11,9 +11,10 @@ $appRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $sourceFile = Join-Path $appRoot 'native\win-heic-helper\main.cpp'
 $outputDirectory = Join-Path $appRoot 'dist-electron\native'
 $outputFile = Join-Path $outputDirectory 'win-heic-helper.exe'
+$objectFile = Join-Path $outputDirectory 'win-heic-helper.obj'
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 
-$compile = 'call "{0}" >nul && cl.exe /nologo /std:c++17 /EHsc /O2 /W4 /DUNICODE /D_UNICODE "{1}" /Fe:"{2}" ole32.lib oleaut32.lib windowscodecs.lib' -f $vcvars, $sourceFile, $outputFile
+$compile = 'call "{0}" >nul && cl.exe /nologo /std:c++17 /EHsc /O2 /W4 /DUNICODE /D_UNICODE "{1}" /Fo:"{2}" /Fe:"{3}" ole32.lib oleaut32.lib windowscodecs.lib' -f $vcvars, $sourceFile, $objectFile, $outputFile
 & $env:ComSpec /d /s /c $compile
 if ($LASTEXITCODE -ne 0) { throw "HEIC helper build failed with exit code $LASTEXITCODE." }
 if (-not (Test-Path -LiteralPath $outputFile)) { throw 'HEIC helper build did not produce the expected executable.' }

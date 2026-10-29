@@ -57,7 +57,7 @@ export function createWindowController(deps: {
         dispose?.();
         if (window === created) window = undefined;
       });
-      void created.loadURL(APP_ORIGIN).catch(() => { deps.log('renderer-load-failed'); });
+      void created.loadURL(APP_ORIGIN).then(() => { deps.log('window-ready'); }).catch(() => { deps.log('renderer-load-failed'); });
     },
     focus() {
       const current = window;

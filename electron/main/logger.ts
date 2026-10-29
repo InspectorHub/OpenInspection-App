@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const EVENTS = ['startup', 'startup-failed', 'second-instance', 'renderer-load-failed', 'quit-shutdown-failed'] as const;
+const EVENTS = ['startup', 'startup-failed', 'second-instance', 'window-ready', 'renderer-load-failed', 'quit-shutdown-failed'] as const;
 export type LogEvent = typeof EVENTS[number];
 const MAX_BYTES = 1024 * 1024;
 
