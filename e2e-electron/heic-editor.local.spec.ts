@@ -180,7 +180,7 @@ test('offline import reports an unsupported neighbor and still stores the valid 
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg')) },
   ]);
 
-  await expect(page.getByText(/1 photo could not be added/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.oiDesktop.db.query('SELECT content_type FROM media'))).toEqual([{ content_type: 'image/jpeg' }]);
   expect(engine.requests.slice(requestsBeforeOffline).filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 });
