@@ -25,6 +25,7 @@ declare global {
       hasLiveDoc(): boolean;
       storePuts: Array<{ contentType: string; size: number; online: boolean; outcome: 'stored' | 'rejected'; code?: string }>;
       notifications: Array<{ message: string; variant: string; online: boolean; hasLiveDoc: boolean; stack: string }>;
+      codeReads: Array<{ code: unknown; name: string; message: string; stack: string }>;
     };
   }
 }
@@ -114,8 +115,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     const flag = openNetworkFlag(network ?? browserNetwork, { timers });
     const storePuts: NonNullable<Window['__oiE2EEditorState']>['storePuts'] = [];
     const notifications: NonNullable<Window['__oiE2EEditorState']>['notifications'] = [];
+    const codeReads: NonNullable<Window['__oiE2EEditorState']>['codeReads'] = [];
     const e2eEditorState = import.meta.env.DEV
-      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, storePuts, notifications }
+      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, storePuts, notifications, codeReads }
       : undefined;
     if (e2eEditorState) window.__oiE2EEditorState = e2eEditorState;
     const stopEvents = stack.onEditorEvent((event) => {

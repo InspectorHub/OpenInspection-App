@@ -17,6 +17,7 @@ declare global {
       hasLiveDoc(): boolean;
       storePuts: Array<{ contentType: string; size: number; online: boolean; outcome: 'stored' | 'rejected'; code?: string }>;
       notifications: Array<{ message: string; variant: string; online: boolean; hasLiveDoc: boolean; stack: string }>;
+      codeReads: Array<{ code: unknown; name: string; message: string; stack: string }>;
     };
   }
 }
@@ -230,6 +231,26 @@ test('offline import explains an unsupported file and still stores its valid nei
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
     .waitFor({ state: 'visible', timeout: 45_000 })
     .then(() => true, () => false);
+  await page.evaluate(() => {
+    const state = window.__oiE2EEditorState;
+    if (!state) throw new Error('e2e-editor-state-missing');
+    const originalGet = Reflect.get;
+    Reflect.set(Reflect, 'get', function (target: object, propertyKey: PropertyKey, receiver?: unknown) {
+      let value: unknown;
+      try {
+        value = originalGet(target, propertyKey, receiver);
+      } catch (error) {
+        if (propertyKey === 'code' && target instanceof Error) {
+          state.codeReads.push({ code: '<throws>', name: target.name, message: target.message, stack: new Error().stack ?? '' });
+        }
+        throw error;
+      }
+      if (propertyKey === 'code' && target instanceof Error) {
+        state.codeReads.push({ code: value, name: target.name, message: target.message, stack: new Error().stack ?? '' });
+      }
+      return value;
+    });
+  });
   await input.setInputFiles([
     { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
@@ -244,8 +265,16 @@ test('offline import explains an unsupported file and still stores its valid nei
   expect(storePuts[0]).toEqual({ contentType: 'text/plain', size: 11, online: false, outcome: 'rejected', code: 'UNSUPPORTED_TYPE' });
   expect(storePuts[1]).toMatchObject({ contentType: 'image/jpeg', online: false, outcome: 'stored' });
   expect(storePuts[1]?.size).toBeGreaterThan(0);
-  await expect.poll(() => page.evaluate(() => window.__oiE2EEditorState?.notifications), { timeout: 10_000 })
-    .toContainEqual(expect.objectContaining({ message: '1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', variant: 'error', online: false, hasLiveDoc: true }));
+  const expectedNotification = await expect.poll(() => page.evaluate(() =>
+    window.__oiE2EEditorState?.notifications.some(({ message, variant, online, hasLiveDoc }) =>
+      message === '1 photo could not be added because only JPEG, PNG and HEIC photos are supported.'
+      && variant === 'error' && !online && hasLiveDoc) ?? false,
+  ), { timeout: 10_000 }).toBe(true).then(() => true, () => false);
+  if (!expectedNotification) {
+    const notifications = await page.evaluate(() => window.__oiE2EEditorState?.notifications ?? []);
+    const codeReads = await page.evaluate(() => window.__oiE2EEditorState?.codeReads ?? []);
+    throw new Error(`offline unsupported notification missing; notifications=${JSON.stringify(notifications)}; codeReads=${JSON.stringify(codeReads)}`);
+  }
   await expect(refusal).resolves.toBe(true);
   const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
   for (const theme of ['light', 'dark'] as const) {
