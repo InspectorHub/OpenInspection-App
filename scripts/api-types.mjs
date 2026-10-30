@@ -31,7 +31,8 @@ if (dir) {
   const fresh = readFileSync(out, 'utf8');
   const committed = readFileSync(target, 'utf8');
   rmSync(dir, { recursive: true, force: true });
-  if (fresh !== committed) {
+  const normalizeLineEndings = (text) => text.replace(/\r\n/g, '\n');
+  if (normalizeLineEndings(fresh) !== normalizeLineEndings(committed)) {
     console.error(`${target} is out of date with the contract. Run \`npm run api:types\` and commit the result.`);
     process.exit(1);
   }
