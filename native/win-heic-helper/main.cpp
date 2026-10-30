@@ -28,6 +28,7 @@ constexpr int kExitCodecMissing = 2;
 constexpr int kExitUnsupported = 3;
 constexpr int kExitTooLarge = 4;
 constexpr int kExitCorrupt = 5;
+constexpr int kExitTooLargeBytes = 6;
 
 bool ReadInput(std::vector<BYTE>* bytes) {
   HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
@@ -596,11 +597,11 @@ int wmain(int argc, wchar_t** argv) {
     result = EncodeJpeg(factory.Get(), bitmap.Get(), qualities[index], &jpeg);
     if (FAILED(result)) {
       CoUninitialize();
-      return result == HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE) ? kExitTooLarge : ClassifyCodecError(result);
+      return result == HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE) ? kExitTooLargeBytes : ClassifyCodecError(result);
     }
     const size_t ceiling = keepOriginal ? keepOriginalMaxBytes : kMaxOutputBytes;
     if (jpeg.size() <= ceiling) break;
-    if (index + 1 == qualityCount) { CoUninitialize(); return kExitTooLarge; }
+    if (index + 1 == qualityCount) { CoUninitialize(); return kExitTooLargeBytes; }
   }
   if (jpeg.size() < 4 || jpeg[0] != 0xff || jpeg[1] != 0xd8 || jpeg[2] != 0xff || jpeg[jpeg.size() - 2] != 0xff || jpeg.back() != 0xd9) {
     CoUninitialize();

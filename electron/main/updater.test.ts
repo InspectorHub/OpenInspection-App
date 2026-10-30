@@ -26,7 +26,7 @@ function makeTimers() {
 describe('desktop updater host', () => {
   it('disables unsigned or unpackaged builds and turns off implicit update behavior', () => {
     const unsigned = new FakeUpdater();
-    const deps = { autoUpdater: unsigned, enabled: false, packaged: true, uploads: () => 0, shutdown: vi.fn(async () => {}), timers: makeTimers().port, random: () => 0.5, log: vi.fn() };
+    const deps = { autoUpdater: unsigned, enabled: false, packaged: true, uploads: () => 0, databaseTransactionActive: () => false, shutdown: vi.fn(async () => {}), timers: makeTimers().port, random: () => 0.5, log: vi.fn() };
     const host = createUpdaterHost(deps);
     expect(host.state()).toEqual({ kind: 'disabled', reason: 'unsigned' });
     expect([unsigned.autoDownload, unsigned.autoInstallOnAppQuit, unsigned.allowDowngrade, unsigned.allowPrerelease]).toEqual([false, false, false, false]);
@@ -40,7 +40,7 @@ describe('desktop updater host', () => {
   it('schedules the initial check at 30 seconds and repeats with plus/minus ten percent jitter', async () => {
     const updater = new FakeUpdater();
     const timers = makeTimers();
-    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, shutdown: async () => {}, timers: timers.port, random: () => 0, log: vi.fn() });
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, databaseTransactionActive: () => false, shutdown: async () => {}, timers: timers.port, random: () => 0, log: vi.fn() });
     expect(host.state()).toEqual({ kind: 'idle' });
     expect(timers.callbacks[0]?.ms).toBe(30_000);
     await timers.callbacks[0]?.fn();
@@ -50,7 +50,7 @@ describe('desktop updater host', () => {
 
   it('broadcasts available, progress and ready states without exposing updater errors', async () => {
     const updater = new FakeUpdater();
-    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, shutdown: async () => {}, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, databaseTransactionActive: () => false, shutdown: async () => {}, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
     const listener = vi.fn();
     host.onState(listener);
     updater.emit('update-available', { version: '0.2.0' } as never);
@@ -68,7 +68,7 @@ describe('desktop updater host', () => {
     const updater = new FakeUpdater();
     updater.checkForUpdates.mockRejectedValueOnce(Object.assign(new Error('private token in url'), { code: 'ENETUNREACH' }));
     const log = vi.fn();
-    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, shutdown: async () => {}, timers: makeTimers().port, random: () => 0.5, log });
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, databaseTransactionActive: () => false, shutdown: async () => {}, timers: makeTimers().port, random: () => 0.5, log });
     await host.check();
     expect(host.state()).toEqual({ kind: 'error', code: 'network' });
     expect(log).toHaveBeenCalledWith('updater-network');
@@ -80,7 +80,7 @@ describe('desktop updater host', () => {
   it('reports a failed download and permits checking again', async () => {
     const updater = new FakeUpdater();
     updater.downloadUpdate.mockRejectedValueOnce(Object.assign(new Error('private url'), { code: 'ERR_UPDATER_INVALID_SIGNATURE' }));
-    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, shutdown: async () => {}, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, databaseTransactionActive: () => false, shutdown: async () => {}, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
     updater.emit('update-available', { version: '0.2.0' } as never);
     await host.download();
     expect(host.state()).toEqual({ kind: 'error', code: 'verify' });
@@ -91,9 +91,19 @@ describe('desktop updater host', () => {
   it('blocks restart while uploads are active without shutting down or quitting', async () => {
     const updater = new FakeUpdater();
     const shutdown = vi.fn(async () => {});
-    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 1, shutdown, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 1, databaseTransactionActive: () => false, shutdown, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
     updater.emit('update-downloaded', { version: '0.2.0' } as never);
     await expect(host.installAndRestart()).resolves.toBe('blocked-uploads');
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it('blocks restart while a database transaction is active without rolling it back', async () => {
+    const updater = new FakeUpdater();
+    const shutdown = vi.fn(async () => {});
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, databaseTransactionActive: () => true, shutdown, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
+    updater.emit('update-downloaded', { version: '0.2.0' } as never);
+    await expect(host.installAndRestart()).resolves.toBe('blocked-transaction');
     expect(shutdown).not.toHaveBeenCalled();
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
   });
@@ -102,7 +112,7 @@ describe('desktop updater host', () => {
     const order: string[] = [];
     const updater = new FakeUpdater();
     updater.quitAndInstall.mockImplementation(() => { order.push('quitAndInstall'); });
-    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, shutdown: async () => { order.push('shutdown'); }, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
+    const host = createUpdaterHost({ autoUpdater: updater, enabled: true, packaged: true, uploads: () => 0, databaseTransactionActive: () => false, shutdown: async () => { order.push('shutdown'); }, timers: makeTimers().port, random: () => 0.5, log: vi.fn() });
     updater.emit('update-downloaded', { version: '0.2.0' } as never);
     await expect(host.installAndRestart()).resolves.toBe('restarting');
     expect(order).toEqual(['shutdown', 'quitAndInstall']);

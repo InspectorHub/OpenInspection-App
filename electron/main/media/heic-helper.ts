@@ -1,7 +1,7 @@
 import { MAX_MEDIA_BYTES, MAX_DECODE_INPUT_BYTES, MAX_DECODE_PIXELS, DECODE_TIMEOUT_MS } from '../../../src/media/media-types.ts';
 import type { TimerPort } from '../../../src/collab/timers.ts';
 
-export type HeicFailure = 'CODEC_MISSING' | 'HELPER_MISSING' | 'UNSUPPORTED' | 'TOO_LARGE_PIXELS' | 'CORRUPT' | 'TIMEOUT';
+export type HeicFailure = 'CODEC_MISSING' | 'HELPER_MISSING' | 'UNSUPPORTED' | 'TOO_LARGE_PIXELS' | 'TOO_LARGE_BYTES' | 'CORRUPT' | 'TIMEOUT';
 export type HeicRunResult = { ok: true; jpeg: Uint8Array } | { ok: false; code: HeicFailure };
 
 export interface HelperProcess {
@@ -32,6 +32,7 @@ const EXIT_CODES: Readonly<Record<number, HeicFailure>> = {
   3: 'UNSUPPORTED',
   4: 'TOO_LARGE_PIXELS',
   5: 'CORRUPT',
+  6: 'TOO_LARGE_BYTES',
 };
 
 interface DecodeRequest {
@@ -102,7 +103,7 @@ export function createHeicHelperRunner(deps: RunnerOptions): { run(req: DecodeRe
         outputBytes += chunk.byteLength;
         if (outputBytes > MAX_MEDIA_BYTES) {
           child.kill();
-          finish({ ok: false, code: 'TOO_LARGE_PIXELS' });
+          finish({ ok: false, code: 'TOO_LARGE_BYTES' });
           return;
         }
         chunks.push(Uint8Array.from(chunk));
@@ -131,7 +132,7 @@ export function createHeicHelperRunner(deps: RunnerOptions): { run(req: DecodeRe
           return;
         }
         if (req.keepOriginal !== undefined && output.byteLength > req.keepOriginal.maxBytes) {
-          finish({ ok: false, code: 'TOO_LARGE_PIXELS' });
+          finish({ ok: false, code: 'TOO_LARGE_BYTES' });
           return;
         }
         finish({ ok: true, jpeg: output });

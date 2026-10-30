@@ -61,7 +61,7 @@ export interface FilesBridge {
   };
 }
 
-export const HEIC_DECODE_CODES = ['CODEC_MISSING', 'HELPER_MISSING', 'UNSUPPORTED', 'TOO_LARGE_PIXELS', 'CORRUPT', 'TIMEOUT'] as const;
+export const HEIC_DECODE_CODES = ['CODEC_MISSING', 'HELPER_MISSING', 'UNSUPPORTED', 'TOO_LARGE_PIXELS', 'TOO_LARGE_BYTES', 'CORRUPT', 'TIMEOUT'] as const;
 export type HeicDecodeCode = (typeof HEIC_DECODE_CODES)[number];
 
 export interface DecodeHeicRequest {
@@ -103,7 +103,7 @@ export interface DesktopBridge {
     onState(listener: (state: UpdaterState) => void): () => void;
     check(): Promise<void>;
     download(): Promise<void>;
-    installAndRestart(): Promise<'restarting' | 'blocked-uploads'>;
+    installAndRestart(): Promise<'restarting' | 'blocked-uploads' | 'blocked-transaction'>;
   };
   /** The one way the renderer reaches the system HEIC decoder. It cannot name an executable, a path or an argument. */
   media: { decodeHeic?: (request: DecodeHeicRequest) => Promise<DecodeHeicReply> };

@@ -219,6 +219,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       enabled: buildMeta.oiSigned,
       packaged: app.isPackaged,
       uploads: () => uploaderHost?.activeCount() ?? 0,
+      databaseTransactionActive: () => dbHost?.inTransaction() ?? false,
       shutdown: () => shutdownDesktop({
         abortUploads: () => uploaderHost?.abortAll('quit'),
         state: {

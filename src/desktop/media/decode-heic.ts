@@ -19,6 +19,8 @@ function decodeError(code: HeicDecodeCode): DecodeImageError {
       return new DecodeImageError('UNSUPPORTED', helperMissingMessage);
     case 'TOO_LARGE_PIXELS':
       return new DecodeImageError('TOO_LARGE_PIXELS', 'This HEIC photo has more pixels than Windows can decode.');
+    case 'TOO_LARGE_BYTES':
+      return new DecodeImageError('UNSUPPORTED', 'The converted HEIC photo is larger than the allowed size limit.');
     case 'CORRUPT':
       return new DecodeImageError('CORRUPT', 'This HEIC photo is damaged or could not be decoded.');
     case 'UNSUPPORTED':

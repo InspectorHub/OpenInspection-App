@@ -18,6 +18,7 @@ const VIEWPORTS = [
   { width: 480, height: 720, key: '480x720' },
 ] as const;
 const SCREENSHOT_ROOT = '.superpowers/sdd/plan-d2-windows-electron/screenshots/task-12';
+const UPDATER_SCREENSHOT_ROOT = '.superpowers/sdd/plan-d2-windows-electron/screenshots/updater-transaction-guard';
 const DEV_RENDERER = 'dist-electron/renderer-development';
 let electronApp: ElectronApplication | undefined;
 let page: Page | undefined;
@@ -97,13 +98,19 @@ async function captureMatrix(state: 'setup' | 'sign-in' | 'settings' | 'locked',
 
 async function signInOnTestEngine(): Promise<void> {
   if (!electronApp || !page || !engine) throw new Error('renderer-not-running');
+  await expect.poll(async () => page!.locator('h1').first().innerText().catch(() => ''), { timeout: 10_000 })
+    .toMatch(/^(Choose your server|Sign in|Work list)$/);
   if (await page.getByLabel('Server address').count()) {
     await page.getByLabel('Server address').fill(engine.url);
     await page.getByRole('button', { name: 'Continue' }).click();
     browserStage = 'server-connect';
     await page.getByRole('button', { name: 'Connect' }).click();
   }
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  const diagnostics = `Page URL: ${page.url()}\nCurrent page:\n${await page.locator('body').innerText()}\nEngine requests:\n${engine.requests.join('\n')}\nBrowser errors:\n${browserErrors.join('\n')}\nMain log:\n${await readFile(join(userData, 'logs', 'main.log'), 'utf8').catch(() => 'unavailable')}`;
+  await expect(
+    page.getByRole('heading', { name: 'Sign in' }),
+    `Server connection did not reach sign-in. ${diagnostics}`,
+  ).toBeVisible();
   browserStage = 'oauth-open';
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect.poll(() => electronApp!.evaluate(() => Reflect.get(globalThis, 'rendererExternalUrl'))).toEqual(expect.stringContaining('/oauth/authorize?'));
@@ -199,6 +206,42 @@ test('development renderer exposes Diagnostics and all checks pass against the f
   for (const check of ['db-blob', 'db-tx', 'yjs-persist', 'files', 'lock-clock', 'uploader-photo', 'permissions', 'collab-ticket']) {
     expect(results).toContain(`${check} PASS`);
   }
+  const mainLog = await readFile(join(userData, 'logs', 'main.log'), 'utf8').catch(() => 'unavailable');
+  expect(browserErrors, `main.log:\n${mainLog}\nengine requests:\n${engine.requests.join('\n')}`).toEqual([]);
+});
+
+test('update-required screen explains a blocked database transaction in light and dark themes', async () => {
+  test.setTimeout(120_000);
+  if (!electronApp || !page || !engine) throw new Error('renderer-not-running');
+  engine.setCompatibility({ minSupported: '0.2.0', downloadUrl: 'https://downloads.example.test/windows' });
+  await signInOnTestEngine();
+  browserStage = 'transaction-blocked-update';
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Update required' })).toBeVisible();
+
+  await electronApp.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('updater:install-and-restart');
+    ipcMain.handle('updater:install-and-restart', async () => {
+      Reflect.set(globalThis, '__rendererE2eUpdaterInstallCalls', Number(Reflect.get(globalThis, '__rendererE2eUpdaterInstallCalls') ?? 0) + 1);
+      return { ok: true, value: 'blocked-transaction' };
+    });
+  });
+  await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.send('updater:state-changed', { kind: 'ready', version: '0.2.0' }));
+  await page.getByRole('button', { name: 'Restart to update' }).click();
+  const feedback = page.getByText('Finish or cancel the current edit before restarting to update.');
+  await expect(feedback, `Updater feedback missing. Page:\n${await page.locator('body').innerText()}\nIPC calls: ${await electronApp.evaluate(() => Reflect.get(globalThis, '__rendererE2eUpdaterInstallCalls'))}\nBrowser errors:\n${browserErrors.join('\n')}`).toBeVisible();
+  expect(await electronApp.evaluate(() => Reflect.get(globalThis, '__rendererE2eUpdaterInstallCalls'))).toBe(1);
+  await mkdir(UPDATER_SCREENSHOT_ROOT, { recursive: true });
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect.poll(() => page!.evaluate(() => document.documentElement.dataset.colorScheme)).toBe(theme);
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 480, height: 720 }] as const) {
+      await page.setViewportSize(viewport);
+      await page.screenshot({ path: join(UPDATER_SCREENSHOT_ROOT, `required-${theme}-${viewport.width}x${viewport.height}.png`), animations: 'disabled' });
+      await expect(feedback).toBeVisible();
+    }
+  }
+
   const mainLog = await readFile(join(userData, 'logs', 'main.log'), 'utf8').catch(() => 'unavailable');
   expect(browserErrors, `main.log:\n${mainLog}\nengine requests:\n${engine.requests.join('\n')}`).toEqual([]);
 });

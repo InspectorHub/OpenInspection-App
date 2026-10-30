@@ -84,6 +84,17 @@ describe('createDesktopDecodeImage', () => {
     await expect(decode(file(heicBytes), { maxLongEdge: 2560 })).rejects.toMatchObject({ name: 'DecodeImageError', code: expectedCode });
   });
 
+  it('explains an encoded output size limit without claiming the photo has too many pixels', async () => {
+    const decodeHeic = decodeReply({ ok: false, code: 'TOO_LARGE_BYTES' });
+    const decode = createDesktopDecodeImage(bridgeFor(decodeHeic));
+
+    await expect(decode(file(heicBytes), { maxLongEdge: 2560 })).rejects.toMatchObject({
+      name: 'DecodeImageError',
+      code: 'UNSUPPORTED',
+      message: expect.stringMatching(/size limit/i),
+    });
+  });
+
   it('does not invoke the bridge when input exceeds the decoder ceiling', async () => {
     const decodeHeic = decodeReply({ ok: true, jpeg: new Uint8Array(3) });
     const decode = createDesktopDecodeImage(bridgeFor(decodeHeic));

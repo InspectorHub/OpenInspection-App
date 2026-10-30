@@ -96,6 +96,27 @@ describe('UpgradeRequired', () => {
     expect(await screen.findByText('Finish uploading before restarting to update.')).toBeInTheDocument();
   });
 
+  it('Windows upgrade-required screen explains when an offline database edit blocks restart', async () => {
+    const controls = desktopUpdater({ kind: 'ready', version: '0.2.0' }, { installAndRestart: vi.fn(async () => 'blocked-transaction' as const) });
+    render(<UpgradeRequired platform="windows" downloadUrl={APK} openExternal={vi.fn()} desktop={controls} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(await screen.findByText('Finish or cancel the current edit before restarting to update.')).toBeInTheDocument();
+  });
+
+  it('clears the stale offline-edit block if a later update restart fails', async () => {
+    const installAndRestart = vi.fn()
+      .mockResolvedValueOnce('blocked-transaction' as const)
+      .mockRejectedValueOnce(new Error('installer failed'));
+    const controls = desktopUpdater({ kind: 'ready', version: '0.2.0' }, { installAndRestart });
+    render(<UpgradeRequired platform="windows" downloadUrl={APK} openExternal={vi.fn()} desktop={controls} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(await screen.findByText('Finish or cancel the current edit before restarting to update.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(await screen.findByText('The update could not be installed. Try again.')).toBeInTheDocument();
+    expect(screen.queryByText('Finish or cancel the current edit before restarting to update.')).toBeNull();
+  });
+
   it('iOS: the button is named for TestFlight and opens the address the server gave', async () => {
     const openExternal = vi.fn(() => Promise.resolve());
     render(<UpgradeRequired platform="ios" downloadUrl="https://testflight.apple.com/join/abc123" openExternal={openExternal} />);
@@ -214,6 +235,27 @@ describe('UpdateRecommended', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Restart to update' }));
     expect(controls.installAndRestart).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('Finish uploading before restarting to update.')).toBeInTheDocument();
+  });
+
+  it('Windows explains when an offline database edit blocks updater restart', async () => {
+    const controls = desktopUpdater({ kind: 'ready', version: '0.2.0' }, { installAndRestart: vi.fn(async () => 'blocked-transaction' as const) });
+    render(<UpdateRecommended platform="windows" downloadUrl={APK} openExternal={vi.fn()} onDismiss={vi.fn()} desktop={controls} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(await screen.findByText('Finish or cancel the current edit before restarting to update.')).toBeInTheDocument();
+  });
+
+  it('clears the stale offline-edit block if a later update restart fails', async () => {
+    const installAndRestart = vi.fn()
+      .mockResolvedValueOnce('blocked-transaction' as const)
+      .mockRejectedValueOnce(new Error('installer failed'));
+    const controls = desktopUpdater({ kind: 'ready', version: '0.2.0' }, { installAndRestart });
+    render(<UpdateRecommended platform="windows" downloadUrl={APK} openExternal={vi.fn()} onDismiss={vi.fn()} desktop={controls} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(await screen.findByText('Finish or cancel the current edit before restarting to update.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Restart to update' }));
+    expect(await screen.findByText('The update could not be installed. Try again.')).toBeInTheDocument();
+    expect(screen.queryByText('Finish or cancel the current edit before restarting to update.')).toBeNull();
   });
 
   it('Windows falls back to the server link when the packaged updater is disabled', async () => {

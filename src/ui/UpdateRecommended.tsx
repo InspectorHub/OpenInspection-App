@@ -16,14 +16,18 @@ export interface UpdateRecommendedProps {
 export function UpdateRecommended({ platform, downloadUrl, openExternal, onDismiss, desktop }: UpdateRecommendedProps) {
   const titleId = useId();
   const link = useUpdateLink(downloadUrl, openExternal);
-  const [blocked, setBlocked] = useState(false);
+  const [blocked, setBlocked] = useState<'uploads' | 'transaction' | null>(null);
   const [restartFailed, setRestartFailed] = useState(false);
   const state = desktop?.updater;
   const canUseUpdater = platform === 'windows' && desktop?.downloadUpdate !== undefined && desktop.installAndRestart !== undefined && state !== undefined;
   const updaterButton = canUseUpdater && (state.kind === 'available' || state.kind === 'ready' || state.kind === 'downloading' || state.kind === 'checking');
   const restart = async (): Promise<void> => {
-    try { setBlocked(await desktop!.installAndRestart!() === 'blocked-uploads'); setRestartFailed(false); }
-    catch { setRestartFailed(true); }
+    try {
+      const result = await desktop!.installAndRestart!();
+      setBlocked(result === 'blocked-uploads' ? 'uploads' : result === 'blocked-transaction' ? 'transaction' : null);
+      setRestartFailed(false);
+    }
+    catch { setBlocked(null); setRestartFailed(true); }
   };
   return (
     <Panel tone="info" role="status" titleId={titleId}>
@@ -43,7 +47,8 @@ export function UpdateRecommended({ platform, downloadUrl, openExternal, onDismi
           Dismiss
         </Button>
       </div>
-      {blocked && <p role="status" className="text-sm leading-relaxed">Finish uploading before restarting to update.</p>}
+      {blocked === 'uploads' && <p role="status" className="text-sm leading-relaxed">Finish uploading before restarting to update.</p>}
+      {blocked === 'transaction' && <p role="status" className="text-sm leading-relaxed">Finish or cancel the current edit before restarting to update.</p>}
       {restartFailed && <p role="alert" className="text-sm leading-relaxed">The update could not be installed. Try again.</p>}
     </Panel>
   );

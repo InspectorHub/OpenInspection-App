@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 
 export interface RendererEngine {
   url: string;
+  setCompatibility(value: { minSupported?: string | null; recommended?: string | null; downloadUrl?: string | null }): void;
   requests: string[];
   uploads: Map<string, Buffer>;
   uploadCounts: Map<string, number>;
@@ -46,6 +47,7 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
   const uploadContentLengths: Array<number | null> = [];
   const activeUploadResponses = new Set<import('node:http').ServerResponse>();
   const uploadTokens = new Map<string, string>();
+  const compatibility = { minSupported: null as string | null, recommended: null as string | null, downloadUrl: null as string | null };
   const server: Server = createServer((request, response) => {
     response.setHeader('Access-Control-Allow-Origin', 'https://localhost');
     response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-client-platform,x-client-version');
@@ -57,7 +59,7 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
     requests.push(`${request.method ?? 'GET'} ${route}`);
     const json = (body: unknown, status = 200) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
     if (request.method === 'GET' && route === '/api/client/compat') {
-      json({ success: true, data: { minSupported: null, recommended: null, downloadUrl: null, serverContractVersion: 2, accountUrl: null } });
+      json({ success: true, data: { ...compatibility, serverContractVersion: 2, accountUrl: null } });
       return;
     }
     if (request.method === 'POST' && route === '/oauth/register') {
@@ -162,7 +164,7 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
   url = `http://127.0.0.1:${address.port}`;
   // The cert file is only read to ensure the public test fixture stays available with this E2E bundle.
   await readFile(resolve('e2e-electron/fixtures/loopback-cert.pem'));
-  return { url, requests, uploads, uploadCounts, uploadContentLengths, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {
+  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {
     for (const socket of sockets) socket.destroy();
     server.close(() => resolveClose());
     server.closeAllConnections();

@@ -21,13 +21,17 @@ export function UpgradeRequired({ platform, downloadUrl, openExternal, desktop }
   const titleId = useId();
   const link = useUpdateLink(downloadUrl, openExternal);
   const ios = platform === 'ios';
-  const [blocked, setBlocked] = useState(false);
+  const [blocked, setBlocked] = useState<'uploads' | 'transaction' | null>(null);
   const [restartFailed, setRestartFailed] = useState(false);
   const state = desktop?.updater;
   const canUseUpdater = platform === 'windows' && desktop?.downloadUpdate !== undefined && desktop.installAndRestart !== undefined && state !== undefined;
   const restart = async (): Promise<void> => {
-    try { setBlocked(await desktop!.installAndRestart!() === 'blocked-uploads'); setRestartFailed(false); }
-    catch { setRestartFailed(true); }
+    try {
+      const result = await desktop!.installAndRestart!();
+      setBlocked(result === 'blocked-uploads' ? 'uploads' : result === 'blocked-transaction' ? 'transaction' : null);
+      setRestartFailed(false);
+    }
+    catch { setBlocked(null); setRestartFailed(true); }
   };
   const updaterButton = canUseUpdater && (state.kind === 'available' || state.kind === 'ready' || state.kind === 'downloading' || state.kind === 'checking');
   return (
@@ -50,7 +54,8 @@ export function UpgradeRequired({ platform, downloadUrl, openExternal, desktop }
           The update link could not be opened. Try again, or ask your administrator.
         </p>
       )}
-      {blocked && <Body>Finish uploading before restarting to update.</Body>}
+      {blocked === 'uploads' && <Body>Finish uploading before restarting to update.</Body>}
+      {blocked === 'transaction' && <Body>Finish or cancel the current edit before restarting to update.</Body>}
       {restartFailed && <Body>The update could not be installed. Try again.</Body>}
     </Panel>
   );

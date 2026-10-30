@@ -17,7 +17,7 @@ export interface UpdaterHost {
   state(): UpdaterState;
   check(): Promise<void>;
   download(): Promise<void>;
-  installAndRestart(): Promise<'restarting' | 'blocked-uploads'>;
+  installAndRestart(): Promise<'restarting' | 'blocked-uploads' | 'blocked-transaction'>;
   onState(listener: (state: UpdaterState) => void): () => void;
 }
 
@@ -68,6 +68,7 @@ export function createUpdaterHost(deps: {
   enabled: boolean;
   packaged: boolean;
   uploads(): number;
+  databaseTransactionActive(): boolean;
   shutdown(): Promise<void>;
   timers: UpdaterTimerPort;
   random: () => number;
@@ -148,6 +149,7 @@ export function createUpdaterHost(deps: {
     async installAndRestart() {
       if (!enabled || current.kind !== 'ready') throw new Error('update-not-ready');
       if (deps.uploads() > 0) return 'blocked-uploads';
+      if (deps.databaseTransactionActive()) return 'blocked-transaction';
       if (nextTimer !== undefined) deps.timers.clearTimeout(nextTimer);
       try {
         await deps.shutdown();

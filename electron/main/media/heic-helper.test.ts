@@ -91,7 +91,7 @@ describe('createHeicHelperRunner', () => {
     await started(rejected);
     tooBig.process.emit(jpeg);
     tooBig.process.finish(0);
-    await expect(rejected).resolves.toEqual({ ok: false, code: 'TOO_LARGE_PIXELS' });
+    await expect(rejected).resolves.toEqual({ ok: false, code: 'TOO_LARGE_BYTES' });
   });
 
   it('rejects an output without a JPEG signature', async () => {
@@ -104,7 +104,7 @@ describe('createHeicHelperRunner', () => {
   });
 
   it('maps helper exit codes, and treats unknown exits, signals and empty output as corruption', async () => {
-    for (const [code, expected] of [[2, 'CODEC_MISSING'], [3, 'UNSUPPORTED'], [4, 'TOO_LARGE_PIXELS'], [5, 'CORRUPT']] as const) {
+    for (const [code, expected] of [[2, 'CODEC_MISSING'], [3, 'UNSUPPORTED'], [4, 'TOO_LARGE_PIXELS'], [5, 'CORRUPT'], [6, 'TOO_LARGE_BYTES']] as const) {
       const h = harness();
       const pending = h.runner.run({ bytes: Uint8Array.of(1), maxLongEdge: 32 });
       await started(pending);
@@ -184,7 +184,7 @@ describe('createHeicHelperRunner', () => {
     oversized.set(jpeg.subarray(0, 3));
     h.process.emit(oversized);
     h.process.finish(0);
-    await expect(pending).resolves.toEqual({ ok: false, code: 'TOO_LARGE_PIXELS' });
+    await expect(pending).resolves.toEqual({ ok: false, code: 'TOO_LARGE_BYTES' });
     expect(h.process.killed).toBe(true);
   });
 });

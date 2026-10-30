@@ -6,7 +6,7 @@ export interface DesktopSettingsPort {
   updater: UpdaterState;
   checkForUpdates(): void;
   downloadUpdate?(): void;
-  installAndRestart?(): Promise<'restarting' | 'blocked-uploads'>;
+  installAndRestart?(): Promise<'restarting' | 'blocked-uploads' | 'blocked-transaction'>;
   openLogs(): void;
   openDataFolder(): void;
 }
