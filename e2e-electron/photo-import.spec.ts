@@ -7,8 +7,6 @@ import { promisify } from 'node:util';
 import type { DesktopBridge } from '../electron/shared/ipc-contract.ts';
 import { startRendererEngine, type RendererEngine } from './fixtures/renderer-engine.ts';
 
-test.describe.configure({ timeout: 120_000 });
-
 declare global { interface Window { oiDesktop: DesktopBridge } }
 
 const execFileAsync = promisify(execFile);
@@ -21,7 +19,7 @@ let environment: Record<string, string>;
 
 test.beforeEach(async () => {
   userData = await mkdtemp(join(tmpdir(), 'oi-photo-import-'));
-  engine = await startRendererEngine();
+  engine = await startRendererEngine({ showInspection: true });
   environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete environment.ELECTRON_RUN_AS_NODE;
   environment.OI_USER_DATA_DIR = userData;
@@ -262,7 +260,7 @@ test('the batch survives a force-kill and each persisted photo uploads once afte
   const pid = killedApp.process().pid;
   if (pid === undefined) throw new Error('photo-import-main-pid-missing');
   const exited = new Promise<void>((resolveExit) => killedApp.process().once('exit', () => resolveExit()));
-  await execFileAsync('taskkill.exe', ['/F', '/T', '/PID', String(pid)]);
+  await execFileAsync('taskkill.exe', ['/F', '/PID', String(pid)]);
   await exited;
   await killedApp.close().catch(() => undefined);
 
