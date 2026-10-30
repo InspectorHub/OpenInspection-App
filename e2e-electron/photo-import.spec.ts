@@ -36,7 +36,7 @@ test.beforeAll(async () => {
   const branchMarker = '        const doc = writeDoc;\n        const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;\n        if (!dataSource.isOnline() && doc && sid && !target) {';
   if (fieldUiSource.split(branchMarker).length !== 2) throw new Error('field-ui photo branch instrumentation target was not unique');
   const batchMapperMarker = 'function offlinePhotoRejectionMessages(batch) {\n  const messages = [];';
-  if (fieldUiSource.split(batchMapperMarker).length !== 2) throw new Error('field-ui offline batch mapper instrumentation target was not unique');
+  if (!fieldUiSource.includes(batchMapperMarker)) throw new Error('field-ui offline batch mapper instrumentation target was missing');
   const branchProbe = `        const doc = writeDoc;
         const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;
         if (typeof window !== 'undefined') {
@@ -55,7 +55,7 @@ test.beforeAll(async () => {
   }
   const messages = [];`;
   const branchWithProbe = fieldUiSource.replace(branchMarker, branchProbe);
-  const branchWithBatchProbe = branchWithProbe.replace(batchMapperMarker, offlineBatchMapperProbe);
+  const branchWithBatchProbe = branchWithProbe.replaceAll(batchMapperMarker, offlineBatchMapperProbe);
   process.env.NODE_ENV = 'development';
   try {
     await writeFile(fieldUiPath, branchWithBatchProbe, 'utf8');
