@@ -222,18 +222,17 @@ test('offline import explains an unsupported file and still stores its valid nei
     }, { capture: true, once: true });
   });
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
-    .waitFor({ state: 'visible', timeout: 15_000 });
-  await Promise.all([
-    input.setInputFiles([
-      { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
-      { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
-    ]),
-    refusal,
+    .waitFor({ state: 'visible', timeout: 15_000 })
+    .then(() => true, () => false);
+  await input.setInputFiles([
+    { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
+    { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
   ]);
   await expect.poll(() => page.evaluate(() => window.__oiE2ESelectedFiles)).toEqual([
     { name: 'notes.txt', type: 'text/plain', size: 11 },
     { name: 'valid.jpg', type: 'image/jpeg', size: jpeg.length },
   ]);
+  await expect(refusal).resolves.toBe(true);
   const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
   for (const theme of ['light', 'dark'] as const) {
     await electronApp.evaluate(({ nativeTheme }, selected) => { nativeTheme.themeSource = selected; }, theme);
@@ -319,6 +318,11 @@ test('the batch survives a force-kill and each persisted photo uploads once afte
   page = await electronApp.firstWindow();
   await electronApp.evaluate(({ shell }) => { shell.openExternal = async (url) => { Reflect.set(globalThis, 'rendererExternalUrl', url); }; });
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible({ timeout: 20_000 });
+  await expect.poll(
+    () => page.evaluate(() => window.oiDesktop.db.query('SELECT 1 AS ready')),
+    { timeout: 15_000 },
+  ).toEqual([{ ready: 1 }]);
+  await expect.poll(async () => mediaRows(), { timeout: 15_000 }).toHaveLength(3);
 
   const afterRestart = await mediaRows();
   expect(afterRestart).toHaveLength(3);
