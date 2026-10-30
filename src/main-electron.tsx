@@ -14,7 +14,10 @@ import { followSystemColorScheme } from './ui/color-scheme';
 import './styles.css';
 
 // The Electron end-to-end specs read the open editor through a development-only observer; a release build never loads it.
-if (import.meta.env.DEV) void import('./dev/editor-e2e-state').then((module) => { module.installEditorE2EState(); });
+// It is installed before the first render, so a spec cannot open the editor ahead of it.
+const observerReady = import.meta.env.DEV
+  ? import('./dev/editor-e2e-state').then((module) => { module.installEditorE2EState(); })
+  : Promise.resolve();
 
 const bridge = getDesktopBridge();
 const callbacks = registerCallbackRouter(createDesktopAppLike(bridge));
@@ -54,4 +57,4 @@ function DesktopRenderer() {
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');
-createRoot(root).render(<StrictMode><DesktopRenderer /></StrictMode>);
+void observerReady.then(() => { createRoot(root).render(<StrictMode><DesktopRenderer /></StrictMode>); });

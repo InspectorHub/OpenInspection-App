@@ -11,6 +11,13 @@ describe('the Capacitor entry', () => {
     expect(source).not.toMatch(/from '[^']*\/desktop\//);
     expect(source).not.toContain('oiDesktop');
   });
+
+  // OpenFailed is shared with the desktop build and reads the preload bridge off `window`; it must not import the desktop module.
+  it('the shared blocking screens import nothing from the desktop client', () => {
+    const source = readFileSync(new URL('../ui/Blocking.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('window.oiDesktop');
+    expect(source).not.toMatch(/from '[^']*\/desktop\//);
+  });
 });
 
 describe('composeReal', () => {

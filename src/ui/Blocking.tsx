@@ -1,6 +1,5 @@
 import { SCHEMA_DRIFT_MESSAGE } from '../platform/schema';
-import type { OpenReason } from '../../electron/shared/ipc-contract.ts';
-import { getDesktopBridge } from '../desktop/bridge';
+import type { DesktopBridge, OpenReason } from '../../electron/shared/ipc-contract.ts';
 import { useState } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Body, Button, Heading, Notice, Screen } from './kit';
@@ -38,7 +37,10 @@ export function SchemaDrift() {
 
 /** Android and iOS have no desktop bridge: they keep the plain message, and no control that only works on a desktop. */
 export function OpenFailed({ reason }: { reason?: OpenReason }) {
-  if (typeof window === 'undefined' || window.oiDesktop === undefined) {
+  // Read the preload's bridge directly: its version was checked when the desktop entry started, and importing the checker
+  // here would put a desktop-only module in the Android and iOS bundles.
+  const bridge = typeof window === 'undefined' ? undefined : window.oiDesktop;
+  if (bridge === undefined) {
     return (
       <Screen>
         <Heading>InspectorHub could not open</Heading>
@@ -46,10 +48,10 @@ export function OpenFailed({ reason }: { reason?: OpenReason }) {
       </Screen>
     );
   }
-  return <DesktopOpenFailed reason={reason} />;
+  return <DesktopOpenFailed reason={reason} bridge={bridge} />;
 }
 
-function DesktopOpenFailed({ reason }: { reason?: OpenReason }) {
+function DesktopOpenFailed({ reason, bridge }: { reason?: OpenReason; bridge: DesktopBridge }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -63,14 +65,14 @@ function DesktopOpenFailed({ reason }: { reason?: OpenReason }) {
         : 'InspectorHub could not open its local data. Your data has not been changed.';
   const quit = (): void => { window.close(); };
   const openDataFolder = (): void => {
-    try { void getDesktopBridge().shell.openDataFolder().catch(() => setMessage('The data folder could not be opened. You can quit and try again later.')); }
+    try { void bridge.shell.openDataFolder().catch(() => setMessage('The data folder could not be opened. You can quit and try again later.')); }
     catch { setMessage('The data folder could not be opened. You can quit and try again later.'); }
   };
   const setAside = async (): Promise<void> => {
     setBusy(true);
     setMessage(null);
     try {
-      await getDesktopBridge().db.setAsideUnreadable();
+      await bridge.db.setAsideUnreadable();
       window.location.reload();
     } catch {
       setBusy(false);
