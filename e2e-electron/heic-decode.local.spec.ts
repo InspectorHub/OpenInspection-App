@@ -64,6 +64,40 @@ async function centerRgb(jpegBase64: string): Promise<[number, number, number]> 
   }, jpegBase64);
 }
 
+async function mseFrom10BitGradient(jpegBase64: string): Promise<number> {
+  return page.evaluate(async (encoded) => {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Canvas 2D context is unavailable');
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let squaredError = 0;
+    let sampleCount = 0;
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const offset = (y * canvas.width + x) * 4;
+        const expected = [
+          Math.round(x * 255 / (canvas.width - 1)),
+          Math.round(y * 255 / (canvas.height - 1)),
+          Math.round(24000 * 255 / 65535),
+        ];
+        for (let channel = 0; channel < 3; channel++) {
+          const delta = (pixels[offset + channel] ?? 0) - (expected[channel] ?? 0);
+          squaredError += delta * delta;
+          sampleCount++;
+        }
+      }
+    }
+    return squaredError / sampleCount;
+  }, jpegBase64);
+}
+
 function jpegHasSegment(jpeg: Uint8Array, targetMarker: number): boolean {
   if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return false;
   let offset = 2;
@@ -120,6 +154,17 @@ test('keeps original HEIC dimensions and produces deterministic metadata-free JP
   expect(jpegHasSegment(jpeg, 0xe2)).toBe(false); // ICC profiles use APP2.
 });
 
+test('applies irot and removes orientation and EXIF metadata from the output JPEG', async () => {
+  const file = await readFile(resolve('src/media/heic/fixtures/fixture-rot90.heic'));
+  const reply = await decode(file, { maxLongEdge: Infinity, keepOriginal: { maxBytes: 10 * 1024 * 1024 } });
+  expect(reply.ok).toBe(true);
+  if (!reply.ok) return;
+  const jpeg = new Uint8Array(reply.jpeg);
+  expect(await dimensions(Buffer.from(jpeg).toString('base64'))).toEqual({ width: 48, height: 64 });
+  expect(jpegHasSegment(jpeg, 0xe1)).toBe(false);
+  expect(Buffer.from(jpeg).includes(Buffer.from('Exif'))).toBe(false);
+});
+
 test('converts a Display P3 HEIC color sample to its expected sRGB values', async () => {
   const file = await readFile(resolve('src/media/heic/fixtures/fixture-p3.heic'));
   const reply = await decode(file, { maxLongEdge: 64 });
@@ -135,6 +180,36 @@ test('converts a Display P3 HEIC color sample to its expected sRGB values', asyn
     expect(Math.abs(channel - expectedChannel)).toBeLessThanOrEqual(24);
   }
   expect(jpeg.includes(Buffer.from('ICC_PROFILE'))).toBe(false);
+});
+
+test('decodes a 10-bit HEIC into JPEG with bounded pixel loss', async () => {
+  const file = await readFile(resolve('src/media/heic/fixtures/fixture-10bit.heic'));
+  const reply = await decode(file, { maxLongEdge: 64 });
+  expect(reply.ok).toBe(true);
+  if (!reply.ok) return;
+  const jpeg = Buffer.from(reply.jpeg);
+  expect(jpeg.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+  expect(await dimensions(jpeg.toString('base64'))).toEqual({ width: 64, height: 48 });
+  expect(await mseFrom10BitGradient(jpeg.toString('base64'))).toBeLessThan(64);
+});
+
+test('decodes every tile of a synthetic HEIC grid image', async () => {
+  const file = await readFile(resolve('src/media/heic/fixtures/fixture-grid.heic'));
+  const reply = await decode(file, { maxLongEdge: 256 });
+  expect(reply.ok).toBe(true);
+  if (!reply.ok) return;
+  expect(await dimensions(Buffer.from(reply.jpeg).toString('base64'))).toEqual({ width: 128, height: 96 });
+});
+
+test('strips GPS metadata from a HEIC input that contains synthetic GPS EXIF', async () => {
+  const file = await readFile(resolve('src/media/heic/fixtures/fixture-gps.heic'));
+  expect(file.includes(Buffer.from('Synthetic GPS fixture'))).toBe(true);
+  const reply = await decode(file, { maxLongEdge: 64 });
+  expect(reply.ok).toBe(true);
+  if (!reply.ok) return;
+  const jpeg = new Uint8Array(reply.jpeg);
+  expect(jpegHasSegment(jpeg, 0xe1)).toBe(false);
+  expect(Buffer.from(jpeg).includes(Buffer.from('GPS'))).toBe(false);
 });
 
 test('refuses an oversized primary ispe before the codec attempts to decode it', async () => {
