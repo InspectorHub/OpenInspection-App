@@ -3,14 +3,14 @@ import { prepareDesktopRenderer, startDesktopHarness, type DesktopHarness } from
 
 let desktop: DesktopHarness;
 test.beforeAll(prepareDesktopRenderer);
-test.beforeEach(async () => { desktop = await startDesktopHarness({ uploadDelayMs: 250, quitAnswer: 'stay' }); });
+test.beforeEach(async () => { desktop = await startDesktopHarness({ uploadDelayMs: 750, quitAnswer: 'stay' }); });
 test.afterEach(async () => { await desktop?.dispose(); });
 
 test('choosing Stay keeps the window open and lets active uploads continue', async () => {
   test.setTimeout(90_000);
   await desktop.openDiagnostics();
   await desktop.page.getByRole('button', { name: 'Start kill test' }).click();
-  await expect.poll(() => desktop.engine.uploadCounts.size, { timeout: 20_000 }).toBeGreaterThan(0);
+  await expect.poll(() => desktop.engine.uploadCounts.size - desktop.engine.uploads.size, { timeout: 20_000 }).toBeGreaterThan(0);
   expect(desktop.engine.uploadCounts.size).toBeLessThan(20);
   const before = desktop.engine.uploadCounts.size;
 

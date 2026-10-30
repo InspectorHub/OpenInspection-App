@@ -185,7 +185,7 @@ test('offline import explains an unsupported file and still stores its valid nei
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
     .waitFor({ state: 'visible', timeout: 20_000 });
   await chooser.setFiles([
-    { name: 'unsupported.tiff', mimeType: 'image/tiff', buffer: Buffer.from('not a TIFF image') },
+    { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
   ]);
 
