@@ -35,8 +35,7 @@ test.beforeAll(async () => {
   const fieldUiSource = await readFile(fieldUiPath, 'utf8');
   const branchMarker = '        const doc = writeDoc;\n        const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;\n        if (!dataSource.isOnline() && doc && sid && !target) {';
   if (fieldUiSource.split(branchMarker).length !== 2) throw new Error('field-ui photo branch instrumentation target was not unique');
-  const batchMarker = '          const batch = await addOfflinePhotos(dataSource.media.store, doc, { inspectionId: String(state.inspection.id), findingKey: fk, itemId }, bakedFiles);\n          for (const message of offlinePhotoRejectionMessages(batch)) notify(message, "error", { durationMs: 8e3 });';
-  if (fieldUiSource.split(batchMarker).length !== 2) throw new Error('field-ui offline batch instrumentation target was not unique');
+  const batchMessagePattern = /for\s*\(const message of offlinePhotoRejectionMessages\(batch\)\)\s*notify\(message,\s*["']error["'],\s*\{\s*durationMs:\s*8e3\s*\}\);/g;
   const branchProbe = `        const doc = writeDoc;
         const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;
         if (typeof window !== 'undefined') {
@@ -46,15 +45,21 @@ test.beforeAll(async () => {
           if (!Array.isArray(reads)) Reflect.set(window, '__oiE2EPhotoBranchReads', branchReads);
         }
         if (!dataSource.isOnline() && doc && sid && !target) {`;
-  const offlineBatchProbe = `          const batch = await addOfflinePhotos(dataSource.media.store, doc, { inspectionId: String(state.inspection.id), findingKey: fk, itemId }, bakedFiles);
-          if (typeof window !== 'undefined') {
+  const offlineBatchProbe = `          if (typeof window !== 'undefined') {
             const batches = Reflect.get(window, '__oiE2EOfflinePhotoBatches');
             const offlineBatches = Array.isArray(batches) ? batches : [];
             offlineBatches.push(batch);
             if (!Array.isArray(batches)) Reflect.set(window, '__oiE2EOfflinePhotoBatches', offlineBatches);
           }
           for (const message of offlinePhotoRejectionMessages(batch)) notify(message, "error", { durationMs: 8e3 });`;
-  const branchWithBatchProbe = fieldUiSource.replace(branchMarker, branchProbe).replace(batchMarker, offlineBatchProbe);
+  const branchWithProbe = fieldUiSource.replace(branchMarker, branchProbe);
+  const branchIndex = branchWithProbe.indexOf(branchProbe);
+  batchMessagePattern.lastIndex = branchIndex + branchProbe.length;
+  const batchMessageMatch = batchMessagePattern.exec(branchWithProbe);
+  if (!batchMessageMatch || batchMessageMatch.index < 0) throw new Error('field-ui offline batch message instrumentation target was missing after the offline branch');
+  const branchWithBatchProbe = branchWithProbe.slice(0, batchMessageMatch.index)
+    + offlineBatchProbe
+    + branchWithProbe.slice(batchMessageMatch.index + batchMessageMatch[0].length);
   process.env.NODE_ENV = 'development';
   try {
     await writeFile(fieldUiPath, branchWithBatchProbe, 'utf8');
