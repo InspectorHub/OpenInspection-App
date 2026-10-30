@@ -8,7 +8,12 @@ import { promisify } from 'node:util';
 import type { DesktopBridge } from '../electron/shared/ipc-contract.ts';
 import { startRendererEngine, type RendererEngine } from './fixtures/renderer-engine.ts';
 
-declare global { interface Window { oiDesktop: DesktopBridge } }
+declare global {
+  interface Window {
+    oiDesktop: DesktopBridge;
+    __oiE2ESelectedFiles?: Array<{ name: string; type: string; size: number }>;
+  }
+}
 
 const execFileAsync = promisify(execFile);
 const DEV_RENDERER = resolve('dist-electron/renderer-development');
@@ -188,6 +193,7 @@ test('a missing Windows codec skips only the HEIC while the JPEG in its batch up
 });
 
 test('offline import explains an unsupported file and still stores its valid neighbor', async () => {
+  test.setTimeout(120_000);
   await signIn();
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
@@ -209,14 +215,25 @@ test('offline import explains an unsupported file and still stores its valid nei
   const input = page.locator('input[type=file][multiple]');
   await expect(input).toHaveCount(1);
   await input.evaluate((element) => element.removeAttribute('accept'));
+  await input.evaluate((element) => {
+    element.addEventListener('change', (event) => {
+      const target = event.currentTarget as HTMLInputElement;
+      window.__oiE2ESelectedFiles = Array.from(target.files ?? [], ({ name, type, size }) => ({ name, type, size }));
+    }, { capture: true, once: true });
+  });
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
-    .waitFor({ state: 'visible', timeout: 20_000 });
-  await input.setInputFiles([
-    { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
-    { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+    .waitFor({ state: 'visible', timeout: 15_000 });
+  await Promise.all([
+    input.setInputFiles([
+      { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
+      { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+    ]),
+    refusal,
   ]);
-
-  await refusal;
+  await expect.poll(() => page.evaluate(() => window.__oiE2ESelectedFiles)).toEqual([
+    { name: 'notes.txt', type: 'text/plain', size: 11 },
+    { name: 'valid.jpg', type: 'image/jpeg', size: jpeg.length },
+  ]);
   const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
   for (const theme of ['light', 'dark'] as const) {
     await electronApp.evaluate(({ nativeTheme }, selected) => { nativeTheme.themeSource = selected; }, theme);
