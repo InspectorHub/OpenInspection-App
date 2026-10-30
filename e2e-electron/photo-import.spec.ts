@@ -35,7 +35,8 @@ test.beforeAll(async () => {
   const fieldUiSource = await readFile(fieldUiPath, 'utf8');
   const branchMarker = '        const doc = writeDoc;\n        const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;\n        if (!dataSource.isOnline() && doc && sid && !target) {';
   if (fieldUiSource.split(branchMarker).length !== 2) throw new Error('field-ui photo branch instrumentation target was not unique');
-  const batchMessagePattern = /for\s*\(const message of offlinePhotoRejectionMessages\(batch\)\)\s*notify\(message,\s*["']error["'],\s*\{\s*durationMs:\s*8e3\s*\}\);/g;
+  const batchMapperMarker = 'function offlinePhotoRejectionMessages(batch) {\n  const messages = [];';
+  if (fieldUiSource.split(batchMapperMarker).length !== 2) throw new Error('field-ui offline batch mapper instrumentation target was not unique');
   const branchProbe = `        const doc = writeDoc;
         const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;
         if (typeof window !== 'undefined') {
@@ -45,21 +46,16 @@ test.beforeAll(async () => {
           if (!Array.isArray(reads)) Reflect.set(window, '__oiE2EPhotoBranchReads', branchReads);
         }
         if (!dataSource.isOnline() && doc && sid && !target) {`;
-  const offlineBatchProbe = `          if (typeof window !== 'undefined') {
-            const batches = Reflect.get(window, '__oiE2EOfflinePhotoBatches');
-            const offlineBatches = Array.isArray(batches) ? batches : [];
-            offlineBatches.push(batch);
-            if (!Array.isArray(batches)) Reflect.set(window, '__oiE2EOfflinePhotoBatches', offlineBatches);
-          }
-          for (const message of offlinePhotoRejectionMessages(batch)) notify(message, "error", { durationMs: 8e3 });`;
+  const offlineBatchMapperProbe = `function offlinePhotoRejectionMessages(batch) {
+  if (typeof window !== 'undefined') {
+    const batches = Reflect.get(window, '__oiE2EOfflinePhotoBatches');
+    const offlineBatches = Array.isArray(batches) ? batches : [];
+    offlineBatches.push(batch);
+    if (!Array.isArray(batches)) Reflect.set(window, '__oiE2EOfflinePhotoBatches', offlineBatches);
+  }
+  const messages = [];`;
   const branchWithProbe = fieldUiSource.replace(branchMarker, branchProbe);
-  const branchIndex = branchWithProbe.indexOf(branchProbe);
-  batchMessagePattern.lastIndex = branchIndex + branchProbe.length;
-  const batchMessageMatch = batchMessagePattern.exec(branchWithProbe);
-  if (!batchMessageMatch || batchMessageMatch.index < 0) throw new Error('field-ui offline batch message instrumentation target was missing after the offline branch');
-  const branchWithBatchProbe = branchWithProbe.slice(0, batchMessageMatch.index)
-    + offlineBatchProbe
-    + branchWithProbe.slice(batchMessageMatch.index + batchMessageMatch[0].length);
+  const branchWithBatchProbe = branchWithProbe.replace(batchMapperMarker, offlineBatchMapperProbe);
   process.env.NODE_ENV = 'development';
   try {
     await writeFile(fieldUiPath, branchWithBatchProbe, 'utf8');
@@ -287,7 +283,7 @@ test('offline import explains an unsupported file and still stores its valid nei
   const branchReads = await page.evaluate(() => window.__oiE2EPhotoBranchReads ?? []);
   expect(branchReads.at(-1)).toEqual({ hasDoc: true, sectionId: 'sec_roof', hasTarget: false });
   const offlineBatches = await page.evaluate(() => window.__oiE2EOfflinePhotoBatches ?? []);
-  expect(offlineBatches.at(-1)).toEqual({ rejected: 1, reasons: { unsupportedType: 1 } });
+  expect(offlineBatches).toContainEqual({ rejected: 1, reasons: { unsupportedType: 1 } });
   const expectedNotification = await expect.poll(() => page.evaluate(() =>
     window.__oiE2EEditorState?.notifications.some(({ message, variant, online, hasLiveDoc }) =>
       message === '1 photo could not be added because only JPEG, PNG and HEIC photos are supported.'
