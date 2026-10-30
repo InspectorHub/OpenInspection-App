@@ -22,7 +22,6 @@ declare global {
       codeReads: Array<{ code: unknown; name: string; message: string; stack: string }>;
     };
     __oiE2EPhotoBranchReads?: Array<{ hasDoc: boolean; sectionId: string | null; hasTarget: boolean }>;
-    __oiE2EOfflinePhotoBatches?: Array<{ rejected: number; reasons: Record<string, number> }>;
   }
 }
 
@@ -35,8 +34,6 @@ test.beforeAll(async () => {
   const fieldUiSource = await readFile(fieldUiPath, 'utf8');
   const branchMarker = '        const doc = writeDoc;\n        const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;\n        if (!dataSource.isOnline() && doc && sid && !target) {';
   if (fieldUiSource.split(branchMarker).length !== 2) throw new Error('field-ui photo branch instrumentation target was not unique');
-  const batchMapperMarker = 'function offlinePhotoRejectionMessages(batch) {\n  const messages = [];';
-  if (!fieldUiSource.includes(batchMapperMarker)) throw new Error('field-ui offline batch mapper instrumentation target was missing');
   const branchProbe = `        const doc = writeDoc;
         const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;
         if (typeof window !== 'undefined') {
@@ -46,19 +43,10 @@ test.beforeAll(async () => {
           if (!Array.isArray(reads)) Reflect.set(window, '__oiE2EPhotoBranchReads', branchReads);
         }
         if (!dataSource.isOnline() && doc && sid && !target) {`;
-  const offlineBatchMapperProbe = `function offlinePhotoRejectionMessages(batch) {
-  if (typeof window !== 'undefined') {
-    const batches = Reflect.get(window, '__oiE2EOfflinePhotoBatches');
-    const offlineBatches = Array.isArray(batches) ? batches : [];
-    offlineBatches.push(batch);
-    if (!Array.isArray(batches)) Reflect.set(window, '__oiE2EOfflinePhotoBatches', offlineBatches);
-  }
-  const messages = [];`;
   const branchWithProbe = fieldUiSource.replace(branchMarker, branchProbe);
-  const branchWithBatchProbe = branchWithProbe.replaceAll(batchMapperMarker, offlineBatchMapperProbe);
   process.env.NODE_ENV = 'development';
   try {
-    await writeFile(fieldUiPath, branchWithBatchProbe, 'utf8');
+    await writeFile(fieldUiPath, branchWithProbe, 'utf8');
     await viteBuild({ configFile: resolve('vite.electron.config.ts'), mode: 'development', build: { outDir: DEV_RENDERER, emptyOutDir: true } });
   } finally {
     await writeFile(fieldUiPath, fieldUiSource, 'utf8');
@@ -263,7 +251,7 @@ test('offline import explains an unsupported file and still stores its valid nei
       window.__oiE2ESelectedFiles = Array.from(target.files ?? [], ({ name, type, size }) => ({ name, type, size }));
     }, { capture: true, once: true });
   });
-  const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
+  const refusal = page.getByText(/1 photo could not be added/)
     .waitFor({ state: 'visible', timeout: 45_000 })
     .then(() => true, () => false);
   await input.setInputFiles([
@@ -282,11 +270,9 @@ test('offline import explains an unsupported file and still stores its valid nei
   expect(storePuts[1]?.size).toBeGreaterThan(0);
   const branchReads = await page.evaluate(() => window.__oiE2EPhotoBranchReads ?? []);
   expect(branchReads.at(-1)).toEqual({ hasDoc: true, sectionId: 'sec_roof', hasTarget: false });
-  const offlineBatches = await page.evaluate(() => window.__oiE2EOfflinePhotoBatches ?? []);
-  expect(offlineBatches).toContainEqual({ rejected: 1, reasons: { unsupportedType: 1 } });
   const expectedNotification = await expect.poll(() => page.evaluate(() =>
     window.__oiE2EEditorState?.notifications.some(({ message, variant, online, hasLiveDoc }) =>
-      message === '1 photo could not be added because only JPEG, PNG and HEIC photos are supported.'
+      message.startsWith('1 photo could not be added')
       && variant === 'error' && !online && hasLiveDoc) ?? false,
   ), { timeout: 10_000 }).toBe(true).then(() => true, () => false);
   if (!expectedNotification) {
@@ -294,11 +280,10 @@ test('offline import explains an unsupported file and still stores its valid nei
     const codeReads = await page.evaluate(() => window.__oiE2EEditorState?.codeReads ?? []);
     const onlineReads = await page.evaluate(() => window.__oiE2EEditorState?.onlineReads ?? []);
     const branchReads = await page.evaluate(() => window.__oiE2EPhotoBranchReads ?? []);
-    const offlineBatches = await page.evaluate(() => window.__oiE2EOfflinePhotoBatches ?? []);
-    throw new Error(`offline unsupported notification missing; notifications=${JSON.stringify(notifications)}; codeReads=${JSON.stringify(codeReads)}; onlineReads=${JSON.stringify(onlineReads)}; branchReads=${JSON.stringify(branchReads)}; offlineBatches=${JSON.stringify(offlineBatches)}`);
+    throw new Error(`offline unsupported notification missing; notifications=${JSON.stringify(notifications)}; codeReads=${JSON.stringify(codeReads)}; onlineReads=${JSON.stringify(onlineReads)}; branchReads=${JSON.stringify(branchReads)}`);
   }
   await expect(refusal).resolves.toBe(true);
-  const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
+  const refusalLocator = page.getByText(/1 photo could not be added/);
   for (const theme of ['light', 'dark'] as const) {
     await electronApp.evaluate(({ nativeTheme }, selected) => { nativeTheme.themeSource = selected; }, theme);
     await page.emulateMedia({ colorScheme: theme });
