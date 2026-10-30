@@ -23,8 +23,8 @@ declare global {
     __oiE2EEditorState?: {
       isOnline(): boolean;
       hasLiveDoc(): boolean;
-      storePuts: Array<{ contentType: string; size: number; outcome: 'stored' | 'rejected'; code?: string }>;
-      notifications: Array<{ message: string; variant: string }>;
+      storePuts: Array<{ contentType: string; size: number; online: boolean; outcome: 'stored' | 'rejected'; code?: string }>;
+      notifications: Array<{ message: string; variant: string; online: boolean; hasLiveDoc: boolean; stack: string }>;
     };
   }
 }
@@ -148,7 +148,13 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           clock: services.clock,
           timers,
           notify: (message, variant, options) => {
-            if (e2eEditorState) notifications.push({ message, variant });
+            if (e2eEditorState) notifications.push({
+              message,
+              variant,
+              online: e2eEditorState.isOnline(),
+              hasLiveDoc: e2eEditorState.hasLiveDoc(),
+              stack: new Error().stack ?? '',
+            });
             notify.current(message, variant, options);
           },
           openExternal: services.openExternal,
@@ -169,7 +175,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           const store = source.media.store;
           const put = store.put.bind(store);
           store.put = async (record) => {
-            const details = { contentType: record.blob.type, size: record.blob.size };
+            const details = { contentType: record.blob.type, size: record.blob.size, online: e2eEditorState.isOnline() };
             try {
               await put(record);
               storePuts.push({ ...details, outcome: 'stored' });
