@@ -179,6 +179,7 @@ test('offline import explains an unsupported file and still stores its valid nei
   await seedEditorPackage();
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
 
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const input = page.locator('input[type=file][multiple]');
