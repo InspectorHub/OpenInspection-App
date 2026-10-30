@@ -177,6 +177,14 @@ test('a missing Windows codec skips only the HEIC while the JPEG in its batch up
 test('offline import explains an unsupported file and still stores its valid neighbor', async () => {
   await signIn();
   await seedEditorPackage();
+  await page.getByRole('textbox', { name: 'Notes' }).fill('offline import readiness');
+  await expect.poll(() => page.evaluate(async () => {
+    const rows = await window.oiDesktop.db.query<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM ydoc_updates WHERE doc_name = ?',
+      ['results-insp-7'],
+    );
+    return rows[0]?.n ?? 0;
+  })).toBeGreaterThan(0);
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
