@@ -126,6 +126,24 @@ function withIrotRotation(fixture: Buffer, rotation: 1 | 2 | 3): Buffer {
   return rotated;
 }
 
+function jpegHasApp1Segment(jpeg: Buffer): boolean {
+  if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return false;
+  let offset = 2;
+  while (offset + 3 < jpeg.length) {
+    if (jpeg[offset] !== 0xff) return false;
+    while (jpeg[offset] === 0xff) offset++;
+    const marker = jpeg[offset++];
+    if (marker === 0xda || marker === 0xd9) return false;
+    if (marker === 0x01 || (marker !== undefined && marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > jpeg.length) return false;
+    const segmentLength = ((jpeg[offset] ?? 0) << 8) | (jpeg[offset + 1] ?? 0);
+    if (segmentLength < 2 || offset + segmentLength > jpeg.length) return false;
+    if (marker === 0xe1) return true;
+    offset += segmentLength;
+  }
+  return false;
+}
+
 test('editor reports a missing Windows codec and keeps supported photos from the same batch', async () => {
   test.setTimeout(120_000);
   await signIn();
@@ -399,6 +417,32 @@ test('real Electron editor stores a Display P3 HEIC as an sRGB JPEG', async () =
     await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe(theme);
     await page.screenshot({ path: `.superpowers/sdd/plan-d2-windows-electron/heic-p3-editor-${theme}.png`, animations: 'disabled' });
   }
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+});
+
+test('real Electron editor strips EXIF from a GPS-tagged HEIC import', async () => {
+  test.setTimeout(120_000);
+  await openEditorWithRealHeicHelper();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Add photo', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Add from library' }).click();
+  await (await chooserPromise).setFiles({
+    name: 'synthetic-gps.heic',
+    mimeType: 'image/heic',
+    buffer: await readFile(resolve('src/media/heic/fixtures/fixture-gps.heic')),
+  });
+
+  await expect.poll(() => page.evaluate(() => window.oiDesktop.db.query('SELECT path, content_type FROM media'))).toEqual([
+    expect.objectContaining({ content_type: 'image/jpeg' }),
+  ]);
+  const [{ path: mediaPath }] = await page.evaluate(() => window.oiDesktop.db.query('SELECT path FROM media')) as Array<{ path: string }>;
+  const jpeg = await readFile(join(userData, 'media', mediaPath.replace(/^media[\\/]/, '')));
+  expect([...jpeg.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+  expect(jpegHasApp1Segment(jpeg)).toBe(false);
+  expect(jpeg.includes(Buffer.from('Synthetic GPS fixture'))).toBe(false);
   expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 });
 
