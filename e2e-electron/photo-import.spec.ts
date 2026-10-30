@@ -176,6 +176,9 @@ test('a missing Windows codec skips only the HEIC while the JPEG in its batch up
 
 test('offline import explains an unsupported file and still stores its valid neighbor', async () => {
   await signIn();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
   await seedEditorPackage();
   await page.getByRole('textbox', { name: 'Notes' }).fill('offline import readiness');
   await expect.poll(() => page.evaluate(async () => {
@@ -185,10 +188,6 @@ test('offline import explains an unsupported file and still stores its valid nei
     );
     return rows[0]?.n ?? 0;
   })).toBeGreaterThan(0);
-  await page.context().setOffline(true);
-  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
-  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
-
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const input = page.locator('input[type=file][multiple]');
   await expect(input).toHaveCount(1);
