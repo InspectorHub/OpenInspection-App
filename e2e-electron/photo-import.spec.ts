@@ -199,23 +199,25 @@ test('imports valid photos and reports an unsupported neighbor in the same libra
   await expect(page.getByText('3 photos', { exact: true })).toBeVisible();
 });
 
-test('a missing Windows codec skips only the HEIC while the JPEG in its batch uploads', async () => {
+test('a missing Windows codec skips only the HEIC while JPEG and PNG in its batch upload', async () => {
   await signIn();
   await seedEditorPackage();
-  const [heic, jpeg] = await Promise.all([
+  const [heic, jpeg, png] = await Promise.all([
     readFile(resolve('src/media/heic/fixtures/fixture-64x48.heic')),
     readFile(resolve('e2e-electron/fixtures/photo-import.jpg')),
+    readFile(resolve('android/app/src/main/res/drawable/splash.png')),
   ]);
   const chooser = await openLibrary();
   await chooser.setFiles([
     { name: 'codec-missing.heic', mimeType: 'image/heic', buffer: heic },
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+    { name: 'valid.png', mimeType: 'image/png', buffer: png },
   ]);
 
   await expect(page.getByText(/Windows cannot decode this HEIC photo.*Install HEIF Image Extensions.*HEVC Video Extensions.*export the photo from your phone as JPEG/s)).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
-  expect(engine.uploads.size).toBe(1);
-  expect(engine.uploadCounts.size).toBe(1);
+  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(2);
+  await expect.poll(() => engine.uploads.size).toBe(2);
+  expect(engine.uploadCounts.size).toBe(2);
 });
 
 test('offline import explains an unsupported file and still stores its valid neighbor', async () => {
@@ -366,6 +368,9 @@ test('the batch survives a force-kill and each persisted photo uploads once afte
 
   electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
   page = await electronApp.firstWindow();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine), { timeout: 15_000 }).toBe(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
   await electronApp.evaluate(({ shell }) => { shell.openExternal = async (url) => { Reflect.set(globalThis, 'rendererExternalUrl', url); }; });
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible({ timeout: 20_000 });
   await expect.poll(
@@ -382,6 +387,9 @@ test('the batch survives a force-kill and each persisted photo uploads once afte
     expect(file.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
   }
 
+  await page.context().setOffline(false);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await expect.poll(() => engine.uploads.size, { timeout: 30_000 }).toBe(3);
   expect(engine.uploadCounts.size).toBe(3);
   expect([...engine.uploadCounts.values()]).toEqual([1, 1, 1]);
@@ -407,11 +415,14 @@ test('original-quality rejects an oversized JPEG but keeps JPEG and PNG original
   const png = await readFile(resolve('android/app/src/main/res/drawable/splash.png'));
   const oversizedJpeg = Buffer.concat([jpeg, Buffer.alloc(12 * 1024 * 1024 - jpeg.length)]);
   const input = page.locator('input[type=file][multiple]');
+  const partialFailure = page.getByText('2 of 3 photos uploaded — 1 failed.', { exact: true })
+    .waitFor({ state: 'visible', timeout: 45_000 });
   await input.setInputFiles([
     { name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg },
     { name: 'original.jpg', mimeType: 'image/jpeg', buffer: jpeg },
     { name: 'original.png', mimeType: 'image/png', buffer: png },
   ]);
+  await partialFailure;
   await expect.poll(() => engine.uploads.size, { timeout: 45_000 }).toBe(2);
   const originalUploads = [...engine.uploads.values()];
   expect(originalUploads.some((body) => body.equals(jpeg))).toBe(true);

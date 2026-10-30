@@ -126,7 +126,7 @@ function withIrotRotation(fixture: Buffer, rotation: 1 | 2 | 3): Buffer {
   return rotated;
 }
 
-test('editor reports a missing Windows codec and keeps a JPEG selected in the same batch', async () => {
+test('editor reports a missing Windows codec and keeps supported photos from the same batch', async () => {
   test.setTimeout(120_000);
   await signIn();
   await seedEditorPackage();
@@ -139,17 +139,20 @@ test('editor reports a missing Windows codec and keeps a JPEG selected in the sa
   const picker = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Add from library' }).click();
   const chooser = await picker;
-  const [heic, jpeg] = await Promise.all([
+  const [heic, jpeg, png] = await Promise.all([
     readFile(resolve('src/media/heic/fixtures/fixture-64x48.heic')),
     readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg')),
+    readFile(resolve('android/app/src/main/res/drawable/splash.png')),
   ]);
   await chooser.setFiles([
     { name: 'synthetic-heic.heic', mimeType: 'image/heic', buffer: heic },
     { name: 'synthetic-control.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+    { name: 'synthetic-control.png', mimeType: 'image/png', buffer: png },
   ]);
 
   await expect(page.getByText(/Windows cannot decode this HEIC photo/)).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
+  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(2);
+  await expect.poll(() => engine.uploads.size).toBe(2);
   await page.setViewportSize({ width: 1280, height: 800 });
   for (const theme of ['light', 'dark'] as const) {
     await electronApp.evaluate(({ nativeTheme }, selected) => { nativeTheme.themeSource = selected; }, theme);
@@ -168,20 +171,37 @@ test('offline import reports an unsupported neighbor and still stores the valid 
   await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
   await page.getByRole('button', { name: 'Open Roof cover' }).click();
 
+  await page.getByRole('button', { name: 'Report settings' }).click();
+  const originalQuality = page.getByTestId('original-quality-uploads');
+  await expect(originalQuality).toBeVisible();
+  await originalQuality.check();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBe('1');
   const requestsBeforeOffline = engine.requests.length;
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+  const [jpeg, png] = await Promise.all([
+    readFile(resolve('e2e-electron/fixtures/photo-import.jpg')),
+    readFile(resolve('android/app/src/main/res/drawable/splash.png')),
+  ]);
   const chooserPromise = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Add photo', exact: true }).first().click();
   await page.getByRole('button', { name: 'Add from library' }).click();
   const chooser = await chooserPromise;
   await chooser.setFiles([
     { name: 'unsupported.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
-    { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg')) },
+    { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+    { name: 'valid.png', mimeType: 'image/png', buffer: png },
   ]);
 
   await expect(page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => page.evaluate(() => window.oiDesktop.db.query('SELECT content_type FROM media'))).toEqual([{ content_type: 'image/jpeg' }]);
+  const rows = await page.evaluate(() => window.oiDesktop.db.query('SELECT path, content_type FROM media ORDER BY content_type')) as Array<{ path: string; content_type: string }>;
+  expect(rows.map((row) => row.content_type)).toEqual(['image/jpeg', 'image/png']);
+  for (const row of rows) {
+    const fileName = row.path.replace(/^media[\\/]/, '');
+    const storedBytes = await readFile(join(userData, 'media', fileName));
+    expect(storedBytes).toEqual(row.content_type === 'image/jpeg' ? jpeg : png);
+  }
   expect(engine.requests.slice(requestsBeforeOffline).filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 });
 
