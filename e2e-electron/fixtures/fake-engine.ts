@@ -21,12 +21,14 @@ export async function startFakeEngine(): Promise<FakeEngine> {
       const chunks: Buffer[] = [];
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
-        let body: { pendingId?: unknown };
-        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { pendingId?: unknown }; }
+        let body: { pendingId?: unknown; contentType?: unknown };
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { pendingId?: unknown; contentType?: unknown }; }
         catch { response.writeHead(400).end(); return; }
         if (typeof body.pendingId !== 'string' || body.pendingId.length < 1 || body.pendingId.length > 128) { response.writeHead(400).end(); return; }
+        const extension = body.contentType === 'image/jpeg' ? 'jpg' : body.contentType === 'image/png' ? 'png' : body.contentType === 'image/heic' ? 'heic' : null;
+        if (extension === null) { response.writeHead(400).end(); return; }
         const token = `fake-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-        const key = `fake/inspections/${decodeURIComponent(uploadUrlMatch[1]!)}/photos/${body.pendingId}.jpg`;
+        const key = `fake/inspections/${decodeURIComponent(uploadUrlMatch[1]!)}/photos/${body.pendingId}.${extension}`;
         tokens.set(token, key);
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ success: true, data: { url: `${origin}/api/public/uploads/photo?token=${token}`, key } }));
       });

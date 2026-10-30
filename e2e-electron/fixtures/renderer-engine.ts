@@ -20,6 +20,22 @@ async function readBody(request: import('node:http').IncomingMessage): Promise<B
   return Buffer.concat(chunks);
 }
 
+function multipartFile(body: Buffer, contentType: string | undefined): Buffer | null {
+  const boundary = /(?:^|;)\s*boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType ?? '');
+  const value = boundary?.[1] ?? boundary?.[2]?.trim();
+  if (!value) return null;
+  const opening = Buffer.from(`--${value}\r\n`);
+  if (!body.subarray(0, opening.length).equals(opening)) return null;
+  const headersEnd = body.indexOf(Buffer.from('\r\n\r\n'), opening.length);
+  if (headersEnd < 0) return null;
+  const headers = body.subarray(opening.length, headersEnd).toString('latin1');
+  if (!/content-disposition:\s*form-data;\s*name="file";/i.test(headers)) return null;
+  const fileStart = headersEnd + 4;
+  const fileEnd = body.indexOf(Buffer.from(`\r\n--${value}--\r\n`), fileStart);
+  if (fileEnd < fileStart) return null;
+  return body.subarray(fileStart, fileEnd);
+}
+
 /** Loopback engine for renderer visual QA and the real Diagnostics check path. */
 export async function startRendererEngine(options: { uploadDelayMs?: number; showInspection?: boolean } = {}): Promise<RendererEngine> {
   let url = '';
@@ -72,8 +88,10 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
     if (request.method === 'GET' && route === '/api/inspections/insp-7/media') { json({ success: true, data: [] }); return; }
     if (request.method === 'POST' && route === '/api/inspections/insp-7/media/upload-url') {
       void readBody(request).then((raw) => {
-        const body = JSON.parse(raw.toString('utf8')) as { pendingId: string };
-        const key = `renderer-tenant/inspections/insp-7/photos/${body.pendingId}.jpg`;
+        const body = JSON.parse(raw.toString('utf8')) as { pendingId: string; contentType: string };
+        const extension = body.contentType === 'image/jpeg' ? 'jpg' : body.contentType === 'image/png' ? 'png' : body.contentType === 'image/heic' ? 'heic' : null;
+        if (extension === null) { json({ success: false }, 400); return; }
+        const key = `renderer-tenant/inspections/insp-7/photos/${body.pendingId}.${extension}`;
         const token = `renderer123.${Math.random().toString(36).slice(2)}`;
         uploadTokens.set(token, key);
         json({ success: true, data: { url: `${url}/api/public/uploads/photo?token=${token}`, key } });
@@ -92,7 +110,13 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
       response.once('finish', releaseUploadSlot);
       uploadContentLengths.push(length === undefined ? null : Number(length));
       void readBody(request).then((body) => {
-        const finish = () => { uploads.set(key, body); response.writeHead(length === undefined ? 411 : 201).end(); };
+        const file = multipartFile(body, request.headers['content-type']);
+        const finish = () => {
+          if (length === undefined) { response.writeHead(411).end(); return; }
+          if (file === null || file.length === 0) { response.writeHead(400).end(); return; }
+          uploads.set(key, file);
+          response.writeHead(201).end();
+        };
         if ((options.uploadDelayMs ?? 0) > 0) setTimeout(finish, options.uploadDelayMs);
         else finish();
       });

@@ -19,6 +19,17 @@ describe('Electron fake engine upload endpoints', () => {
     expect(engine.uploads.get(minted.data.key)).toEqual(Buffer.from('second'));
   });
 
+  it('uses the photo extension that matches the requested content type', async () => {
+    engine = await startFakeEngine();
+    const answer = await fetch(`${engine.url}/api/inspections/i-png/media/upload-url`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pendingId: 'p-png', contentType: 'image/png' }),
+    });
+    const minted = await answer.json() as { data: { key: string } };
+    expect(minted.data.key).toBe('fake/inspections/i-png/photos/p-png.png');
+  });
+
   it('answers 411 when the upload has no Content-Length', async () => {
     engine = await startFakeEngine();
     const answer = await fetch(`${engine.url}/api/inspections/i-2/media/upload-url`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pendingId: 'p-2', contentType: 'image/jpeg' }) });

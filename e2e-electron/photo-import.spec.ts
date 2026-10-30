@@ -391,7 +391,7 @@ test('the batch survives a force-kill and each persisted photo uploads once afte
   expect([...engine.uploadCounts.values()]).toEqual([1, 1, 1]);
 });
 
-test('original-quality keeps a large JPEG unchanged and rejects it, while normal quality recompresses it', async () => {
+test('original-quality rejects an oversized JPEG but keeps JPEG and PNG originals; normal quality recompresses it', async () => {
   test.setTimeout(120_000);
   await signIn();
   await seedEditorPackage();
@@ -404,12 +404,21 @@ test('original-quality keeps a large JPEG unchanged and rejects it, while normal
   await page.getByRole('button', { name: 'Close' }).click();
 
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
+  const png = await readFile(resolve('android/app/src/main/res/drawable/splash.png'));
   const oversizedJpeg = Buffer.concat([jpeg, Buffer.alloc(12 * 1024 * 1024 - jpeg.length)]);
   const input = page.locator('input[type=file][multiple]');
-  await input.setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg });
-  await expect(page.getByText(/0 of 1 photos uploaded.*1 failed/)).toBeVisible({ timeout: 20_000 });
-  expect(await mediaRows()).toEqual([]);
-  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+  await input.setInputFiles([
+    { name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg },
+    { name: 'original.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+    { name: 'original.png', mimeType: 'image/png', buffer: png },
+  ]);
+  await expect.poll(() => engine.uploads.size, { timeout: 45_000 }).toBe(2);
+  const originalUploads = [...engine.uploads.values()];
+  expect(originalUploads.some((body) => body.equals(jpeg))).toBe(true);
+  expect(originalUploads.some((body) => body.equals(png))).toBe(true);
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(2);
+  expect(engine.uploadContentLengths).toHaveLength(2);
+  expect(engine.uploadContentLengths.every((length) => length !== null && length > 0)).toBe(true);
 
   await openReportSettings();
   await expect(originalQuality).toBeVisible();
@@ -417,9 +426,9 @@ test('original-quality keeps a large JPEG unchanged and rejects it, while normal
   await page.getByRole('button', { name: 'Close' }).click();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBeNull();
   await input.setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg });
-  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
-  await expect.poll(() => engine.uploads.size).toBe(1);
-  expect(engine.uploadContentLengths).toHaveLength(1);
-  expect(engine.uploadContentLengths[0]).toBeLessThan(1024 * 1024);
-  expect(engine.uploads.size).toBe(1);
+  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(3);
+  await expect.poll(() => engine.uploads.size).toBe(3);
+  expect(engine.uploadContentLengths).toHaveLength(3);
+  expect(engine.uploadContentLengths[2]).toBeLessThan(1024 * 1024);
+  expect(engine.uploads.size).toBe(3);
 });
