@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { finished } from 'node:stream/promises';
 import { join } from 'node:path';
 import * as asar from '@electron/asar';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -32,7 +33,7 @@ async function fixture(over: { archiveFiles?: Record<string, string>; nativeFile
     await writeFile(target, contents);
   }
   await mkdir(resources, { recursive: true });
-  await asar.createPackage(staging, join(resources, 'app.asar'));
+  await finished(await asar.createPackage(staging, join(resources, 'app.asar')));
   await writeFile(join(app, 'InspectorHub.exe'), 'electron');
   const helperPath = join(resources, 'heic-helper', 'win-heic-helper.exe');
   if (over.helper !== false) {
