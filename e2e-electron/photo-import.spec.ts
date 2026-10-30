@@ -221,6 +221,9 @@ test('offline import explains an unsupported file and still stores its valid nei
     hasLiveDoc: window.__oiE2EEditorState?.hasLiveDoc() ?? false,
   }))).toEqual({ online: false, hasLiveDoc: true });
   expect(await page.evaluate(() => window.__oiE2EEditorState?.readOnly)).toBe(false);
+  // The registry handle is set inside useResultsDoc's effect immediately before its React state update commits.
+  // Let that update render before capturing the file-input handler, which closes over the field-ui write document.
+  await page.evaluate(() => new Promise<void>((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const input = page.locator('input[type=file][multiple]');
   await expect(input).toHaveCount(1);
