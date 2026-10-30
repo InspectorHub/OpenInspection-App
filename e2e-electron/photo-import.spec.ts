@@ -16,6 +16,7 @@ declare global {
       isOnline(): boolean;
       hasLiveDoc(): boolean;
       storePuts: Array<{ contentType: string; size: number; outcome: 'stored' | 'rejected'; code?: string }>;
+      notifications: Array<{ message: string; variant: string }>;
     };
   }
 }
@@ -243,6 +244,8 @@ test('offline import explains an unsupported file and still stores its valid nei
   expect(storePuts[0]).toEqual({ contentType: 'text/plain', size: 11, outcome: 'rejected', code: 'UNSUPPORTED_TYPE' });
   expect(storePuts[1]).toMatchObject({ contentType: 'image/jpeg', outcome: 'stored' });
   expect(storePuts[1]?.size).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__oiE2EEditorState?.notifications), { timeout: 10_000 })
+    .toContainEqual({ message: '1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', variant: 'error' });
   await expect(refusal).resolves.toBe(true);
   const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
   for (const theme of ['light', 'dark'] as const) {

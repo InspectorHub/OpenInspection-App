@@ -24,6 +24,7 @@ declare global {
       isOnline(): boolean;
       hasLiveDoc(): boolean;
       storePuts: Array<{ contentType: string; size: number; outcome: 'stored' | 'rejected'; code?: string }>;
+      notifications: Array<{ message: string; variant: string }>;
     };
   }
 }
@@ -112,8 +113,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     const release = registry.register(inspectionId);
     const flag = openNetworkFlag(network ?? browserNetwork, { timers });
     const storePuts: NonNullable<Window['__oiE2EEditorState']>['storePuts'] = [];
+    const notifications: NonNullable<Window['__oiE2EEditorState']>['notifications'] = [];
     const e2eEditorState = import.meta.env.DEV
-      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, storePuts }
+      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, storePuts, notifications }
       : undefined;
     if (e2eEditorState) window.__oiE2EEditorState = e2eEditorState;
     const stopEvents = stack.onEditorEvent((event) => {
@@ -145,7 +147,10 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           signedAtMs: () => services.clock.now(),
           clock: services.clock,
           timers,
-          notify: (message, variant, options) => notify.current(message, variant, options),
+          notify: (message, variant, options) => {
+            if (e2eEditorState) notifications.push({ message, variant });
+            notify.current(message, variant, options);
+          },
           openExternal: services.openExternal,
           onExit: () => leave.current(),
           onReload: () => {
