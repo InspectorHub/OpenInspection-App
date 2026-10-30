@@ -181,11 +181,12 @@ test('offline import explains an unsupported file and still stores its valid nei
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
 
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
-  await page.locator('input[type=file][multiple]').evaluate((element) => element.removeAttribute('accept'));
-  const chooser = await openLibrary();
+  const input = page.locator('input[type=file][multiple]');
+  await expect(input).toHaveCount(1);
+  await input.evaluate((element) => element.removeAttribute('accept'));
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
     .waitFor({ state: 'visible', timeout: 20_000 });
-  await chooser.setFiles([
+  await input.setInputFiles([
     { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
   ]);

@@ -21,6 +21,10 @@ test('a hard-stopped signed-in desktop reopens its existing encrypted profile', 
 test('a killed SQLite transaction rolls back on restart, and the real db-tx and yjs-persist checks pass', async () => {
   test.setTimeout(90_000);
   const doc = 'e2e-mid-transaction';
+  await expect.poll(
+    () => desktop.page.evaluate(() => window.oiDesktop.db.query('SELECT 1 AS ready')),
+    { timeout: 15_000 },
+  ).toEqual([{ ready: 1 }]);
   await desktop.page.evaluate(async (docName) => {
     await window.oiDesktop.db.run('DELETE FROM ydoc_updates WHERE doc_name = ?', [docName]);
     await window.oiDesktop.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [docName, new Uint8Array([1])]);
