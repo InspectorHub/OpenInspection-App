@@ -23,6 +23,8 @@ declare global {
     __oiE2EEditorState?: {
       isOnline(): boolean;
       hasLiveDoc(): boolean;
+      readOnly: boolean;
+      onlineReads: Array<{ online: boolean; stack: string }>;
       storePuts: Array<{ contentType: string; size: number; online: boolean; outcome: 'stored' | 'rejected'; code?: string }>;
       notifications: Array<{ message: string; variant: string; online: boolean; hasLiveDoc: boolean; stack: string }>;
       codeReads: Array<{ code: unknown; name: string; message: string; stack: string }>;
@@ -116,8 +118,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     const storePuts: NonNullable<Window['__oiE2EEditorState']>['storePuts'] = [];
     const notifications: NonNullable<Window['__oiE2EEditorState']>['notifications'] = [];
     const codeReads: NonNullable<Window['__oiE2EEditorState']>['codeReads'] = [];
+    const onlineReads: NonNullable<Window['__oiE2EEditorState']>['onlineReads'] = [];
     const e2eEditorState = import.meta.env.DEV
-      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, storePuts, notifications, codeReads }
+      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, readOnly: !canEdit, onlineReads, storePuts, notifications, codeReads }
       : undefined;
     if (e2eEditorState) window.__oiE2EEditorState = e2eEditorState;
     const stopEvents = stack.onEditorEvent((event) => {
@@ -174,6 +177,13 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           onRestart: () => restart.current(),
         });
         if (e2eEditorState) {
+          const isOnline = source.isOnline.bind(source);
+          source.isOnline = () => {
+            const online = isOnline();
+            if (onlineReads.length === 40) onlineReads.shift();
+            onlineReads.push({ online, stack: new Error().stack ?? '' });
+            return online;
+          };
           const store = source.media.store;
           const put = store.put.bind(store);
           store.put = async (record) => {

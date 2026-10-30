@@ -15,6 +15,8 @@ declare global {
     __oiE2EEditorState?: {
       isOnline(): boolean;
       hasLiveDoc(): boolean;
+      readOnly: boolean;
+      onlineReads: Array<{ online: boolean; stack: string }>;
       storePuts: Array<{ contentType: string; size: number; online: boolean; outcome: 'stored' | 'rejected'; code?: string }>;
       notifications: Array<{ message: string; variant: string; online: boolean; hasLiveDoc: boolean; stack: string }>;
       codeReads: Array<{ code: unknown; name: string; message: string; stack: string }>;
@@ -218,6 +220,7 @@ test('offline import explains an unsupported file and still stores its valid nei
     online: window.__oiE2EEditorState?.isOnline() ?? null,
     hasLiveDoc: window.__oiE2EEditorState?.hasLiveDoc() ?? false,
   }))).toEqual({ online: false, hasLiveDoc: true });
+  expect(await page.evaluate(() => window.__oiE2EEditorState?.readOnly)).toBe(false);
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const input = page.locator('input[type=file][multiple]');
   await expect(input).toHaveCount(1);
@@ -253,7 +256,8 @@ test('offline import explains an unsupported file and still stores its valid nei
   if (!expectedNotification) {
     const notifications = await page.evaluate(() => window.__oiE2EEditorState?.notifications ?? []);
     const codeReads = await page.evaluate(() => window.__oiE2EEditorState?.codeReads ?? []);
-    throw new Error(`offline unsupported notification missing; notifications=${JSON.stringify(notifications)}; codeReads=${JSON.stringify(codeReads)}`);
+    const onlineReads = await page.evaluate(() => window.__oiE2EEditorState?.onlineReads ?? []);
+    throw new Error(`offline unsupported notification missing; notifications=${JSON.stringify(notifications)}; codeReads=${JSON.stringify(codeReads)}; onlineReads=${JSON.stringify(onlineReads)}`);
   }
   await expect(refusal).resolves.toBe(true);
   const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
