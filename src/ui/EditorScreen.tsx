@@ -184,6 +184,18 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
             } catch (error) {
               let code: string | undefined;
               try {
+                const descriptor = Object.getOwnPropertyDescriptor(error as object, 'code');
+                if (descriptor?.configurable && 'value' in descriptor) {
+                  const originalCode = descriptor.value;
+                  Object.defineProperty(error, 'code', {
+                    configurable: true,
+                    enumerable: descriptor.enumerable,
+                    get: () => {
+                      codeReads.push({ code: originalCode, name: error instanceof Error ? error.name : typeof error, message: error instanceof Error ? error.message : '', stack: new Error().stack ?? '' });
+                      return originalCode;
+                    },
+                  });
+                }
                 const candidate = Reflect.get(error as object, 'code');
                 if (typeof candidate === 'string') code = candidate;
               } catch {

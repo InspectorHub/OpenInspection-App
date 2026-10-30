@@ -231,26 +231,6 @@ test('offline import explains an unsupported file and still stores its valid nei
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
     .waitFor({ state: 'visible', timeout: 45_000 })
     .then(() => true, () => false);
-  await page.evaluate(() => {
-    const state = window.__oiE2EEditorState;
-    if (!state) throw new Error('e2e-editor-state-missing');
-    const originalGet = Reflect.get;
-    Reflect.set(Reflect, 'get', function (target: object, propertyKey: PropertyKey, receiver?: unknown) {
-      let value: unknown;
-      try {
-        value = originalGet(target, propertyKey, receiver);
-      } catch (error) {
-        if (propertyKey === 'code' && target instanceof Error) {
-          state.codeReads.push({ code: '<throws>', name: target.name, message: target.message, stack: new Error().stack ?? '' });
-        }
-        throw error;
-      }
-      if (propertyKey === 'code' && target instanceof Error) {
-        state.codeReads.push({ code: value, name: target.name, message: target.message, stack: new Error().stack ?? '' });
-      }
-      return value;
-    });
-  });
   await input.setInputFiles([
     { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
