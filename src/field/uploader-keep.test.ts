@@ -66,7 +66,7 @@ describe('a failed online upload of an item photo keeps the original', () => {
     ['LOCKED', MESSAGES.deviceLocked],
     ['AUTH', MESSAGES.sessionExpired],
     ['UPGRADE', MESSAGES.upgradeRequired],
-    ['TOO_LARGE', MESSAGES.photoTooLarge],
+    ['TOO_LARGE', 'TOO_LARGE'],
     ['TIMEOUT', MESSAGES.unreachable],
     ['NETWORK', MESSAGES.unreachable],
     ['REJECTED', MESSAGES.photoUploadFailed],
@@ -335,7 +335,7 @@ describe('the device store cannot keep the photo', () => {
   });
 
   it.each<[string, MediaError, string]>([
-    ['TOO_LARGE', new MediaError('TOO_LARGE'), MESSAGES.photoTooLarge],
+    ['TOO_LARGE', new MediaError('TOO_LARGE'), 'TOO_LARGE'],
     ['UNSUPPORTED_TYPE', new MediaError('UNSUPPORTED_TYPE'), MESSAGES.photoTypeUnsupported],
     ['EMPTY', new MediaError('EMPTY'), MESSAGES.photoNotPrepared],
     ['BLOCKED', new MediaError('BLOCKED'), MESSAGES.blocked],

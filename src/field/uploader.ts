@@ -45,7 +45,8 @@ import type { ForegroundUploads } from './uploader-foreground';
  *
  * A crop or an annotation is a foreground Bearer request and keeps nothing when it fails.
  *
- * It never throws: every failure is `{ ok: false, error }` (plus `kept` when the bytes were kept) with one of the fixed sentences.
+ * It never throws: every failure is `{ ok: false, error }` (plus `kept` when the bytes were kept). `TOO_LARGE` is a stable
+ * reason code for the editor's localized photo-size guidance; all other returned errors remain fixed safe sentences.
  */
 
 export interface UploaderDeps {
@@ -85,7 +86,7 @@ function uploadFailureMessage(code: UploadFailureCode): string {
     case 'BLOCKED':
       return MESSAGES.blocked;
     case 'TOO_LARGE':
-      return MESSAGES.photoTooLarge;
+      return 'TOO_LARGE';
     case 'NETWORK':
     case 'TIMEOUT':
       return MESSAGES.unreachable;
@@ -98,7 +99,7 @@ function storeFailureMessage(error: unknown): string {
   if (!isMediaError(error)) return MESSAGES.photoNotPrepared;
   switch (error.code) {
     case 'TOO_LARGE':
-      return MESSAGES.photoTooLarge;
+      return 'TOO_LARGE';
     case 'UNSUPPORTED_TYPE':
       return MESSAGES.photoTypeUnsupported;
     case 'BLOCKED':

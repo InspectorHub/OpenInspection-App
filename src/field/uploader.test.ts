@@ -89,10 +89,10 @@ describe('item photo (the online path)', () => {
     expect((await w.world.store.listRows()).map((row) => row.pendingId)).toEqual(['p1']);
   });
 
-  it('refuses what the engine would refuse, with a sentence, and stores nothing', async () => {
+  it('refuses what the engine would refuse with a stable size reason and stores nothing', async () => {
     const w = await createUploaderWorld();
     const big = await w.factory(INSPECTION, null).upload(itemPhoto('p1', { blob: jpegBlob(1, MAX_MEDIA_BYTES + 1) }));
-    expect(big).toEqual({ ok: false, error: MESSAGES.photoTooLarge });
+    expect(big).toEqual({ ok: false, error: 'TOO_LARGE' });
     const gif = await w.factory(INSPECTION, null).upload(itemPhoto('p2', { blob: jpegBlob(1, 64, 'image/gif') }));
     expect(gif).toEqual({ ok: false, error: MESSAGES.photoTypeUnsupported });
     const empty = await w.factory(INSPECTION, null).upload(itemPhoto('p3', { blob: new Blob([], { type: 'image/jpeg' }) }));
@@ -246,7 +246,7 @@ describe('what the person is told for each way the background upload can end', (
     ['AUTH', MESSAGES.sessionExpired],
     ['LOCKED', MESSAGES.deviceLocked],
     ['UPGRADE', MESSAGES.upgradeRequired],
-    ['TOO_LARGE', MESSAGES.photoTooLarge],
+    ['TOO_LARGE', 'TOO_LARGE'],
     ['TIMEOUT', MESSAGES.unreachable],
     ['NETWORK', MESSAGES.unreachable],
     ['REJECTED', MESSAGES.photoUploadFailed],

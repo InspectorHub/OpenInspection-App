@@ -78,7 +78,7 @@ describe('a failed online upload of a defect photo keeps the original and append
     ['LOCKED', MESSAGES.deviceLocked],
     ['AUTH', MESSAGES.sessionExpired],
     ['UPGRADE', MESSAGES.upgradeRequired],
-    ['TOO_LARGE', MESSAGES.photoTooLarge],
+    ['TOO_LARGE', 'TOO_LARGE'],
     ['TIMEOUT', MESSAGES.unreachable],
     ['NETWORK', MESSAGES.unreachable],
     ['REJECTED', MESSAGES.photoUploadFailed],
@@ -172,7 +172,7 @@ describe('when the device store cannot take a defect photo', () => {
   it('a policy refusal is never sent directly (control: the disk failure above is)', async () => {
     const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { key: 'direct-key' } })) });
     const result = await createUploaderFactory({ ...w.deps, store: withFailingPut(w, new MediaError('TOO_LARGE')) })(INSPECTION, null).upload(defect('d-1'));
-    expect(result).toStrictEqual({ ok: false, error: MESSAGES.photoTooLarge });
+    expect(result).toStrictEqual({ ok: false, error: 'TOO_LARGE' });
     expect(w.api.calls).toEqual([]);
   });
 });
