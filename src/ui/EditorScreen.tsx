@@ -20,7 +20,11 @@ import { useBackHandler } from './use-back-handler';
 
 declare global {
   interface Window {
-    __oiE2EEditorState?: { isOnline(): boolean; hasLiveDoc(): boolean };
+    __oiE2EEditorState?: {
+      isOnline(): boolean;
+      hasLiveDoc(): boolean;
+      storePuts: Array<{ contentType: string; size: number; outcome: 'stored' | 'rejected'; code?: string }>;
+    };
   }
 }
 
@@ -107,8 +111,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     let live = true;
     const release = registry.register(inspectionId);
     const flag = openNetworkFlag(network ?? browserNetwork, { timers });
+    const storePuts: NonNullable<Window['__oiE2EEditorState']>['storePuts'] = [];
     const e2eEditorState = import.meta.env.DEV
-      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null }
+      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, storePuts }
       : undefined;
     if (e2eEditorState) window.__oiE2EEditorState = e2eEditorState;
     const stopEvents = stack.onEditorEvent((event) => {
@@ -155,6 +160,27 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           },
           onRestart: () => restart.current(),
         });
+        if (e2eEditorState) {
+          const store = source.media.store;
+          const put = store.put.bind(store);
+          store.put = async (record) => {
+            const details = { contentType: record.blob.type, size: record.blob.size };
+            try {
+              await put(record);
+              storePuts.push({ ...details, outcome: 'stored' });
+            } catch (error) {
+              let code: string | undefined;
+              try {
+                const candidate = Reflect.get(error as object, 'code');
+                if (typeof candidate === 'string') code = candidate;
+              } catch {
+                // Diagnostic data is best effort; preserve the original error.
+              }
+              storePuts.push({ ...details, outcome: 'rejected', ...(code === undefined ? {} : { code }) });
+              throw error;
+            }
+          };
+        }
         const data = await source.load(inspectionId);
         if (live) setPhase({ kind: 'ready', source, data });
       } catch (error) {

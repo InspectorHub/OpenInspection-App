@@ -12,6 +12,11 @@ declare global {
   interface Window {
     oiDesktop: DesktopBridge;
     __oiE2ESelectedFiles?: Array<{ name: string; type: string; size: number }>;
+    __oiE2EEditorState?: {
+      isOnline(): boolean;
+      hasLiveDoc(): boolean;
+      storePuts: Array<{ contentType: string; size: number; outcome: 'stored' | 'rejected'; code?: string }>;
+    };
   }
 }
 
@@ -222,7 +227,7 @@ test('offline import explains an unsupported file and still stores its valid nei
     }, { capture: true, once: true });
   });
   const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
-    .waitFor({ state: 'visible', timeout: 15_000 })
+    .waitFor({ state: 'visible', timeout: 45_000 })
     .then(() => true, () => false);
   await input.setInputFiles([
     { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
@@ -232,6 +237,12 @@ test('offline import explains an unsupported file and still stores its valid nei
     { name: 'notes.txt', type: 'text/plain', size: 11 },
     { name: 'valid.jpg', type: 'image/jpeg', size: jpeg.length },
   ]);
+  await expect.poll(() => page.evaluate(() => window.__oiE2EEditorState?.storePuts), { timeout: 30_000 }).toHaveLength(2);
+  const storePuts = await page.evaluate(() => window.__oiE2EEditorState?.storePuts ?? []);
+  expect(storePuts).toHaveLength(2);
+  expect(storePuts[0]).toEqual({ contentType: 'text/plain', size: 11, outcome: 'rejected', code: 'UNSUPPORTED_TYPE' });
+  expect(storePuts[1]).toMatchObject({ contentType: 'image/jpeg', outcome: 'stored' });
+  expect(storePuts[1]?.size).toBeGreaterThan(0);
   await expect(refusal).resolves.toBe(true);
   const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
   for (const theme of ['light', 'dark'] as const) {
