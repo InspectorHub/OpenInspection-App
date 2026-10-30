@@ -446,6 +446,59 @@ test('real Electron editor strips EXIF from a GPS-tagged HEIC import', async () 
   expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 });
 
+test('real Electron editor imports every tile of a grid HEIC', async () => {
+  test.setTimeout(120_000);
+  await openEditorWithRealHeicHelper();
+  await page.context().setOffline(true);
+  await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Add photo', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Add from library' }).click();
+  await (await chooserPromise).setFiles({
+    name: 'synthetic-grid.heic',
+    mimeType: 'image/heic',
+    buffer: await readFile(resolve('src/media/heic/fixtures/fixture-grid.heic')),
+  });
+
+  await expect.poll(() => page.evaluate(() => window.oiDesktop.db.query('SELECT path, content_type FROM media'))).toEqual([
+    expect.objectContaining({ content_type: 'image/jpeg' }),
+  ]);
+  const [{ path: mediaPath }] = await page.evaluate(() => window.oiDesktop.db.query('SELECT path FROM media')) as Array<{ path: string }>;
+  const jpeg = await readFile(join(userData, 'media', mediaPath.replace(/^media[\\/]/, '')));
+  const sampled = await page.evaluate(async (encoded) => {
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Canvas 2D context is unavailable');
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const at = (x: number, y: number) => {
+      const pixel = context.getImageData(x, y, 1, 1).data;
+      return [pixel[0] ?? 0, pixel[1] ?? 0, pixel[2] ?? 0];
+    };
+    return { width: canvas.width, height: canvas.height, quadrants: [at(32, 24), at(96, 24), at(32, 72), at(96, 72)] };
+  }, jpeg.toString('base64'));
+  expect([sampled.width, sampled.height]).toEqual([128, 96]);
+  const expected = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 195, 0]];
+  for (const [quadrantIndex, actual] of sampled.quadrants.entries()) {
+    for (const [channelIndex, channel] of actual.entries()) {
+      expect(Math.abs(channel - (expected[quadrantIndex]?.[channelIndex] ?? 0))).toBeLessThanOrEqual(36);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  for (const theme of ['light', 'dark'] as const) {
+    await electronApp.evaluate(({ nativeTheme }, selectedTheme) => { nativeTheme.themeSource = selectedTheme; }, theme);
+    await page.emulateMedia({ colorScheme: theme });
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe(theme);
+    await page.screenshot({ path: `.superpowers/sdd/plan-d2-windows-electron/heic-grid-editor-${theme}.png`, animations: 'disabled' });
+  }
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+});
+
 test('a HEIC with an oversized primary ispe is rejected and the batch continues', async () => {
   test.setTimeout(120_000);
   await openEditorWithRealHeicHelper();
