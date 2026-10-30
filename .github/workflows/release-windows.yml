@@ -64,6 +64,8 @@ jobs:
       - run: npm run check:electron-package
       - name: API types match the engine contract
         run: npm run api:types:check -- "$env:ENGINE_CONTRACT_URL"
+      - name: Build the E2E codec-missing helper
+        run: npm run build:e2e-heic-helper
       - run: npx playwright test -c e2e-electron/playwright.config.ts --project=ci
 
   build:
