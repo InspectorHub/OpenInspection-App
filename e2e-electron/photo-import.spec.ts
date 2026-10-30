@@ -92,6 +92,11 @@ async function openLibrary(): Promise<FileChooser> {
   return picker;
 }
 
+async function openReportSettings(): Promise<void> {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('button', { name: 'Report settings' }).click();
+}
+
 test('a file dropped on the renderer is cancelled and does not navigate', async () => {
   const before = page.url();
   const prevented = await page.evaluate(() => {
@@ -177,18 +182,20 @@ test('offline import explains an unsupported file and still stores its valid nei
 
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const chooser = await openLibrary();
+  const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true })
+    .waitFor({ state: 'visible', timeout: 20_000 });
   await chooser.setFiles([
     { name: 'unsupported.tiff', mimeType: 'image/tiff', buffer: Buffer.from('not a TIFF image') },
     { name: 'valid.jpg', mimeType: 'image/jpeg', buffer: jpeg },
   ]);
 
-  const refusal = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
-  await expect(refusal).toBeVisible({ timeout: 20_000 });
+  await refusal;
+  const refusalLocator = page.getByText('1 photo could not be added because only JPEG, PNG and HEIC photos are supported.', { exact: true });
   for (const theme of ['light', 'dark'] as const) {
     await electronApp.evaluate(({ nativeTheme }, selected) => { nativeTheme.themeSource = selected; }, theme);
     await page.emulateMedia({ colorScheme: theme });
     await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe(theme);
-    await expect(refusal).toBeVisible();
+    await expect(refusalLocator).toBeVisible();
     await page.screenshot({ path: `.superpowers/sdd/plan-d2-windows-electron/offline-photo-refusal-${theme}-1280.png`, animations: 'disabled' });
   }
   await expect.poll(async () => mediaRows()).toHaveLength(1);
@@ -291,7 +298,7 @@ test('original-quality keeps a large JPEG unchanged and rejects it, while normal
   await signIn();
   await seedEditorPackage();
 
-  await page.getByRole('button', { name: 'Report settings' }).click();
+  await openReportSettings();
   const originalQuality = page.getByTestId('original-quality-uploads');
   await expect(originalQuality).toBeVisible();
   await originalQuality.check();
@@ -306,7 +313,7 @@ test('original-quality keeps a large JPEG unchanged and rejects it, while normal
   expect(await mediaRows()).toEqual([]);
   expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 
-  await page.getByRole('button', { name: 'Report settings' }).click();
+  await openReportSettings();
   await expect(originalQuality).toBeVisible();
   await originalQuality.uncheck();
   await page.getByRole('button', { name: 'Close' }).click();
