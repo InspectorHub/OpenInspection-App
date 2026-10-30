@@ -1,4 +1,5 @@
 import { _electron, expect, test, type ElectronApplication, type FileChooser, type Page } from '@playwright/test';
+import { build as viteBuild } from 'vite';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -10,6 +11,18 @@ import { startRendererEngine, type RendererEngine } from './fixtures/renderer-en
 declare global { interface Window { oiDesktop: DesktopBridge } }
 
 const execFileAsync = promisify(execFile);
+const DEV_RENDERER = resolve('dist-electron/renderer-development');
+
+test.beforeAll(async () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'development';
+  try {
+    await viteBuild({ configFile: resolve('vite.electron.config.ts'), mode: 'development', build: { outDir: DEV_RENDERER, emptyOutDir: true } });
+  } finally {
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+  }
+});
 
 let electronApp: ElectronApplication;
 let page: Page;
@@ -23,7 +36,7 @@ test.beforeEach(async () => {
   environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete environment.ELECTRON_RUN_AS_NODE;
   environment.OI_USER_DATA_DIR = userData;
-  environment.OI_RENDERER_ROOT = resolve('dist-electron/renderer');
+  environment.OI_RENDERER_ROOT = DEV_RENDERER;
   environment.OI_E2E_DISABLE_PROTOCOL_REGISTRATION = '1';
   environment.OI_E2E_HEIC_HELPER = resolve('.superpowers/sdd/plan-d2-windows-electron/helper-codec-missing.exe');
   electronApp = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
@@ -188,6 +201,10 @@ test('offline import explains an unsupported file and still stores its valid nei
     );
     return rows[0]?.n ?? 0;
   })).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => ({
+    online: window.__oiE2EEditorState?.isOnline() ?? null,
+    hasLiveDoc: window.__oiE2EEditorState?.hasLiveDoc() ?? false,
+  }))).toEqual({ online: false, hasLiveDoc: true });
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const input = page.locator('input[type=file][multiple]');
   await expect(input).toHaveCount(1);

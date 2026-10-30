@@ -18,6 +18,12 @@ import { useToasts } from './EditorToasts';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
 
+declare global {
+  interface Window {
+    __oiE2EEditorState?: { isOnline(): boolean; hasLiveDoc(): boolean };
+  }
+}
+
 /** What the editor screen reads of the app's services. */
 export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState' | 'decodeImage'>;
 
@@ -101,6 +107,10 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     let live = true;
     const release = registry.register(inspectionId);
     const flag = openNetworkFlag(network ?? browserNetwork, { timers });
+    const e2eEditorState = import.meta.env.DEV
+      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null }
+      : undefined;
+    if (e2eEditorState) window.__oiE2EEditorState = e2eEditorState;
     const stopEvents = stack.onEditorEvent((event) => {
       if (event.inspectionId === inspectionId && event.kind !== 'unquarantined') leave.current();
     });
@@ -155,6 +165,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
       live = false;
       stopEvents();
       flag.dispose();
+      if (window.__oiE2EEditorState === e2eEditorState) delete window.__oiE2EEditorState;
       release();
     };
   }, [services, stack, origin, inspectionId, network, timers, registry]);
