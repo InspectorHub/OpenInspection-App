@@ -97,3 +97,11 @@ jobs:
       - name: Build the E2E codec-missing helper
         run: npm run build:e2e-heic-helper
       - run: npx playwright test -c e2e-electron/playwright.config.ts --project=ci
+      - name: Upload Electron Playwright failure context
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: electron-playwright-failure-context
+          path: .superpowers/sdd/plan-d2-windows-electron/test-results/
+          if-no-files-found: warn
+          retention-days: 7
