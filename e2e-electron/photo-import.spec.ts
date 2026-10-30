@@ -111,7 +111,7 @@ test('imports valid photos and reports an unsupported neighbor in the same libra
   await seedEditorPackage();
   await page.locator('input[type=file][multiple]').evaluate((element) => element.removeAttribute('accept'));
   const libraryPicker = await openLibrary();
-  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const png = await readFile(resolve('android/app/src/main/res/drawable/splash.png'));
   const partialFailure = page.getByText('2 of 3 photos uploaded — 1 failed.', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
   await (await libraryPicker).setFiles([
@@ -155,7 +155,7 @@ test('a missing Windows codec skips only the HEIC while the JPEG in its batch up
   await seedEditorPackage();
   const [heic, jpeg] = await Promise.all([
     readFile(resolve('src/media/heic/fixtures/fixture-64x48.heic')),
-    readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg')),
+    readFile(resolve('e2e-electron/fixtures/photo-import.jpg')),
   ]);
   const chooser = await openLibrary();
   await chooser.setFiles([
@@ -175,7 +175,7 @@ test('offline import explains an unsupported file and still stores its valid nei
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
 
-  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const chooser = await openLibrary();
   await chooser.setFiles([
     { name: 'unsupported.tiff', mimeType: 'image/tiff', buffer: Buffer.from('not a TIFF image') },
@@ -218,7 +218,7 @@ test('caps a 25-photo offline selection at 20 and shows the capped-batch notice'
   await seedEditorPackage();
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
-  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const chooser = await openLibrary();
   await chooser.setFiles(Array.from({ length: 25 }, (_, index) => ({
     name: `photo-${index + 1}.jpg`,
@@ -239,7 +239,7 @@ test('the batch survives a force-kill and each persisted photo uploads once afte
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
 
-  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const picker = await openLibrary();
   await (await picker).setFiles(Array.from({ length: 3 }, (_, index) => ({
     name: `persist-${index + 1}.jpg`,
@@ -298,7 +298,7 @@ test('original-quality keeps a large JPEG unchanged and rejects it, while normal
   await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBe('1');
   await page.getByRole('button', { name: 'Close' }).click();
 
-  const jpeg = await readFile(resolve('.superpowers/sdd/plan-d2-windows-electron/helper-output.jpg'));
+  const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const oversizedJpeg = Buffer.concat([jpeg, Buffer.alloc(12 * 1024 * 1024 - jpeg.length)]);
   const input = page.locator('input[type=file][multiple]');
   await input.setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversizedJpeg });
