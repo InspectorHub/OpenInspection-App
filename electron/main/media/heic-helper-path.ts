@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import type { LogEvent } from '../logger.ts';
 
 interface ReadFileLike {
   readFile(path: string): Promise<Uint8Array>;
@@ -12,7 +13,7 @@ interface HelperPathOptions {
   developmentPath: string | undefined;
   envOverride: string | undefined;
   readFile: ReadFileLike['readFile'];
-  log(code: string): void;
+  log(code: LogEvent): void;
 }
 
 /** Resolves only a fixed packaged location; test paths are available only to unpackaged builds. */

@@ -1,5 +1,6 @@
 import { MAX_MEDIA_BYTES, MAX_DECODE_INPUT_BYTES, MAX_DECODE_PIXELS, DECODE_TIMEOUT_MS } from '../../../src/media/media-types.ts';
 import type { TimerPort } from '../../../src/collab/timers.ts';
+import type { LogEvent } from '../logger.ts';
 
 export type HeicFailure = 'CODEC_MISSING' | 'HELPER_MISSING' | 'UNSUPPORTED' | 'TOO_LARGE_PIXELS' | 'TOO_LARGE_BYTES' | 'CORRUPT' | 'TIMEOUT';
 export type HeicRunResult = { ok: true; jpeg: Uint8Array } | { ok: false; code: HeicFailure };
@@ -46,7 +47,7 @@ interface RunnerOptions {
   spawner: HelperSpawner;
   timers: TimerPort;
   limits?: HeicLimits;
-  log(code: string): void;
+  log(code: LogEvent): void;
 }
 
 function validRequest(req: DecodeRequest): boolean {

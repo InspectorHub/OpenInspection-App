@@ -2,7 +2,7 @@ import * as Fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, MEDIA_CONTENT_TYPES, PHOTO_CONTENT_TYPES } from '../../../src/media/media-types.ts';
+import { isStreamUploadUrl, MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, MEDIA_CONTENT_TYPES, PHOTO_CONTENT_TYPES } from '../../../src/media/media-types.ts';
 import type { TimerPort } from '../../../src/collab/timers.ts';
 import type { UploaderEventLike } from '../../../src/platform/uploader.ts';
 import type { UploaderStartOptions } from '../../shared/ipc-contract.ts';
@@ -73,8 +73,13 @@ function validateOptions(options: UploaderStartOptions, packaged: boolean): void
   if (url.username || url.password || url.hash || (packaged ? url.protocol !== 'https:' : url.protocol !== 'https:' && url.protocol !== 'http:')) throw new Error('invalid-argument');
   if (Object.keys(options.headers).some((name) => name !== name.toLowerCase())) throw new Error('invalid-argument');
   for (const name of Object.keys(options.headers)) if (name !== 'x-client-version' && name !== 'x-client-platform') throw new Error('invalid-argument');
-  if (options.headers['x-client-version'] !== undefined && !VERSION.test(options.headers['x-client-version']!)) throw new Error('invalid-argument');
-  if (options.headers['x-client-platform'] !== 'windows') throw new Error('invalid-argument');
+  // A Stream direct-upload url is a third-party host: it carries no client headers. Every other destination is the engine's.
+  if (isStreamUploadUrl(url)) {
+    if (Object.keys(options.headers).length > 0) throw new Error('invalid-argument');
+  } else {
+    if (options.headers['x-client-version'] !== undefined && !VERSION.test(options.headers['x-client-version']!)) throw new Error('invalid-argument');
+    if (options.headers['x-client-platform'] !== 'windows') throw new Error('invalid-argument');
+  }
   if (!FIELD.test(options.fileField) || !MIME_TYPES.has(options.mimeType)) throw new Error('invalid-argument');
   if (!Number.isInteger(options.maxRetries) || options.maxRetries < 0 || options.maxRetries > 5) throw new Error('invalid-argument');
   if (typeof options.notificationTitle !== 'string' || options.notificationTitle.length < 1 || options.notificationTitle.length > 80 || !NO_CONTROL.test(options.notificationTitle)) throw new Error('invalid-argument');

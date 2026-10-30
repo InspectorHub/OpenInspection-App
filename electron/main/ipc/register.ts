@@ -1,4 +1,5 @@
-import { IpcError, isIpcErrorCode, type IpcEnvelope } from '../../shared/ipc-contract.ts';
+import { IpcError, isIpcErrorCode, type ChannelName, type IpcEnvelope } from '../../shared/ipc-contract.ts';
+import type { LogEvent } from '../logger.ts';
 import { isAppOrigin } from '../app-origin.ts';
 import { InvalidArgumentError } from './validate.ts';
 
@@ -18,7 +19,7 @@ export interface SenderEvent {
 export interface RegisterDeps {
   ipcMain: IpcMainLike;
   /** Receives a short code only: no message, stack or path. */
-  log(code: string): void;
+  log(code: LogEvent): void;
 }
 
 /**
@@ -38,7 +39,7 @@ export function isTrustedSender(event: SenderEvent): boolean {
  */
 export function registerHandler<A extends unknown[], R>(
   deps: RegisterDeps,
-  channel: string,
+  channel: ChannelName,
   validate: (raw: unknown[]) => A,
   handler: (...args: A) => Promise<R>,
 ): void {
@@ -55,7 +56,7 @@ export function registerHandler<A extends unknown[], R>(
 
 async function answer<A extends unknown[], R>(
   deps: RegisterDeps,
-  channel: string,
+  channel: ChannelName,
   validate: (raw: unknown[]) => A,
   handler: (...args: A) => Promise<R>,
   event: SenderEvent,

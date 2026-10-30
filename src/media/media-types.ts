@@ -42,6 +42,23 @@ export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
  */
 export const VIDEO_MAX_SECONDS = 30;
 
+/**
+ * The only host a Stream direct-upload url may name. It is the host Cloudflare documents for direct creator uploads
+ * (`https://upload.videodelivery.net/<uid>`, Cloudflare Stream docs, "Direct creator uploads"). The engine reaches
+ * it through the Stream binding, which hands back whatever Cloudflare answered, so the app does not take the host
+ * from the answer: it compares it to this constant, exactly, and also requires the path to be the uid of the same
+ * answer's ref. A different Cloudflare host (for example a customer subdomain) is refused until it is added here on
+ * purpose. The shape of the direct-upload url (host and single-segment path) is taken from the Cloudflare documentation
+ * only; it has not been observed against a live Stream account. It lives here, not in `video.ts`, because the desktop
+ * main process also needs it to tell a third-party upload (no client headers) from an engine upload.
+ */
+export const STREAM_UPLOAD_HOST = 'upload.videodelivery.net';
+
+/** True for the Stream direct-upload host over https on the default port: the one destination that gets no client headers. */
+export function isStreamUploadUrl(url: URL): boolean {
+  return url.protocol === 'https:' && url.hostname === STREAM_UPLOAD_HOST && url.port === '';
+}
+
 /** The most bytes of one HEIC file handed to the system decoder. */
 export const MAX_DECODE_INPUT_BYTES = 50 * 1024 * 1024;
 /** The most pixels one decoded image may have, read from its header before any decoding starts. */

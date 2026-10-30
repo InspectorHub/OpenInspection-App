@@ -10,7 +10,7 @@ function harness() {
   const ipcMain: IpcMainLike = { handle: (channel, listener) => void handlers.set(channel, listener as never) };
   const log = vi.fn();
   const deps = { ipcMain, log };
-  const invoke = (event: unknown, ...raw: unknown[]) => handlers.get('test:channel')!(event, ...raw);
+  const invoke = (event: unknown, ...raw: unknown[]) => handlers.get('db:open')!(event, ...raw);
   return { deps, invoke, log };
 }
 
@@ -47,14 +47,14 @@ describe('isTrustedSender', () => {
 describe('registerHandler', () => {
   it('uses the real sender check: there is no way to inject another one', async () => {
     const { deps, invoke } = harness();
-    registerHandler({ ...deps, isTrustedSender: () => true } as typeof deps, 'test:channel', oneString, async (value: string) => value);
+    registerHandler({ ...deps, isTrustedSender: () => true } as typeof deps, 'db:open', oneString, async (value: string) => value);
     expect(await invoke({ senderFrame: { url: 'https://evil.example/', parent: null } }, 'a')).toEqual({ ok: false, code: 'untrusted-sender' });
   });
 
   it('answers internal and never runs the handler when reading the sender throws', async () => {
     const { deps, invoke } = harness();
     const handler = vi.fn(async (value: string) => value);
-    registerHandler(deps, 'test:channel', oneString, handler);
+    registerHandler(deps, 'db:open', oneString, handler);
     const disposed = {
       get senderFrame(): never {
         throw new Error('Render frame was disposed C:\\Users\\bob');
@@ -70,7 +70,7 @@ describe('registerHandler', () => {
     log.mockImplementation(() => {
       throw new Error('EPERM C:\\Users\\bob\\main.log');
     });
-    registerHandler(deps, 'test:channel', oneString, async (_value: string) => {
+    registerHandler(deps, 'db:open', oneString, async (_value: string) => {
       throw new Error('boom');
     });
     const reply = await invoke(TRUSTED, 'a');
@@ -81,7 +81,7 @@ describe('registerHandler', () => {
   it('refuses an untrusted sender and never calls the handler', async () => {
     const { deps, invoke } = harness();
     const handler = vi.fn(async (_value: string) => 1);
-    registerHandler(deps, 'test:channel', oneString, handler);
+    registerHandler(deps, 'db:open', oneString, handler);
     expect(await invoke({ senderFrame: { url: 'https://evil.example/', parent: null } }, 'a')).toEqual({ ok: false, code: 'untrusted-sender' });
     expect(await invoke({ senderFrame: { url: 'https://localhost/', parent: {} } }, 'a')).toEqual({ ok: false, code: 'untrusted-sender' });
     expect(handler).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ describe('registerHandler', () => {
   it('delivers a trusted call to the handler (control)', async () => {
     const { deps, invoke } = harness();
     const handler = vi.fn(async (value: string) => value.toUpperCase());
-    registerHandler(deps, 'test:channel', oneString, handler);
+    registerHandler(deps, 'db:open', oneString, handler);
     expect(await invoke(TRUSTED, 'a')).toEqual({ ok: true, value: 'A' });
     expect(handler).toHaveBeenCalledExactlyOnceWith('a');
   });
@@ -102,14 +102,14 @@ describe('registerHandler', () => {
   ])('answers %s with invalid-argument and never calls the handler', async (_name, raw) => {
     const { deps, invoke } = harness();
     const handler = vi.fn(async (_value: string) => 1);
-    registerHandler(deps, 'test:channel', oneString, handler);
+    registerHandler(deps, 'db:open', oneString, handler);
     expect(await invoke(TRUSTED, ...raw)).toEqual({ ok: false, code: 'invalid-argument' });
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('passes a closed error code thrown by the handler through, and nothing else', async () => {
     const { deps, invoke } = harness();
-    registerHandler(deps, 'test:channel', oneString, async (_value) => {
+    registerHandler(deps, 'db:open', oneString, async (_value) => {
       throw new IpcError('disk-full');
     });
     expect(await invoke(TRUSTED, 'a')).toEqual({ ok: false, code: 'disk-full' });
@@ -117,7 +117,7 @@ describe('registerHandler', () => {
 
   it('turns an error that carries a path into internal, with no message, stack or path in the reply or the log', async () => {
     const { deps, invoke, log } = harness();
-    registerHandler(deps, 'test:channel', oneString, async (_value) => {
+    registerHandler(deps, 'db:open', oneString, async (_value) => {
       throw new Error('EPERM: open C:\\Users\\bob\\AppData\\Roaming\\InspectorHub\\db\\app.db');
     });
     const reply = await invoke(TRUSTED, 'a');
@@ -129,7 +129,7 @@ describe('registerHandler', () => {
 
   it('an IpcError built from a code outside the closed set is reported as internal', async () => {
     const { deps, invoke } = harness();
-    registerHandler(deps, 'test:channel', oneString, async (_value) => {
+    registerHandler(deps, 'db:open', oneString, async (_value) => {
       const error = new IpcError('not-found');
       Object.assign(error, { code: 'ENOENT C:\\x' });
       throw error;

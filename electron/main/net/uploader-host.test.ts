@@ -57,6 +57,16 @@ describe('createUploaderHost validation and lifecycle', () => {
     expect(transport.send).not.toHaveBeenCalled();
   });
 
+  it('accepts a Stream destination without client headers and refuses one that carries them', async () => {
+    const stream = { ...base(), serverUrl: 'https://upload.videodelivery.net/abcdefgh12345678', mimeType: 'video/mp4', headers: {} };
+    file = join(media, 'clip.mp4'); await writeFile(file, Buffer.from([0, 0, 0, 24]));
+    const started = await host.start({ ...stream, filePath: pathToFileURL(file).href });
+    expect(started.id).toBeTruthy();
+    await vi.waitFor(() => expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({ headers: {} })));
+    await expect(host.start({ ...stream, filePath: pathToFileURL(file).href, headers: { 'x-client-platform': 'windows' } })).rejects.toBeDefined();
+    await expect(host.start({ ...base(), headers: {} })).rejects.toBeDefined();
+  });
+
   it('allows HTTP only in unpackaged development', async () => {
     transport = { send: vi.fn(async () => ({ statusCode: 200 })) };
     host = createUploaderHost({ transport, resolveMediaFile: createMediaFileResolver({ fs: await import('node:fs/promises'), mediaRoot: media, cacheRoot: cache }), timers, random: () => 0, packaged: false });

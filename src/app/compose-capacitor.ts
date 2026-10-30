@@ -1,8 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { createCapacitorAuthSession } from '../auth/auth-session-capacitor';
-import { createDesktopAuthSession } from '../desktop/auth-session-desktop';
-import { getDesktopBridge } from '../desktop/bridge';
 import { realSocketFactory } from '../collab/real';
 import { createRealSharer } from '../export/share-capacitor';
 import type { AppStatePort } from '../offline/lock-monitor';
@@ -40,11 +38,6 @@ const realAdapters: RealAdapters = {
   openStore: () => createRealSecureStore(),
 };
 
-function createPlatformAuthSession() {
-  const desktopBridge = typeof window !== 'undefined' && window.oiDesktop ? getDesktopBridge() : null;
-  return desktopBridge ? createDesktopAuthSession(desktopBridge) : createCapacitorAuthSession();
-}
-
 /**
  * The real adapters behind one call. Rejects with `SchemaTooNewError` when the stored
  * database was written by a newer app, and with `SchemaDriftError` when a development device still carries an
@@ -66,7 +59,7 @@ export async function composeReal(adapters: RealAdapters = realAdapters): Promis
     files: createRealFiles(),
     store,
     fetch: realFetch,
-    authSession: createPlatformAuthSession(),
+    authSession: createCapacitorAuthSession(),
     clock: systemClock,
     platform: toClientPlatform(Capacitor.getPlatform()),
     appVersion: __APP_VERSION__,

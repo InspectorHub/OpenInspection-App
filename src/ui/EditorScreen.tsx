@@ -15,22 +15,9 @@ import { openNetworkFlag } from '../field/network-flag';
 import { loadSessionInfo } from '../field/session-info';
 import type { Network } from '../platform/network';
 import { useToasts } from './EditorToasts';
+import { editorObserver } from './editor-observer';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
-
-declare global {
-  interface Window {
-    __oiE2EEditorState?: {
-      isOnline(): boolean;
-      hasLiveDoc(): boolean;
-      readOnly: boolean;
-      onlineReads: Array<{ online: boolean; stack: string }>;
-      storePuts: Array<{ contentType: string; size: number; online: boolean; outcome: 'stored' | 'rejected'; code?: string }>;
-      notifications: Array<{ message: string; variant: string; online: boolean; hasLiveDoc: boolean; stack: string }>;
-      codeReads: Array<{ code: unknown; name: string; message: string; stack: string }>;
-    };
-  }
-}
 
 /** What the editor screen reads of the app's services. */
 export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState' | 'decodeImage'>;
@@ -115,14 +102,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     let live = true;
     const release = registry.register(inspectionId);
     const flag = openNetworkFlag(network ?? browserNetwork, { timers });
-    const storePuts: NonNullable<Window['__oiE2EEditorState']>['storePuts'] = [];
-    const notifications: NonNullable<Window['__oiE2EEditorState']>['notifications'] = [];
-    const codeReads: NonNullable<Window['__oiE2EEditorState']>['codeReads'] = [];
-    const onlineReads: NonNullable<Window['__oiE2EEditorState']>['onlineReads'] = [];
-    const e2eEditorState = import.meta.env.DEV
-      ? { isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, readOnly: !canEdit, onlineReads, storePuts, notifications, codeReads }
-      : undefined;
-    if (e2eEditorState) window.__oiE2EEditorState = e2eEditorState;
+    const observation = editorObserver.current()?.({ isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, readOnly: !canEdit });
     const stopEvents = stack.onEditorEvent((event) => {
       if (event.inspectionId === inspectionId && event.kind !== 'unquarantined') leave.current();
     });
@@ -153,13 +133,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           clock: services.clock,
           timers,
           notify: (message, variant, options) => {
-            if (e2eEditorState) notifications.push({
-              message,
-              variant,
-              online: e2eEditorState.isOnline(),
-              hasLiveDoc: e2eEditorState.hasLiveDoc(),
-              stack: new Error().stack ?? '',
-            });
+            observation?.notified(message, variant);
             notify.current(message, variant, options);
           },
           openExternal: services.openExternal,
@@ -176,46 +150,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           },
           onRestart: () => restart.current(),
         });
-        if (e2eEditorState) {
-          const isOnline = source.isOnline.bind(source);
-          source.isOnline = () => {
-            const online = isOnline();
-            if (onlineReads.length === 40) onlineReads.shift();
-            onlineReads.push({ online, stack: new Error().stack ?? '' });
-            return online;
-          };
-          const store = source.media.store;
-          const put = store.put.bind(store);
-          store.put = async (record) => {
-            const details = { contentType: record.blob.type, size: record.blob.size, online: e2eEditorState.isOnline() };
-            try {
-              await put(record);
-              storePuts.push({ ...details, outcome: 'stored' });
-            } catch (error) {
-              let code: string | undefined;
-              try {
-                const descriptor = Object.getOwnPropertyDescriptor(error as object, 'code');
-                if (descriptor?.configurable && 'value' in descriptor) {
-                  const originalCode = descriptor.value;
-                  Object.defineProperty(error, 'code', {
-                    configurable: true,
-                    enumerable: descriptor.enumerable,
-                    get: () => {
-                      codeReads.push({ code: originalCode, name: error instanceof Error ? error.name : typeof error, message: error instanceof Error ? error.message : '', stack: new Error().stack ?? '' });
-                      return originalCode;
-                    },
-                  });
-                }
-                const candidate = Reflect.get(error as object, 'code');
-                if (typeof candidate === 'string') code = candidate;
-              } catch {
-                // Diagnostic data is best effort; preserve the original error.
-              }
-              storePuts.push({ ...details, outcome: 'rejected', ...(code === undefined ? {} : { code }) });
-              throw error;
-            }
-          };
-        }
+        observation?.attach(source);
         const data = await source.load(inspectionId);
         if (live) setPhase({ kind: 'ready', source, data });
       } catch (error) {
@@ -226,7 +161,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
       live = false;
       stopEvents();
       flag.dispose();
-      if (window.__oiE2EEditorState === e2eEditorState) delete window.__oiE2EEditorState;
+      observation?.dispose();
       release();
     };
   }, [services, stack, origin, inspectionId, network, timers, registry]);

@@ -80,6 +80,39 @@ describe('channel validators', () => {
     expect(validators.db.query(['SELECT ?', [1]])).toEqual(['SELECT ?', [1]]);
   });
 
+  describe('uploader destinations and client headers', () => {
+    const stream = { ...uploadOptions, serverUrl: 'https://upload.videodelivery.net/abcdefgh12345678', mimeType: 'video/mp4', headers: {} };
+
+    it('accepts a Stream destination with no headers and an engine destination with the Windows header', () => {
+      expect(() => validators.uploader.start([stream])).not.toThrow();
+      expect(() => validators.uploader.start([uploadOptions])).not.toThrow();
+    });
+
+    it('refuses an engine-shaped destination without the Windows header', () => {
+      expect(() => validators.uploader.start([{ ...uploadOptions, headers: {} }])).toThrow(InvalidArgumentError);
+    });
+
+    it('refuses any client header on a Stream destination, and empty headers on a lookalike host', () => {
+      expect(() => validators.uploader.start([{ ...stream, headers: { 'x-client-platform': 'windows' } }])).toThrow(InvalidArgumentError);
+      expect(() => validators.uploader.start([{ ...stream, serverUrl: 'https://upload.videodelivery.net.evil.example/abcdefgh12345678' }])).toThrow(InvalidArgumentError);
+      expect(() => validators.uploader.start([{ ...stream, serverUrl: 'http://upload.videodelivery.net/abcdefgh12345678' }])).toThrow(InvalidArgumentError);
+    });
+  });
+
+  describe('secrets reserved for the main process', () => {
+    it('refuses renderer access to the database key on every secrets channel', () => {
+      expect(() => validators.secrets.get(['db-key'])).toThrow(InvalidArgumentError);
+      expect(() => validators.secrets.set(['db-key', 'a'.repeat(64)])).toThrow(InvalidArgumentError);
+      expect(() => validators.secrets.remove(['db-key'])).toThrow(InvalidArgumentError);
+    });
+
+    it('still serves an ordinary renderer key on every secrets channel', () => {
+      expect(validators.secrets.get(['oi.auth.refresh-token:https://engine.example'])).toEqual(['oi.auth.refresh-token:https://engine.example']);
+      expect(validators.secrets.set(['oi.device-id', 'abc'])).toEqual(['oi.device-id', 'abc']);
+      expect(validators.secrets.remove(['db-key-2'])).toEqual(['db-key-2']);
+    });
+  });
+
   describe('byte transfer bounds', () => {
     const MIB = 1024 * 1024;
 

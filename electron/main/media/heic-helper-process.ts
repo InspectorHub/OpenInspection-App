@@ -11,6 +11,9 @@ export const createExecFileHelperSpawner = (): HelperSpawner => ({
       encoding: 'buffer',
       maxBuffer: MAX_MEDIA_BYTES + 1,
     }, () => undefined);
+    // A helper that exits early (a refused or malformed input) closes its stdin while the bytes are still being written.
+    // The resulting EPIPE is a stream error that would be unhandled in the main process; the exit code already carries the outcome.
+    child.stdin?.on('error', () => undefined);
     return {
       stdin: {
         write: (bytes) => { child.stdin?.write(bytes); },

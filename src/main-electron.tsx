@@ -13,6 +13,9 @@ import { createDesktopAppLike } from './desktop/auth-session-desktop';
 import { followSystemColorScheme } from './ui/color-scheme';
 import './styles.css';
 
+// The Electron end-to-end specs read the open editor through a development-only observer; a release build never loads it.
+if (import.meta.env.DEV) void import('./dev/editor-e2e-state').then((module) => { module.installEditorE2EState(); });
+
 const bridge = getDesktopBridge();
 const callbacks = registerCallbackRouter(createDesktopAppLike(bridge));
 const appState = createDesktopAppState(bridge);

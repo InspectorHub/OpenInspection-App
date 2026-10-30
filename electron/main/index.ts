@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, net, protocol, safeStorage, session, shell, i
 import { autoUpdater } from 'electron-updater';
 import { mkdirSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createAppOriginHandler, createHttpsPassthrough, isAppOrigin } from './app-origin.ts';
@@ -41,12 +41,16 @@ app.setAppUserModelId('io.inspectorhub.app');
 
 const paths = resolveStartupPaths({ packaged: app.isPackaged, appData: app.getPath('appData'), appPath: app.getAppPath(),
   requestedUserData: app.commandLine.hasSwitch('user-data-dir') ? app.getPath('userData') : undefined, env: process.env });
-const runSecurityCommand: SecurityCommand = (command, args) => {
+const runSecurityCommand: SecurityCommand = async (command, args) => {
   if (!app.isPackaged && command === 'powershell.exe' && args[3]?.includes("$mode = 'final'") && process.env.OI_TEST_FAIL_ACL_STEP === 'final-acl') {
     return { status: 5, stdout: '', stderr: 'injected ACL failure' };
   }
-  const result = spawnSync(command, args, { windowsHide: true, encoding: 'utf8' });
-  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  // Asynchronous so that a cold powershell start does not block the main process's event loop during startup.
+  return new Promise((resolve) => {
+    execFile(command, args, { windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
+      resolve({ status: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr });
+    });
+  });
 };
 mkdirSync(paths.userData, { recursive: true });
 app.setPath('userData', paths.userData);
@@ -157,8 +161,8 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       dir: secretsDir,
       run: runSecurityCommand,
       barrierRunner: !app.isPackaged && process.env.OI_TEST_FAIL_ACL_STEP === 'barrier-partial'
-        ? (files, applyBarrier) => {
-          for (const file of files.slice(0, 1)) applyBarrier(file);
+        ? async (files, applyBarrier) => {
+          for (const file of files.slice(0, 1)) await applyBarrier(file);
           return { status: 5, stdout: '', stderr: 'injected partial barrier runner failure' };
         }
         : undefined,

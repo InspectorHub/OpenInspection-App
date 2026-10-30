@@ -15,6 +15,7 @@ import { INSPECTION } from '../media/test-support/fakes';
 import type { Network } from '../platform/network';
 import { backRegistry, pressBack } from './back-button';
 import { EditorScreen, READ_ONLY_NOTICE } from './EditorScreen';
+import { editorObserver, type EditorObservation, type EditorProbe } from './editor-observer';
 
 const layers = vi.hoisted(() => ({ open: false }));
 let renderedSource: FieldDataSource | null = null;
@@ -242,6 +243,33 @@ describe('the editor screen', () => {
   });
 
   it('shows what the editor says in a short-lived message', async () => {
+    render(mount());
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'write' }));
+    expect(await screen.findByRole('status')).toBeInTheDocument();
+  });
+});
+
+describe('an editor observer', () => {
+  afterEach(() => editorObserver.install(null));
+
+  it('is told what the editor says, is handed the data source before it loads, and is disposed with the screen', async () => {
+    const observation: EditorObservation = { notified: vi.fn(), attach: vi.fn(), dispose: vi.fn() };
+    const observer = vi.fn((_probe: EditorProbe) => observation);
+    editorObserver.install(observer);
+    const view = render(mount());
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'write' }));
+    expect(observer).toHaveBeenCalledOnce();
+    const probe = observer.mock.calls[0]![0];
+    expect(probe.readOnly).toBe(false);
+    expect(typeof probe.isOnline()).toBe('boolean');
+    expect(observation.attach).toHaveBeenCalledWith(currentSource());
+    expect(observation.notified).toHaveBeenCalled();
+    expect(observation.dispose).not.toHaveBeenCalled();
+    view.unmount();
+    expect(observation.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('control: with no observer installed the editor opens and speaks as before', async () => {
     render(mount());
     await userEvent.setup().click(await screen.findByRole('button', { name: 'write' }));
     expect(await screen.findByRole('status')).toBeInTheDocument();

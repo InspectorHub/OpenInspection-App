@@ -1,6 +1,17 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { composeReal, toClientPlatform } from './compose-capacitor';
 import { createWorld } from './test-support/world';
+
+describe('the Capacitor entry', () => {
+  // Electron has its own entry (main-electron.tsx, composeDesktop); the Android and iOS bundle must not carry the desktop IPC modules.
+  it.each(['./compose-capacitor.ts', '../main.tsx'])('%s imports nothing from the desktop client', (file) => {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source).toContain("from '@capacitor/");
+    expect(source).not.toMatch(/from '[^']*\/desktop\//);
+    expect(source).not.toContain('oiDesktop');
+  });
+});
 
 describe('composeReal', () => {
   it('reports anything but iOS as Android, including the development browser', () => {

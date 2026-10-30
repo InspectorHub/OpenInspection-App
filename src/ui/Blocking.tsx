@@ -36,7 +36,20 @@ export function SchemaDrift() {
   );
 }
 
+/** Android and iOS have no desktop bridge: they keep the plain message, and no control that only works on a desktop. */
 export function OpenFailed({ reason }: { reason?: OpenReason }) {
+  if (typeof window === 'undefined' || window.oiDesktop === undefined) {
+    return (
+      <Screen>
+        <Heading>InspectorHub could not open</Heading>
+        <Body>The app could not open its storage on this device. Close the app and open it again. Your data has not been changed.</Body>
+      </Screen>
+    );
+  }
+  return <DesktopOpenFailed reason={reason} />;
+}
+
+function DesktopOpenFailed({ reason }: { reason?: OpenReason }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);

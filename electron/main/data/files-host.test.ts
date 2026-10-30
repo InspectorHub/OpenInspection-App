@@ -74,13 +74,24 @@ describe('createFilesHost', () => {
     await expect(noSpace.write('x.jpg', Uint8Array.from([0xff, 0xd8, 0xff]))).rejects.toMatchObject({ code: 'disk-full' });
     await noSpace.dispose?.();
   });
-  it('commits a stream atomically without replacing an existing target', async () => {
-    await host.write('same.jpg', Uint8Array.from([0xff, 0xd8, 0xff]));
-    const { handle } = await host.stream.open('media', 'same.jpg');
-    await host.stream.append(handle, Uint8Array.from([0xff, 0xd8, 0xff]));
-    await expect(host.stream.finish(handle, 'commit')).rejects.toBeDefined();
-    expect(await host.read('same.jpg')).toEqual(Uint8Array.from([0xff, 0xd8, 0xff]));
+  it('overwrites an existing target when the same path is written twice, as the Android implementation does', async () => {
+    await host.write('same.jpg', Uint8Array.from([0xff, 0xd8, 0xff, 1]));
+    await expect(host.write('same.jpg', Uint8Array.from([0xff, 0xd8, 0xff, 2, 2]))).resolves.toMatch(/^file:\/\//);
+    expect(await host.read('same.jpg')).toEqual(Uint8Array.from([0xff, 0xd8, 0xff, 2, 2]));
     expect(await host.list('')).toEqual([{ name: 'same.jpg', mtimeMs: expect.any(Number) }]);
+  });
+  it('keeps the old content and leaves no part file when the commit itself fails', async () => {
+    const realFs = await import('node:fs/promises');
+    const failingRename = { ...realFs, rename: async () => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); } };
+    const media = join(root, 'rename-media');
+    const old = createFilesHost({ fs: realFs, mediaRoot: media, cacheRoot: join(root, 'rename-cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
+    await old.write('same.jpg', Uint8Array.from([0xff, 0xd8, 0xff, 1]));
+    await old.dispose();
+    const failing = createFilesHost({ fs: failingRename as never, mediaRoot: media, cacheRoot: join(root, 'rename-cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
+    await expect(failing.write('same.jpg', Uint8Array.from([0xff, 0xd8, 0xff, 2]))).rejects.toMatchObject({ code: 'EPERM' });
+    expect(await failing.read('same.jpg')).toEqual(Uint8Array.from([0xff, 0xd8, 0xff, 1]));
+    expect(await failing.list('')).toEqual([{ name: 'same.jpg', mtimeMs: expect.any(Number) }]);
+    await failing.dispose();
   });
   it('cleans only its own part file after a stream write error', async () => {
     const realFs = await import('node:fs/promises');
@@ -147,10 +158,10 @@ describe('createFilesHost', () => {
     let finishLink!: () => void;
     let enteredLink!: () => void;
     const linkEntered = new Promise<void>((resolve) => { enteredLink = resolve; });
-    const gatedFs = { ...realFs, link: async (...args: Parameters<typeof realFs.link>) => {
+    const gatedFs = { ...realFs, rename: async (...args: Parameters<typeof realFs.rename>) => {
       enteredLink();
       await new Promise<void>((resolve) => { finishLink = resolve; });
-      return realFs.link(...args);
+      return realFs.rename(...args);
     } };
     const timed = createFilesHost({ fs: gatedFs as never, mediaRoot: join(root, 'commit-media'), cacheRoot: join(root, 'commit-cache'), clock: { now: Date.now, setTimeout: ((callback: () => void) => { callbacks.push(callback); return callbacks.length as never; }) as unknown as typeof setTimeout, clearTimeout: (() => undefined) as typeof clearTimeout } });
     const { handle } = await timed.stream.open('cache', 'commit.bin');

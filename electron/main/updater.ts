@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { UpdaterState } from '../shared/ipc-contract.ts';
+import type { LogEvent } from './logger.ts';
 
 export interface AutoUpdaterLike {
   autoDownload: boolean;
@@ -72,7 +73,7 @@ export function createUpdaterHost(deps: {
   shutdown(): Promise<void>;
   timers: UpdaterTimerPort;
   random: () => number;
-  log(code: string): void;
+  log(code: LogEvent): void;
 }): UpdaterHost {
   const { autoUpdater } = deps;
   autoUpdater.autoDownload = false;

@@ -319,11 +319,13 @@ export function createFilesHost(deps: FilesHostDeps): FilesBridge & { dispose():
           }
           await item.file.sync();
           await item.file.close();
-          await fs.link(item.partPath, item.targetPath);
+          // Renaming over the target replaces it in one step (MoveFileEx with MOVEFILE_REPLACE_EXISTING), so a write
+          // to a path that is already there overwrites it, as the other platforms do, and a reader never sees a torn
+          // file: until the rename the old content is intact, and a failed rename leaves it so (cleanup drops the part).
+          await fs.rename(item.partPath, item.targetPath);
           if (item.area === 'media' && !existing) mediaCount += 1;
           const uri = pathToFileURL(item.targetPath).href;
           item.done = true; active.delete(handle); release();
-          await fs.unlink(item.partPath).catch(() => undefined);
           return uri;
           } catch (error) {
             item.committing = false;

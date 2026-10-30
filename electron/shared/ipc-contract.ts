@@ -169,6 +169,10 @@ export const CHANNELS = {
   media: { decodeHeic: 'media:decode-heic' },
 } as const;
 
+type LeafValues<T> = T extends string ? T : { [K in keyof T]: LeafValues<T[K]> }[keyof T];
+/** The name of any request channel, as a literal union. */
+export type ChannelName = LeafValues<typeof CHANNELS>;
+
 /** Event channels (`webContents.send` to a preload listener). The listener receives the payload and nothing else. */
 export const EVENT_CHANNELS = {
   uploaderEvent: 'uploader:event',

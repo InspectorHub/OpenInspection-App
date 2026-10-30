@@ -19,7 +19,12 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
   mkdir: vi.fn(async () => { state.order.push('mkdir-secrets'); state.secretsDirExists = true; }),
   readdir: vi.fn(async () => []),
 }));
-vi.mock('node:child_process', () => ({ spawnSync: state.spawn }));
+vi.mock('node:child_process', () => ({
+  execFile: (command: string, args: string[], _options: unknown, done: (error: (Error & { code: number }) | null, stdout: string, stderr: string) => void) => {
+    const result = state.spawn(command, args) as { status: number; stdout: string; stderr: string };
+    queueMicrotask(() => done(result.status === 0 ? null : Object.assign(new Error('exit'), { code: result.status }), result.stdout, result.stderr));
+  },
+}));
 vi.mock('electron', () => ({
   app: Object.assign(state.app, {
     isPackaged: false, commandLine: { hasSwitch: vi.fn(() => false) },

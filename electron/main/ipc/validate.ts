@@ -3,8 +3,9 @@
  * typed, or throws `InvalidArgumentError`. An argument that is missing, extra, of the wrong type or over its ceiling
  * is refused; an object with a key the contract does not name is refused too.
  */
-import { MAX_DECODE_INPUT_BYTES, MAX_MEDIA_BYTES } from '../../../src/media/media-types.ts';
+import { isStreamUploadUrl, MAX_DECODE_INPUT_BYTES, MAX_MEDIA_BYTES } from '../../../src/media/media-types.ts';
 import type { DbParam, DecodeHeicRequest, UploaderStartOptions } from '../../shared/ipc-contract.ts';
+import { RESERVED_SECRET_KEYS } from '../data/reserved-secrets.ts';
 import { DB_PARAM_STRING_MAX, DB_PARAMS_MAX, IPC_BYTES_MAX } from '../../shared/ipc-byte-limits.ts';
 
 export class InvalidArgumentError extends Error {
@@ -93,7 +94,6 @@ function uploadOptions(value: unknown): UploaderStartOptions {
   if (typeof retries !== 'number' || !Number.isInteger(retries) || retries < 0 || retries > 5) return fail();
   if (Object.keys(headers).some((name) => name !== 'x-client-version' && name !== 'x-client-platform')) return fail();
   if (Object.keys(headers).some((name) => name !== name.toLowerCase())) return fail();
-  if (headers['x-client-platform'] !== 'windows' || (headers['x-client-version'] !== undefined && !/^[0-9A-Za-z.+-]{1,32}$/.test(headers['x-client-version']))) return fail();
   if (typeof value.fileField !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(value.fileField)) return fail();
   if (typeof value.mimeType !== 'string' || !['image/jpeg', 'image/png', 'image/heic', 'video/mp4', 'video/quicktime'].includes(value.mimeType)) return fail();
   if (typeof value.notificationTitle !== 'string' || value.notificationTitle.length < 1 || value.notificationTitle.length > 80 || CONTROL_CHARACTERS.test(value.notificationTitle)) return fail();
@@ -101,6 +101,10 @@ function uploadOptions(value: unknown): UploaderStartOptions {
   let serverUrl: URL;
   try { serverUrl = new URL(value.serverUrl); } catch { return fail(); }
   if ((serverUrl.protocol !== 'https:' && serverUrl.protocol !== 'http:') || serverUrl.username || serverUrl.password || serverUrl.hash) return fail();
+  // A Stream direct-upload url is a third-party host: it carries no client headers. Every other destination is the engine's.
+  if (isStreamUploadUrl(serverUrl)) {
+    if (Object.keys(headers).length > 0) return fail();
+  } else if (headers['x-client-platform'] !== 'windows' || (headers['x-client-version'] !== undefined && !/^[0-9A-Za-z.+-]{1,32}$/.test(headers['x-client-version']))) return fail();
   return {
     filePath: nonEmptyText(URL_MAX)(value.filePath),
     serverUrl: nonEmptyText(URL_MAX)(value.serverUrl),
@@ -138,6 +142,8 @@ function decodeRequest(value: unknown): DecodeHeicRequest {
 const path = nonEmptyText(PATH_MAX);
 const KEY_PATTERN = /^(?!.*\.\.[\\/])[\x21-\x7e]{1,256}$/;
 const key = (value: unknown): string => (typeof value === 'string' && KEY_PATTERN.test(value) ? value : fail());
+/** A key the renderer may use: the main process keeps some secrets (the database key) for itself. */
+const secretKey = (value: unknown): string => (RESERVED_SECRET_KEYS.includes(key(value)) ? fail() : key(value));
 const sql = nonEmptyText(SQL_MAX);
 const utf8Text = (maxBytes: number) => (value: unknown): string => {
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > maxBytes) return fail();
@@ -158,9 +164,9 @@ export const validators = {
     setAsideUnreadable: none,
   },
   secrets: {
-    get: one(key),
-    set: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [key, utf8Text(SECRET_VALUE_MAX)]),
-    remove: one(key),
+    get: one(secretKey),
+    set: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [secretKey, utf8Text(SECRET_VALUE_MAX)]),
+    remove: one(secretKey),
   },
   kv: {
     get: one(key),

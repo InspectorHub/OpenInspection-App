@@ -23,6 +23,19 @@ describe('OpenFailed', () => {
     expect(setAsideUnreadable).not.toHaveBeenCalled();
   });
 
+  it('keeps the original static message, with no desktop-only controls, where there is no desktop bridge', () => {
+    render(<OpenFailed />);
+    expect(screen.getByRole('heading', { name: 'InspectorHub could not open' })).toBeInTheDocument();
+    expect(screen.getByText('The app could not open its storage on this device. Close the app and open it again. Your data has not been changed.')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
+    cleanup();
+    // Positive control: the same render with the bridge present does show the desktop controls.
+    window.oiDesktop = { apiVersion: 1 } as never;
+    render(<OpenFailed />);
+    expect(screen.getByRole('button', { name: 'Quit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open data folder' })).toBeInTheDocument();
+  });
+
   it.each([
     ['encryption-unavailable', 'Database encryption is unavailable on this computer. Your data has not been changed.'],
     ['corrupt', 'The local data could not be read. Your data has not been changed.'],

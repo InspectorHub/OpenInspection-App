@@ -5,6 +5,8 @@ import { basename, dirname, join } from 'node:path';
 import { assertSchemaShape, CURRENT_SCHEMA_VERSION, migrate, readSchemaVersion, SchemaDriftError, SchemaTooNewError } from '../../../src/platform/schema.ts';
 import { createDb, type Db } from '../../../src/platform/db.ts';
 import type { DbRow, DbParam, OpenReason } from '../../shared/ipc-contract.ts';
+import type { LogEvent } from '../logger.ts';
+import { DB_KEY_NAME } from './reserved-secrets.ts';
 import { SecretUnreadableError, type FsLike as SecretsFsLike, type SecretsHost } from './secrets.ts';
 import { createDbHost, type DbHost, type SqliteConnection } from './db-host.ts';
 
@@ -18,7 +20,6 @@ export interface DbFsLike extends SecretsFsLike {
 export type DbOpenOutcome = { ok: true; schemaVersion: number } | { ok: false; reason: OpenReason };
 
 const DB_FILE = 'inspectorhub.db';
-const KEY_NAME = 'db-key';
 const HEX_32 = /^[0-9a-f]{64}$/;
 const defaultFs = nodeFs as unknown as DbFsLike;
 
@@ -58,7 +59,7 @@ export async function openDesktopDb(deps: {
   open(file: string): SqliteConnection;
   fs?: DbFsLike;
   now(): number;
-  log(code: string): void;
+  log(code: LogEvent): void;
 }): Promise<{ outcome: DbOpenOutcome; host: DbHost | null }> {
   const fs = deps.fs ?? defaultFs;
   const file = join(deps.dbDir, DB_FILE);
@@ -69,7 +70,7 @@ export async function openDesktopDb(deps: {
   if (!deps.secrets.available) return { outcome: { ok: false, reason: 'encryption-unavailable' }, host: null };
 
   let keyText: string | null;
-  try { keyText = await deps.secrets.get(KEY_NAME); }
+  try { keyText = await deps.secrets.get(DB_KEY_NAME); }
   catch (error) {
     if (error instanceof SecretUnreadableError) return { outcome: { ok: false, reason: 'key-unreadable' }, host: null };
     deps.log('db-key-read-failed');
@@ -78,7 +79,7 @@ export async function openDesktopDb(deps: {
   if (keyText === null) {
     if (existed) return { outcome: { ok: false, reason: 'key-unreadable' }, host: null };
     keyText = randomBytes(32).toString('hex');
-    try { await deps.secrets.set(KEY_NAME, keyText); }
+    try { await deps.secrets.set(DB_KEY_NAME, keyText); }
     catch { deps.log('db-key-write-failed'); return { outcome: { ok: false, reason: 'io' }, host: null }; }
   }
   if (!HEX_32.test(keyText)) return { outcome: { ok: false, reason: 'key-unreadable' }, host: null };
@@ -148,7 +149,7 @@ export async function setAsideUnreadableDatabase(deps: {
 
   // On retry, a missing active directory means an earlier attempt already preserved it before key rotation failed.
   const freshKey = randomBytes(32).toString('hex');
-  await deps.secrets.set(KEY_NAME, freshKey);
+  await deps.secrets.set(DB_KEY_NAME, freshKey);
   return archive;
 }
 
