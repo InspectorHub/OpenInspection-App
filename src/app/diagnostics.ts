@@ -22,5 +22,18 @@ export function createDiagnosticRing<C extends string>(capacity: number = DIAGNO
   };
 }
 
-/** The app-wide ring: the codes of every stack this process built, and of the stack factory itself. */
-export const appDiagnostics: DiagnosticRing<StackDiagnostic> = createDiagnosticRing<StackDiagnostic>();
+/**
+ * A photo that was answered as a plain failure and is not kept: `photo_not_kept:<site>:<detail>:<online|offline|unknown>`.
+ * The site and detail come from fixed vocabularies (`field/uploader.ts`); no name, path, token or message is ever part of it.
+ */
+export type PhotoDiagnostic = `photo_not_kept:${string}`;
+
+const ring = createDiagnosticRing<StackDiagnostic | PhotoDiagnostic>();
+
+/** The app-wide ring: the codes of every stack this process built, of the stack factory itself and of the photo uploader. */
+export const appDiagnostics: DiagnosticRing<StackDiagnostic | PhotoDiagnostic> = {
+  push: (code) => {
+    ring.push(code);
+  },
+  recent: () => ring.recent(),
+};

@@ -10,6 +10,7 @@ import type { WithDoc } from '../media/pending-doc';
 import type { MediaStore } from '../media/store';
 import type { IsBlocked } from '../offline/blocked';
 import type { Files } from '../platform/files';
+import type { PhotoDiagnostic } from '../app/diagnostics';
 import { MESSAGES } from './messages';
 import type { ForegroundUploads } from './uploader-foreground';
 
@@ -63,6 +64,13 @@ export interface UploaderDeps {
   onError?(error: unknown): void;
   /** Spaces the tries to write the document entry while the editor's document is not available. */
   timers?: TimerPort;
+  /**
+   * Receives one fixed code whenever a photo is answered as a plain failure that is not a policy refusal (so the person
+   * is told it failed and it is not kept). Codes only: never a name, a path, a token or a message.
+   */
+  onDiagnostic?(code: PhotoDiagnostic): void;
+  /** Whether the OS reports a network link; only added to the diagnostic code. */
+  isOnline?(): boolean;
 }
 
 /**
@@ -75,6 +83,9 @@ const ENTRY_TRIES = 3;
 const ENTRY_RETRY_MS = 500;
 
 const fail = (error: string): Result => ({ ok: false, error });
+
+/** Where a photo was answered as a plain failure; the first part of its diagnostic code. */
+type LossSite = 'blocked_at_start' | 'blocked_outcome' | 'unexpected_throw' | 'store_refused' | 'store_trouble_direct_failed' | 'nothing_to_keep' | 'row_mismatch' | 'entry_missing_for_queued' | 'entry_failed' | 'entry_blocked';
 
 function uploadFailureMessage(code: UploadFailureCode): string {
   switch (code) {
@@ -167,14 +178,29 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
   const timers = deps.timers ?? realTimers;
   const pause = (ms: number): Promise<void> => new Promise((resolve) => timers.setTimeout(resolve, ms));
 
+  /** Tells the diagnostic sink, once, that a photo was answered as a plain failure. Never throws. */
+  function lost(site: LossSite, detail: string): void {
+    try {
+      let online = 'unknown';
+      try {
+        if (deps.isOnline !== undefined) online = deps.isOnline() ? 'online' : 'offline';
+      } catch {
+        // The link state is only a detail of the code.
+      }
+      deps.onDiagnostic?.(`photo_not_kept:${site}:${detail}:${online}`);
+    } catch {
+      // A failing reporter changes nothing about the answer.
+    }
+  }
+
   /** Adds the pending entry of a kept photo. 'added' also covers an entry that was already there. */
-  async function addEntry(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<'added' | 'blocked' | 'failed'> {
+  async function addEntry(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<'added' | 'blocked' | { failed: string }> {
     for (let attempt = 1; attempt <= ENTRY_TRIES; attempt += 1) {
       try {
         const answer = await deps.withDoc(inspectionId, (doc) => appendPendingInDoc(doc, rec.meta.findingKey, rec.meta.itemId, rec.pendingId));
         if (answer === 'invalid_key') {
           deps.onError?.(new MediaError('INVALID_RECORD'));
-          return 'failed';
+          return { failed: 'INVALID_RECORD' };
         }
         return 'added';
       } catch (error) {
@@ -184,10 +210,10 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
           continue;
         }
         deps.onError?.(error);
-        return 'failed';
+        return { failed: isMediaError(error) ? error.code : 'UNKNOWN' };
       }
     }
-    return 'failed';
+    return { failed: 'DOC_BUSY' };
   }
 
   /**
@@ -218,9 +244,16 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
    * only the store's own decision about the type or size (a policy refusal) is permanent, and that is never sent.
    */
   async function afterStoreFailure(rec: Extract<PendingMediaRecord, { kind: 'photo' }>, error: unknown): Promise<Result> {
-    if (!isStoreTrouble(error)) return storeFailure(error);
+    const code = isMediaError(error) ? error.code : 'UNKNOWN';
+    if (!isStoreTrouble(error)) {
+      const refused = storeFailure(error);
+      if (!refused.ok && refused.permanent !== true) lost('store_refused', code);
+      return refused;
+    }
     const direct = await (rec.meta.targetType === 'defect' ? deps.foreground.defectPhoto(rec) : deps.foreground.itemPhotoDirect(rec));
-    return direct.ok ? direct : storeFailure(error);
+    if (direct.ok) return direct;
+    lost('store_trouble_direct_failed', code);
+    return storeFailure(error);
   }
 
   async function storedPhoto(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<Result> {
@@ -235,6 +268,7 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       }
     } else if (existing.inspectionId !== inspectionId || existing.kind !== 'photo' || (defectTargetOf(existing) !== null) !== isDefect) {
       // The id belongs to another record (or to a photo of the other sort): nothing here may be sent or removed under it.
+      lost('row_mismatch', 'NONE');
       return fail(MESSAGES.photoNotPrepared);
     }
     let outcome: Awaited<ReturnType<NativeUploader['uploadDetailed']>>;
@@ -251,9 +285,13 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     }
     const error = uploadFailureMessage(outcome.code);
     // A blocked inspection's row is the quarantine's or the purge's to deal with.
-    if (outcome.code === 'BLOCKED') return fail(error);
+    if (outcome.code === 'BLOCKED') {
+      lost('blocked_outcome', outcome.code);
+      return fail(error);
+    }
     if (leavesNothingToKeep(outcome.code, outcome.retryable)) {
       if (created) await removeRow(rec.pendingId);
+      lost('nothing_to_keep', outcome.code);
       return fail(error);
     }
     // A kept refusal that no retry can mend (a native TOO_LARGE or a permanent 4xx) is a `failed` row at the maximum
@@ -262,15 +300,19 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     if (isDefect) return { ok: false, error, kept: true };
     // A queued row's entry is the editor's, and is never written or repaired here (a version restore may have removed
     // it on purpose): `kept` is claimed only when the document really holds it.
-    if (!created) return (await entryExists(inspectionId, rec)) ? { ok: false, error, kept: true } : fail(error);
-    switch (await addEntry(inspectionId, rec)) {
-      case 'added':
-        return { ok: false, error, kept: true };
-      case 'blocked':
-        return fail(MESSAGES.blocked);
-      default:
-        return fail(MESSAGES.photoKeptNotAdded);
+    if (!created) {
+      if (await entryExists(inspectionId, rec)) return { ok: false, error, kept: true };
+      lost('entry_missing_for_queued', outcome.code);
+      return fail(error);
     }
+    const entry = await addEntry(inspectionId, rec);
+    if (entry === 'added') return { ok: false, error, kept: true };
+    if (entry === 'blocked') {
+      lost('entry_blocked', outcome.code);
+      return fail(MESSAGES.blocked);
+    }
+    lost('entry_failed', `${entry.failed}:${outcome.code}`);
+    return fail(MESSAGES.photoKeptNotAdded);
   }
 
   async function route(inspectionId: string, doc: Y.Doc | null, rec: PendingMediaRecord): Promise<Result> {
@@ -299,12 +341,16 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     upload: async (rec) => {
       try {
         if (rec.inspectionId !== inspectionId) return fail(MESSAGES.unavailable);
-        if (await deps.isBlocked(inspectionId)) return fail(MESSAGES.blocked);
+        if (await deps.isBlocked(inspectionId)) {
+          lost('blocked_at_start', 'NONE');
+          return fail(MESSAGES.blocked);
+        }
         const result = await route(inspectionId, doc, rec);
         if (!result.ok && result.kept === true) announceKept(inspectionId, rec);
         return result;
       } catch {
         // Nothing of the error is shown: it may carry a path or a server's words.
+        lost('unexpected_throw', 'NONE');
         return fail(MESSAGES.requestFailed);
       }
     },

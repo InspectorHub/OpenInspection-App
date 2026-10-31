@@ -1,4 +1,5 @@
 import type { CollabConnector, CommandData, CommandResult, ExecuteOptions, FieldCommand, FieldDataSource, NotifyOptions, NotifyVariant, SessionInfo } from '@inspectorhub/field-ui';
+import type { PhotoDiagnostic } from '../app/diagnostics';
 import type { NativeUploader } from '../media/native-uploader';
 import type { MediaStore } from '../media/store';
 import { createBlockedGuard, type IsBlocked } from '../offline/blocked';
@@ -116,6 +117,8 @@ export interface LocalDataSourceDeps {
   onCacheStale?(inspectionId: string): void;
   /** Receives the failures the modules swallow. Never receives a token or a path. */
   onError?(error: unknown): void;
+  /** Receives the fixed code of a photo that was answered as a plain failure and not kept (`uploader.ts`). Codes only. */
+  onDiagnostic?(code: PhotoDiagnostic): void;
   /** The stack's document step for clips: bound to the real one here. */
   resolveVideo?: DeferredResolveVideo;
   /** Optional host decoder for image formats the browser cannot decode. */
@@ -196,6 +199,8 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       isSynced: (inspectionId) => deps.registry.getHandle(inspectionId)?.synced() ?? false,
     }),
     onError: report,
+    isOnline: () => deps.network.isOnline(),
+    ...(deps.onDiagnostic === undefined ? {} : { onDiagnostic: deps.onDiagnostic }),
     onKept: createKeptNotice({ timers: deps.timers, say: (message) => say(message, 'info') }),
   });
 

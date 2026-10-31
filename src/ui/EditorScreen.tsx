@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FieldDataSourceProvider, FieldEditor, escapeWillBeHandled, type EditorData, type FieldDataSource, type FieldHostSlots } from '@inspectorhub/field-ui';
 import { clientPolicy } from '../app/client-state';
 import type { AppServices } from '../app/compose';
+import { appDiagnostics } from '../app/diagnostics';
 import { editorPorts } from '../app/editor-ports';
 import type { OfflineStack } from '../app/offline-stack';
 import { useClientState } from '../app/use-client-state';
@@ -152,6 +153,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           session,
           origin,
           canEdit: ports.canEdit,
+          onDiagnostic: appDiagnostics.push,
           platform: services.platform,
           signedAtMs: () => services.clock.now(),
           clock: services.clock,
