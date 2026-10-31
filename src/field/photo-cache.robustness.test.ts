@@ -35,6 +35,25 @@ describe('photo cache: one writer per file', () => {
     await settle();
     expect(cacheWrites(r.files)).toHaveLength(2);
   });
+
+  it('a lookup that finishes while prime is still reading the same file does not get written a second time (gated, no timing)', async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const reader = Object.assign(() => Promise.resolve(local()), {
+      // prime has already found nothing cached for the key when it waits here.
+      open: () => Promise.resolve(async () => (await gate, local())),
+    });
+    const r = await rig({ localCopy: reader });
+    const primed = r.cache.prime(INSPECTION, [key('p1')]);
+    await settle();
+    r.cache.lookup(INSPECTION, key('p1'), 'thumb');
+    await settle();
+    expect(cacheWrites(r.files)).toHaveLength(1);
+    open();
+    await primed;
+    expect(cacheWrites(r.files)).toHaveLength(1);
+    expect(await r.db.query('SELECT 1 FROM photo_cache')).toHaveLength(1);
+  });
 });
 
 describe('photo cache: prime', () => {

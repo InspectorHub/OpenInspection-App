@@ -186,6 +186,8 @@ export function createPhotoCache(deps: PhotoCacheDeps): PhotoCache {
     const id = idOf(inspectionId, key, size);
     const running = storing.get(id);
     if (running !== undefined) return running;
+    // A caller checked for this copy, then waited (a file read) while another store finished it: nothing left to write.
+    if (memo.has(id)) return Promise.resolve();
     const writing = storeNow(inspectionId, key, size, kind, bytes, evictNow).finally(() => storing.delete(id));
     storing.set(id, writing);
     return writing;
