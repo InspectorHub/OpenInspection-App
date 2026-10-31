@@ -13,8 +13,8 @@ import { createUploaderWorld, type UploaderWorld } from './test-support/uploader
  * pushes at the end, then `findings.orderPhotoBatch`) on top of the app's real uploader, store, background uploader and
  * pending-entry code.
  *
- * THIS IS A MODEL. field-ui 0.6.1 does not export `orderPhotoBatch`, `attachPhotoBatch` or `usePhotoBatchUpload`, so
- * `orderPhotoBatch` below is a hand copy of `src/shared/photo-batch-order.ts` of 0.6.1. The version pin at the bottom forces a
+ * THIS IS A MODEL. field-ui 0.6.2 does not export `orderPhotoBatch`, `attachPhotoBatch` or `usePhotoBatchUpload`, so
+ * `orderPhotoBatch` below is a hand copy of `src/shared/photo-batch-order.ts` of 0.6.2. The version pin at the bottom forces a
  * re-read of that function whenever the package changes.
  */
 const FK = '_default:s1:i1';
@@ -58,7 +58,7 @@ function attach(doc: Y.Doc, keys: string[]): void {
   }
 }
 
-/** Hand copy of field-ui 0.6.1 `orderPhotoBatch`: put the named entries into the slots they already occupy, in selection order. */
+/** Hand copy of field-ui 0.6.2 `orderPhotoBatch`: put the named entries into the slots they already occupy, in selection order. */
 function orderPhotoBatch(doc: Y.Doc, selection: Named[]): void {
   const arr = itemPhotos(doc);
   const matches = (el: Y.Map<unknown>, n: Named): boolean => ('key' in n ? el.get('key') === n.key : n.pendingId !== '' && el.get('pendingId') === n.pendingId);
@@ -88,13 +88,15 @@ function orderPhotoBatch(doc: Y.Doc, selection: Named[]): void {
   });
 }
 
-/** `attachPhotoBatch` of 0.6.1: attach the keys, then order the whole selection (successes by key, kept ones by pendingId). */
+/**
+ * `attachPhotoBatch` of 0.6.2: attach the keys, then order the whole selection (successes by key, kept ones by pendingId).
+ * Since 0.6.2 the ordering step runs even when no file succeeded (0.6.1 returned early when there were no keys); it is skipped
+ * only for an empty selection.
+ */
 function attachBatch(doc: Y.Doc, batch: { keys: string[]; results: Array<{ ok: boolean; kept?: boolean; key?: string }> }, records: Photo[]): void {
   attach(doc, batch.keys);
-  orderPhotoBatch(
-    doc,
-    batch.results.flatMap((r, i): Named[] => (r.ok && r.key !== undefined ? [{ key: r.key }] : r.kept === true ? [{ pendingId: (records[i] as Photo).pendingId }] : [])),
-  );
+  const selection = batch.results.flatMap((r, i): Named[] => (r.ok && r.key !== undefined ? [{ key: r.key }] : r.kept === true ? [{ pendingId: (records[i] as Photo).pendingId }] : []));
+  if (selection.length > 0) orderPhotoBatch(doc, selection);
 }
 
 const records = (n: number): Photo[] => Array.from({ length: n }, (_, i) => ({ ...photoRecord(`batch-${i + 1}`, { seed: i + 10 }) }));
@@ -129,9 +131,46 @@ describe('a selection where some uploads fail and are kept', () => {
     expect(entries.map(idOf)).toEqual(['batch-1', 'batch-2', 'batch-3', 'batch-4', 'batch-5']);
   });
 
-  it('is modelled on field-ui 0.6.1; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
+  it('is modelled on field-ui 0.6.2; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
     const manifest = JSON.parse(readFileSync('node_modules/@inspectorhub/field-ui/package.json', 'utf8')) as { version: string };
-    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.6.1');
+    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.6.2');
+  });
+});
+
+describe('a selection where EVERY upload fails and is kept', () => {
+  const idOf = (entry: Record<string, unknown>): string => (typeof entry.pendingId === 'string' ? entry.pendingId : '');
+
+  it('keeps all five in selection order although the pending entries were written in completion order', async () => {
+    const w = await createUploaderWorld();
+    seedPhotos(w.doc, FK, []);
+    w.plugin.script = Array.from({ length: 5 }, () => ({ kind: 'fail' as const }));
+    const recs = records(5);
+    const uploader = w.factory(INSPECTION, w.doc);
+    // Hold every upload at a gate and release them in the order 3, 1, 5, 2, 4, waiting for each to finish before the next.
+    const gates = recs.map(() => {
+      let open: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return { promise, open };
+    });
+    const runs = recs.map(async (rec, i) => {
+      await (gates[i] as { promise: Promise<void> }).promise;
+      const out = await uploader.upload(rec);
+      return out.ok ? { ok: true as const, key: out.key } : { ok: false as const, kept: out.kept === true };
+    });
+    const finished: Array<{ ok: boolean; kept?: boolean; key?: string }> = new Array(5);
+    for (const i of [2, 0, 4, 1, 3]) {
+      (gates[i] as { open: () => void }).open();
+      finished[i] = await (runs[i] as Promise<{ ok: boolean; kept?: boolean; key?: string }>);
+    }
+    const batch = { keys: [] as string[], results: finished };
+    expect(batch.results.every((r) => !r.ok && r.kept === true)).toBe(true);
+    // The bare attach has nothing to attach and leaves the entries in completion order.
+    attach(w.doc, batch.keys);
+    expect(photosOf(w.doc, FK).map(idOf)).toEqual(['batch-3', 'batch-1', 'batch-5', 'batch-2', 'batch-4']);
+    attachBatch(w.doc, batch, recs);
+    expect(photosOf(w.doc, FK).map(idOf)).toEqual(['batch-1', 'batch-2', 'batch-3', 'batch-4', 'batch-5']);
   });
 });
 
