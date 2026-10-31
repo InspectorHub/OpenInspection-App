@@ -279,3 +279,31 @@ describe('what the person is told afterwards', () => {
     expect(within(result).getByText(/could not be deleted/)).toBeInTheDocument();
   });
 });
+
+describe('nothing to export', () => {
+  it('says so at once with no confirmation question, on Android and on Windows', async () => {
+    for (const platform of ['android', 'windows'] as const) {
+      cleanup();
+      const world = await createExportWorld();
+      view(world, { services: { db: world.db, files: world.files, clock: world.clock, platform, sharer: world.sharer } });
+      const result = await screen.findByRole('dialog');
+      expect(within(result).getByRole('heading', { name: 'Nothing to export' })).toBeInTheDocument();
+      expect(within(result).getByText('There is nothing to export.')).toBeInTheDocument();
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Export' })).toBeNull();
+      expect(world.sharer.calls).toEqual([]);
+    }
+  });
+
+  it('control: with something to export the question is still asked, and the Windows result has no share sheet wording', async () => {
+    const world = await createExportWorld();
+    await threeWithOneQuarantined(world);
+    view(world, { services: { db: world.db, files: world.files, clock: world.clock, platform: 'windows', sharer: world.sharer } });
+    await ready();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Export' }));
+    const result = await screen.findByRole('dialog');
+    expect(within(result).getByText(/^Export saved: /)).toBeInTheDocument();
+    expect(result.textContent).not.toMatch(/share sheet/i);
+    expect(result.textContent).toContain('The temporary file was deleted from this device after saving.');
+  });
+});

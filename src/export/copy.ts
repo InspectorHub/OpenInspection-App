@@ -1,3 +1,4 @@
+import type { ClientPlatform } from '../app/compose';
 import type { ExportDone, ExportFailure } from './exporter';
 
 /** The words the person reads around an export. Fixed sentences: nothing from a row, a payload or the server is ever put in one. */
@@ -20,7 +21,7 @@ export const WORKING_TEXT = 'Preparing the export…';
 
 export const UNCONFIRMED_NOTICE = 'We could not confirm these inspections still exist, so the receiving office may refuse some of them.';
 
-export const NOTHING_TO_EXPORT = 'There is nothing on this device to export.';
+export const NOTHING_TO_EXPORT = 'There is nothing to export.';
 
 export const PREPARE_FAILED_TEXT = 'The app could not check what this device holds. You can still export, or try the check again.';
 export const PREPARE_RETRY_LABEL = 'Check again';
@@ -33,6 +34,12 @@ export const FAILURE_TEXT: Record<ExportFailure | 'busy' | 'unexpected', string>
   busy: 'An export is already running.',
   unexpected: 'The export did not finish. Nothing on this device was changed. Try again.',
 };
+
+/** The words for a failure. Windows saves through a save dialog, so it never talks about a share sheet. */
+export function failureText(code: keyof typeof FAILURE_TEXT, platform: ClientPlatform): string {
+  if (code === 'share_failed' && platform === 'windows') return 'The file could not be saved. Nothing on this device was changed. Try again.';
+  return FAILURE_TEXT[code];
+}
 
 function plural(count: number, one: string, many: string): string {
   return `${String(count)} ${count === 1 ? one : many}`;
@@ -63,11 +70,21 @@ export function changedText(count: number): string {
 export const KEPT_TEXT = 'The temporary file will be deleted within 10 minutes.';
 export const DELETED_TEXT = 'The temporary file was deleted from this device.';
 
-/** What an export that reached the share sheet contained, and what happens to the temporary file. */
-export function summaryText(done: ExportDone): string {
-  const parts = [plural(done.inspections, 'inspection', 'inspections'), plural(done.photos, 'photo', 'photos'), plural(done.writes, 'change waiting to upload', 'changes waiting to upload')];
-  const file = done.kept ? KEPT_TEXT : DELETED_TEXT;
-  return done.kind === 'cancelled' ? `Sharing was cancelled or did not finish. It held ${parts.join(', ')}. ${file}` : `Export handed to the share sheet: ${parts.join(', ')}. ${file}`;
+export const DELETED_AFTER_SAVING_TEXT = 'The temporary file was deleted from this device after saving.';
+
+/**
+ * What an export contained, and what happens to the temporary file. Android and iOS hand the file to the share sheet; Windows
+ * copies it to the place the person chose in a save dialog and then deletes the temporary file. A file that should have gone and
+ * did not is described by the leftover notice instead, so no sentence here claims a deletion that did not happen.
+ */
+export function summaryText(done: ExportDone, platform: ClientPlatform = 'android'): string {
+  const parts = [plural(done.inspections, 'inspection', 'inspections'), plural(done.photos, 'photo', 'photos'), plural(done.writes, 'change waiting to upload', 'changes waiting to upload')].join(', ');
+  const desktop = platform === 'windows';
+  const file = done.kept ? KEPT_TEXT : done.leftover ? '' : desktop ? DELETED_AFTER_SAVING_TEXT : DELETED_TEXT;
+  const head = done.kind === 'cancelled'
+    ? `${desktop ? 'Saving' : 'Sharing'} was cancelled or did not finish. It held ${parts}.`
+    : desktop ? `Export saved: ${parts}.` : `Export handed to the share sheet: ${parts}.`;
+  return file === '' ? head : `${head} ${file}`;
 }
 
 /** Things the package could not carry or left out, in the order the person should care about them. */

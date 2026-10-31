@@ -30,18 +30,6 @@ test.afterEach(async () => {
   expect(engineErrors, 'unexpected request-body read errors on the loopback engine').toEqual([]);
 });
 
-/**
- * test.fail passes on ANY throw, so a defect test must not let a timeout or a missing spy count as the expected failure.
- * Run the precondition steps through this: a failed precondition is recorded and the caller returns early, so the test PASSES
- * and test.fail reports it red ("expected to fail"), instead of the problem being swallowed as the defect.
- */
-async function preconditions(steps: () => Promise<void>): Promise<boolean> {
-  try { await steps(); return true; } catch (error) {
-    test.info().annotations.push({ type: 'PRECONDITION-FAILED', description: String(error instanceof Error ? error.message : error).slice(0, 400) });
-    return false;
-  }
-}
-
 /** Wraps the Electron calls once per launch. Notification#show and the power-save blocker are recorded WITHOUT reaching the OS. */
 async function installSpies(app: ElectronApplication, focused: boolean): Promise<void> {
   await app.evaluate(({ BrowserWindow, Notification, powerSaveBlocker }, initialFocus) => {
@@ -152,14 +140,11 @@ test.describe('A. taskbar progress', () => {
     expect(calls.filter((call) => call.mode === 'error'), 'a clean batch never shows the error colour').toEqual([]);
   });
 
-  // The plan says the taskbar shows upload progress. The bar is the mean percent of the uploads that are ACTIVE right now
-  // (taskbar.ts render: sum / activeCount), so it falls back towards 0 every time a new photo starts and sawtooths for the
-  // whole batch instead of climbing. Expectation: non-decreasing within one batch. TODO(defect): compute completed/total
-  // over the batch, or the maximum of what was shown so far.
-  test.fail('setProgressBar never goes backwards inside one batch (DEFECT: sawtooth per photo)', async () => {
+  // Progress is completed/total over the batch with a high-water mark (electron/main/lifecycle/batch.ts), so it never moves backwards.
+  test('setProgressBar never goes backwards inside one batch', async () => {
     test.setTimeout(120_000);
-    let all: number[] = [];
-    if (!await preconditions(async () => { all = await progressBatch(); expect(all.length, 'spy installed and saw calls').toBeGreaterThan(0); })) return;
+    const all = await progressBatch();
+    expect(all.length, 'spy installed and saw calls').toBeGreaterThan(0);
     const values = all.filter((value) => value >= 0);
     const drops = values.filter((value, index) => index > 0 && value < values[index - 1]! - 1e-9).length;
     test.info().annotations.push({ type: 'progress-drops', description: `${String(drops)} drops in ${String(values.length)} calls` });
@@ -206,22 +191,17 @@ test.describe('B. notification when uploads finish', () => {
 test.describe('B2. notification timing', () => {
   test.beforeEach(async () => { desktop = await startDesktopHarness({ uploadDelayMs: 150, quitAnswer: 'quit' }); });
 
-  // The notifier fires on the FIRST moment the main-process upload count touches 0 (index.ts onActiveCountChange), and the
-  // renderer's reconciler starts photos in small waves, so the count touches 0 between waves: "uploads finished" is shown
-  // while most of the batch is still queued, and the 10-minute throttle then silences the real end. TODO(defect): debounce
-  // the drain (for example until the reconciler is idle) before calling notifier.onDrained.
-  test.fail('the notification waits until every photo is uploaded (DEFECT: fires after the first wave)', async () => {
+  // The batch reports idle only after the active count stayed at 0 past a grace window (batch.ts), so the gaps between the
+  // renderer's upload waves do not fire the notification and the throttle slot is not spent early.
+  test('the notification waits until every photo is uploaded', async () => {
     test.setTimeout(120_000);
-    let at = 0;
-    if (!await preconditions(async () => {
-      await installSpies(desktop.app, false);
-      await desktop.openDiagnostics();
-      await startBatch();
-      await expect.poll(async () => (await spies(desktop.app)).notifications.length, { timeout: 60_000 }).toBeGreaterThanOrEqual(1);
-      at = (await spies(desktop.app)).notifications[0]!.at;
-      await finishedBatch();
-      expect(desktop.engine.completedCounts.size, 'all 50 photos finished').toBe(PHOTOS);
-    })) return;
+    await installSpies(desktop.app, false);
+    await desktop.openDiagnostics();
+    await startBatch();
+    await expect.poll(async () => (await spies(desktop.app)).notifications.length, { timeout: 60_000 }).toBeGreaterThanOrEqual(1);
+    const at = (await spies(desktop.app)).notifications[0]!.at;
+    await finishedBatch();
+    expect(desktop.engine.completedCounts.size, 'all 50 photos finished').toBe(PHOTOS);
     const completedBefore = desktop.engine.completedAt.filter((time) => time <= at).length;
     test.info().annotations.push({ type: 'completed-when-notified', description: `${String(completedBefore)} of ${String(PHOTOS)}` });
     expect(completedBefore, 'photos already uploaded when the notification appeared').toBe(PHOTOS);
@@ -291,7 +271,7 @@ test.describe('C. sleep and wake during a batch', () => {
 test.describe('D. offline', () => {
   test.beforeEach(async () => { desktop = await startDesktopHarness({ uploadDelayMs: 100, quitAnswer: 'quit' }); });
 
-  const chip = () => desktop.page.locator('span', { hasText: /^(Online|Offline)$/ }).first();
+  const chip = () => desktop.page.locator('span', { hasText: /^(Online|Offline|Server unreachable|Sync paused)$/ }).first();
 
   test('D1 page-level offline: the chip says Offline, photos stay pending and unsent, then the queue drains once each', async () => {
     test.setTimeout(120_000);
@@ -347,12 +327,10 @@ test.describe('D. offline', () => {
     await expect.poll(async () => (await desktop.page.getByTestId('server-line').innerText()).trim(), { timeout: 30_000 }).toBe('');
   });
 
-  // The chip is derived from navigator.onLine and the online/offline events only (network-browser.ts), so a dead server never
-  // turns it to Offline: a person sees a green Online next to a line saying the server cannot be reached. TODO(defect): feed
-  // server reachability into the chip (or label it as link state).
-  test.fail('the chip does not claim Online while the server is unreachable (DEFECT: link state only)', async () => {
+  // The chip folds in server reachability (src/ui/worklist/connection.ts): a dead server never reads as a green Online.
+  test('the chip does not claim Online while the server is unreachable', async () => {
     test.setTimeout(90_000);
-    if (!await preconditions(async () => { await serverOutage(); })) return;
+    await serverOutage();
     await expect(chip(), 'status chip while the server line says it cannot be reached').not.toHaveText('Online', { timeout: 2000 });
   });
 });

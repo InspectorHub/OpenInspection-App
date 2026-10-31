@@ -13,17 +13,35 @@ describe('upload completion notifications', () => {
     }
     const notify = createUploadNotifier({ Notification: FakeNotification, isFocused: () => focused, now: () => now });
 
-    notify.onDrained({ failures: 0 });
-    notify.onDrained({ failures: 4 });
+    notify.onDrained({ failures: 0, completed: 3 });
+    notify.onDrained({ failures: 4, completed: 3 });
     expect(instances).toEqual([{ title: 'InspectorHub', body: 'InspectorHub: uploads finished', show: expect.any(Function) }]);
     focused = true;
     now += 600_001;
-    notify.onDrained({ failures: 1 });
+    notify.onDrained({ failures: 1, completed: 3 });
     expect(instances).toHaveLength(1);
     focused = false;
-    notify.onDrained({ failures: 1 });
+    notify.onDrained({ failures: 1, completed: 3 });
     expect(instances[1]?.body).toBe('InspectorHub: some photos could not be uploaded');
     expect(instances[0]?.body).not.toMatch(/customer|tenant|photo name/i);
+  });
+
+  it('ignores a drain with no completed and no failed upload and does not spend the throttle slot on it', () => {
+    const shown: string[] = [];
+    class FakeNotification { constructor(public options: { title: string; body: string }) {} show(): void { shown.push(this.options.body); } }
+    const notify = createUploadNotifier({ Notification: FakeNotification, isFocused: () => false, now: () => 0 });
+    notify.onDrained({ failures: 0, completed: 0 });
+    expect(shown).toEqual([]);
+    notify.onDrained({ failures: 0, completed: 1 });
+    expect(shown).toEqual(['InspectorHub: uploads finished']);
+  });
+
+  it('still notifies when every upload of the batch failed', () => {
+    const shown: string[] = [];
+    class FakeNotification { constructor(public options: { title: string; body: string }) {} show(): void { shown.push(this.options.body); } }
+    const notify = createUploadNotifier({ Notification: FakeNotification, isFocused: () => false, now: () => 0 });
+    notify.onDrained({ failures: 3, completed: 0 });
+    expect(shown).toEqual(['InspectorHub: some photos could not be uploaded']);
   });
 
   it('sets the exact Windows app identity before constructing the upload notifier', () => {

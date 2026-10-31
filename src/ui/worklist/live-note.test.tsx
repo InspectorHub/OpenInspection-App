@@ -24,7 +24,7 @@ const OUTCOME: ReconcileOutcome = {
 };
 
 function header(summary: string | null, downloading = false) {
-  return render(<WorkListHeader updatedAt={1000} now={2000} locale="en-US" online downloading={downloading} summary={summary} onDownload={() => undefined} headingRef={() => undefined} />);
+  return render(<WorkListHeader updatedAt={1000} now={2000} locale="en-US" chip={null} downloading={downloading} summary={summary} onDownload={() => undefined} headingRef={() => undefined} />);
 }
 
 describe('an empty live region takes no room in the layout', () => {
@@ -40,7 +40,7 @@ describe('an empty live region takes no room in the layout', () => {
   it('the download summary: with text it is an ordinary visible line, in the same element so the announcement is made', () => {
     const { rerender } = header(null);
     const region = screen.getByTestId('refresh-summary');
-    rerender(<WorkListHeader updatedAt={1000} now={2000} locale="en-US" online downloading={false} summary="Updated 1 inspection." onDownload={() => undefined} headingRef={() => undefined} />);
+    rerender(<WorkListHeader updatedAt={1000} now={2000} locale="en-US" chip={null} downloading={false} summary="Updated 1 inspection." onDownload={() => undefined} headingRef={() => undefined} />);
     expect(screen.getByTestId('refresh-summary')).toBe(region);
     expect(region).toHaveTextContent('Updated 1 inspection.');
     expect(region.className).not.toContain('sr-only');

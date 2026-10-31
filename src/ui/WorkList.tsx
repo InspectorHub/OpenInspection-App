@@ -1,5 +1,5 @@
 import { FORMAT_LOCALE } from '../platform/format-locale';
-import { useId, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { setPinned } from '../offline/pins';
 import type { Network } from '../platform/network';
@@ -17,7 +17,9 @@ import { RemoveDialog } from './worklist/RemoveDialog';
 import { RepairPanel } from './worklist/RepairPanel';
 import { RowBoundary } from './worklist/RowBoundary';
 import { StatusStrip } from './worklist/StatusStrip';
+import { useWaitingCount, WAITING_POLL_MS } from './use-waiting-count';
 import { useOnline } from './worklist/useOnline';
+import { connectionChip } from './worklist/connection';
 import { usePullToRefresh } from './worklist/usePullToRefresh';
 import { WorkListHeader } from './worklist/WorkListHeader';
 
@@ -83,6 +85,16 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
 export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices, onSettings, settingsRef }: WorkListProps) {
   const language = locale ?? FORMAT_LOCALE;
   const model = useWorkListModel(stack, { now, pollMs });
+  // The same poll Settings uses. The reconciler and the uploader publish no change signal, so when the device-wide waiting count
+  // moves (a photo was uploaded, a write was sent) the list reads again instead of waiting for its own, slower, interval.
+  const waiting = useWaitingCount(stack.db, { pollMs: pollMs > 0 ? WAITING_POLL_MS : 0, timers });
+  const lastWaiting = useRef<number | null>(null);
+  const reloadList = model.reload;
+  useEffect(() => {
+    const before = lastWaiting.current;
+    lastWaiting.current = waiting;
+    if (before !== null && waiting !== null && before !== waiting) void reloadList();
+  }, [waiting, reloadList]);
   const status = useSyncExternalStore(stack.status.subscribe, stack.status.get);
   const online = useOnline(network);
   const latch = useActionLatch();
@@ -149,7 +161,7 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
           updatedAt={snapshot?.updatedAt ?? null}
           now={now()}
           locale={language}
-          online={online}
+          chip={connectionChip(online, status)}
           downloading={downloading}
           summary={summary}
           onDownload={() => void latch(download)}

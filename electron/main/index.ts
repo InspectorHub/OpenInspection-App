@@ -36,6 +36,7 @@ import { registerProtocolClient } from './auth/protocol-client.ts';
 import { createPowerBridge, createPowerSaveGuard } from './lifecycle/power.ts';
 import { createQuitGuard, developmentQuitAnswer } from './lifecycle/quit-guard.ts';
 import { createUploadNotifier } from './lifecycle/notify.ts';
+import { createUploadBatch } from './lifecycle/batch.ts';
 import { createTaskbarProgress } from './lifecycle/taskbar.ts';
 import { shutdownDesktop } from './lifecycle/shutdown.ts';
 import { createUpdaterHost, readBuildMeta, type AutoUpdaterLike } from './updater.ts';
@@ -123,25 +124,16 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
         }),
       });
       win.on('close', (event) => { void quitGuard.onClose(event).catch(() => log('quit-shutdown-failed')); });
-      const removeTaskbar = uploaderHost ? createTaskbarProgress({ win, uploader: uploaderHost }) : () => {};
+      const batch = uploaderHost ? createUploadBatch({ uploader: uploaderHost }) : null;
+      const removeTaskbar = batch ? createTaskbarProgress({ win, batch }) : () => {};
       const notifier = createUploadNotifier({ Notification, isFocused: () => win.isFocused(), now: Date.now });
-      let batchActive = false;
-      let failures = 0;
-      const removeUploadEvents = uploaderHost?.onEvent((event) => {
-        if (event.name === 'failed') failures += 1;
-      }) ?? (() => {});
-      const removeUploadCount = uploaderHost?.onActiveCountChange((count) => {
-        if (count > 0) batchActive = true;
-        else if (batchActive) {
-          notifier.onDrained({ failures });
-          batchActive = false;
-          failures = 0;
-        }
-      }) ?? (() => {});
+      // The batch reports idle only after the active count stayed at 0 past the grace window, so the gaps between the
+      // renderer's upload waves do not count as the end.
+      const removeBatchIdle = batch?.onIdle((report) => notifier.onDrained(report)) ?? (() => {});
       return () => {
         removeTaskbar();
-        removeUploadEvents();
-        removeUploadCount();
+        removeBatchIdle();
+        batch?.dispose();
         if (uploaderContents === currentContents) uploaderContents = null;
       };
     } });

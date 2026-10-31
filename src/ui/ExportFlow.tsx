@@ -7,13 +7,13 @@ import {
   CHECKING_TEXT,
   EXPORT_CONFIRM_LABEL,
   EXPORT_TITLE,
-  FAILURE_TEXT,
   INCLUDE_QUARANTINED_LABEL,
   LEFTOVER_NOTICE,
   NOTHING_TO_EXPORT,
   PREPARE_FAILED_TEXT,
   PREPARE_RETRY_LABEL,
   UNCONFIRMED_NOTICE,
+  failureText,
   changedText,
   countsText,
   reportIdNotice,
@@ -99,12 +99,21 @@ export function ExportFlow({ services, reconcile, sharer, timers, only, onClose 
       outcome = { kind: 'failed', code: 'build_failed' };
     }
     setBusy(false);
-    if (outcome.kind === 'failed') setError(FAILURE_TEXT[outcome.code]);
-    else if (outcome.kind === 'busy') setError(FAILURE_TEXT.busy);
+    if (outcome.kind === 'failed') setError(failureText(outcome.code, services.platform));
+    else if (outcome.kind === 'busy') setError(failureText('busy', services.platform));
     else {
       if (outcome.kind === 'shared') haptic('success');
       setFinished(outcome);
     }
+  }
+
+  // Nothing on the device to export (and nothing quarantined that a tick could add): say so at once, with no question to confirm.
+  if (finished === null && prep !== null && !prepareFailed && only === undefined && prep.included === 0 && prep.quarantined === 0) {
+    return (
+      <ExportResult title="Nothing to export" onClose={onClose}>
+        <Notice tone="info">{NOTHING_TO_EXPORT}</Notice>
+      </ExportResult>
+    );
   }
 
   if (finished !== null) {
@@ -119,7 +128,7 @@ export function ExportFlow({ services, reconcile, sharer, timers, only, onClose 
     if (finished.kind === 'shared' || finished.kind === 'cancelled') {
       return (
         <ExportResult title={finished.kind === 'shared' ? 'Export finished' : 'Export cancelled'} onClose={onClose}>
-          <Notice tone="info">{summaryText(finished)}</Notice>
+          <Notice tone="info">{summaryText(finished, services.platform)}</Notice>
           {finished.unconfirmed && <Notice tone="watch">{UNCONFIRMED_NOTICE}</Notice>}
           {leftOutNotes(finished).map((note) => (
             <Notice key={note} tone="watch">
