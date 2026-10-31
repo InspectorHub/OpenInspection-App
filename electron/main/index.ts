@@ -1,9 +1,11 @@
 import { app, BrowserWindow, Menu, net, protocol, safeStorage, session, shell, ipcMain, powerMonitor, powerSaveBlocker, dialog, Notification } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAppOriginHandler, createHttpsPassthrough, isAppOrigin } from './app-origin.ts';
 import { createKvHost } from './data/kv.ts';
@@ -18,7 +20,8 @@ import { createMediaFileResponse, createMediaProtocolHandler } from './data/medi
 import { createSecretsHost, ensureSecretsDirectory, SecretsUnavailableError } from './data/secrets.ts';
 import { openDesktopDb, openNativeSqlite, setAsideUnreadableDatabase } from './data/db-open.ts';
 import { watchRendererDbLifecycle, type DbHost } from './data/db-host.ts';
-import { secureSecretsAcl, type SecurityCommand } from './data/windows-security.ts';
+import { createSystemCommandRunner } from './data/system-tools.ts';
+import { createSddlReader, secureSecretsAcl, type SecurityCommand } from './data/windows-security.ts';
 import { AUTH_CALLBACK_READY_CHANNEL, EVENT_CHANNELS, IpcError } from '../shared/ipc-contract.ts';
 import { registerHandler } from './ipc/register.ts';
 import { validators } from './ipc/validate.ts';
@@ -41,16 +44,13 @@ app.setAppUserModelId('io.inspectorhub.app');
 
 const paths = resolveStartupPaths({ packaged: app.isPackaged, appData: app.getPath('appData'), appPath: app.getAppPath(),
   requestedUserData: app.commandLine.hasSwitch('user-data-dir') ? app.getPath('userData') : undefined, env: process.env });
+const log = createLogger(paths.userData);
+const systemCommand = createSystemCommandRunner({ execFile, env: process.env, exists: existsSync, log });
 const runSecurityCommand: SecurityCommand = async (command, args) => {
   if (!app.isPackaged && command === 'powershell.exe' && args[3]?.includes("$mode = 'final'") && process.env.OI_TEST_FAIL_ACL_STEP === 'final-acl') {
     return { status: 5, stdout: '', stderr: 'injected ACL failure' };
   }
-  // Asynchronous so that a cold powershell start does not block the main process's event loop during startup.
-  return new Promise((resolve) => {
-    execFile(command, args, { windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
-      resolve({ status: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr });
-    });
-  });
+  return systemCommand(command, args);
 };
 mkdirSync(paths.userData, { recursive: true });
 app.setPath('userData', paths.userData);
@@ -71,7 +71,6 @@ app.on('open-url', (event, url) => {
 });
 
 if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () => focus() })) {
-  const log = createLogger(paths.userData);
   const callbackSubscriptions = new WeakMap<object, () => void>();
   ipcMain.on(AUTH_CALLBACK_READY_CHANNEL, (event) => {
     if (event.senderFrame === null || event.senderFrame.parent !== null || !isAppOrigin(event.senderFrame.url)) return;
@@ -160,6 +159,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     if (isWindows) await secureSecretsAcl({
       dir: secretsDir,
       run: runSecurityCommand,
+      readDacl: createSddlReader({ run: runSecurityCommand, tempDir: tmpdir(), newName: randomUUID, readFile, remove: (path) => fs.rm(path, { force: true }) }),
       barrierRunner: !app.isPackaged && process.env.OI_TEST_FAIL_ACL_STEP === 'barrier-partial'
         ? async (files, applyBarrier) => {
           for (const file of files.slice(0, 1)) await applyBarrier(file);

@@ -5,7 +5,7 @@ import { CHANNELS, IPC_ERROR_CODES, type ChannelName, type IpcErrorCode } from '
 const EVENTS = [
   'startup', 'startup-failed', 'second-instance', 'window-ready', 'renderer-load-failed', 'quit-shutdown-failed',
   'db-exists-check-failed', 'db-key-read-failed', 'db-key-write-failed', 'db-corrupt', 'db-open-failed',
-  'helper-hash-mismatch', 'helper-crash',
+  'helper-hash-mismatch', 'helper-crash', 'system-tool-unresolved',
   'updater-listener-failed', 'updater-network', 'updater-verify', 'updater-other',
 ] as const;
 /** A request channel and the closed code it ended with: the only shape of event that is built from two parts. */

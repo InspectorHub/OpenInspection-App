@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 export interface SecurityCommandResult {
   status: number | null;
   stdout: string;
@@ -72,60 +74,98 @@ function setObjectAcl(input: {
   return input.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
 }
 
+/** The two principals that must never reach the secrets: Everyone and BUILTIN\Users, as SDDL alias and as full SID. */
+const EVERYONE = ['wd', 's-1-1-0'];
+const USERS = ['bu', 's-1-5-32-545'];
+const READ_DATA = 0x1;
+
+/** Access-mask tokens SDDL uses for file objects. ReadData (0x1) is printed as `CC`, the same bit. */
+const RIGHTS: Readonly<Record<string, number>> = {
+  CC: 0x1, DC: 0x2, LC: 0x4, SW: 0x8, RP: 0x10, WP: 0x20, DT: 0x40, LO: 0x80, CR: 0x100,
+  SD: 0x10000, RC: 0x20000, WD: 0x40000, WO: 0x80000, FA: 0x1f01ff, FR: 0x120089, FW: 0x120116, FX: 0x1200a0,
+};
+
+interface Ace { type: 'A' | 'D'; mask: number; trustee: string }
+
+function parseMask(text: string): number | null {
+  if (/^0x[0-9a-f]+$/i.test(text)) return Number.parseInt(text, 16);
+  if (!/^(?:[A-Z]{2})+$/i.test(text)) return null;
+  let mask = 0;
+  for (const token of text.toUpperCase().match(/../g)!) {
+    const bits = RIGHTS[token];
+    if (bits === undefined) return null;
+    mask |= bits;
+  }
+  return mask;
+}
+
+/** The access-control entries of a DACL-only SDDL string, or null for anything this parser does not know. */
+function parseDacl(sddl: string): Ace[] | null {
+  const parsed = /^D:(?:P|AI|AR)*((?:\([^()]*\))*)$/.exec(sddl);
+  if (!parsed) return null;
+  const aces: Ace[] = [];
+  for (const match of parsed[1]!.matchAll(/\(([^()]*)\)/g)) {
+    const fields = match[1]!.split(';');
+    const type = fields[0];
+    const mask = parseMask(fields[2] ?? '');
+    const trustee = (fields[5] ?? '').toLowerCase();
+    if (fields.length !== 6 || (type !== 'A' && type !== 'D') || mask === null || fields[3] !== '' || fields[4] !== '' || trustee === '') return null;
+    aces.push({ type, mask, trustee });
+  }
+  return aces;
+}
+
 export async function secureSecretsAcl(input: {
   dir: string;
   run: SecurityCommand;
   listPaths: () => Promise<TreeEntry[]>;
   barrierRunner?: FileBarrierRunner;
+  /** The object's DACL as one SDDL string, or null when it cannot be read. */
+  readDacl: (path: string) => Promise<string | null>;
 }): Promise<void> {
   const entries = await input.listPaths();
   const allEntries: TreeEntry[] = [{ path: input.dir, directory: true }, ...entries];
   const fileEntries = entries.filter((entry) => !entry.directory);
-  const acl = (path: string): Promise<SecurityCommandResult> => input.run('icacls.exe', [path]);
-  const broadAce = /(?:Everyone|BUILTIN\\Users|S-1-1-0|S-1-5-32-545)/i;
-  const hasBroadReadDataDeny = (output: string): boolean => {
-    const lines = output.split(/\r?\n/);
-    return ['Everyone|S-1-1-0', 'BUILTIN.*Users|S-1-5-32-545'].every((pattern) => {
-      const sidOrName = new RegExp(pattern, 'i');
-      return lines.some((line) => sidOrName.test(line) && /\(DENY\)/i.test(line)
-        && /\(RD\)|\(ReadData\)|\(R,D\)/i.test(line));
-    });
+  const readDacl = input.readDacl;
+  // Every check below reads the DACL as SDDL (see createSddlReader), so none of them depends on the Windows language.
+  // A DACL that cannot be read or parsed never satisfies a check: the barrier is then unverified and the final state
+  // is reported as failed, instead of passing because nothing recognisable was found.
+  const verify = async (path: string, predicate: (aces: readonly Ace[]) => boolean): Promise<boolean> => {
+    const sddl = await readDacl(path);
+    const aces = sddl === null ? null : parseDacl(sddl);
+    return aces !== null && predicate(aces);
   };
-  const hasBroadAce = (output: string): boolean => output.split(/\r?\n/).some((line) => broadAce.test(line));
-  const verify = async (path: string, predicate: (output: string) => boolean): Promise<boolean> => {
-    const result = await acl(path);
-    return result.status === 0 && predicate(`${result.stdout}\n${result.stderr}`);
-  };
+  const hasBroadReadDataDeny = (aces: readonly Ace[]): boolean =>
+    [EVERYONE, USERS].every((aliases) => aces.some((ace) => ace.type === 'D' && (ace.mask & READ_DATA) !== 0 && aliases.includes(ace.trustee)));
+  const hasNoBroadAce = (aces: readonly Ace[]): boolean => !aces.some((ace) => EVERYONE.includes(ace.trustee) || USERS.includes(ace.trustee));
   const identity = await input.run('whoami.exe', ['/user', '/fo', 'csv', '/nh']);
   const currentUserSid = identity.status === 0 ? identity.stdout.match(/\bS-1-\d+(?:-\d+)+\b/)?.[0] : undefined;
   if (!currentUserSid) throw new Error('secrets-acl-failed');
-  const currentUserName = /^\s*"([^"]+)"/.exec(identity.stdout)?.[1];
 
   // Every start finds the tree as the previous start left it. When each object already carries exactly the final
-  // DACL, the barrier and the rewrite would only reproduce it, so the read-only queries are all that is needed. Any
-  // answer that is not unmistakably that DACL (another principal, an inherited or deny entry, a narrower right, an
-  // output this parser does not know, such as a localized principal name) falls through to the full repair below.
-  const isFinalAcl = (entry: TreeEntry, output: string): boolean => {
-    const lines = output.split(/\r?\n/);
-    if (lines[0]?.toLowerCase().startsWith(entry.path.toLowerCase())) lines[0] = lines[0].slice(entry.path.length);
-    const flags = entry.directory ? '(OI)(CI)(F)' : '(F)';
-    const names: string[] = [];
-    for (const line of lines) {
-      if (line.trim() === '') break;
-      const ace = /^\s*(.+?):((?:\([^)]*\))+)\s*$/.exec(line);
-      if (!ace || ace[2] !== flags) return false;
-      names.push(ace[1]!.toLowerCase());
+  // DACL, the barrier and the rewrite would only reproduce it, so reading the DACLs is all that is needed. The
+  // decision is made on SIDs (SDDL names no localized principal), so it holds on any Windows language. Any answer that
+  // is not unmistakably that DACL (another principal, an inherited or deny entry, a narrower right, an output this
+  // parser does not know) falls through to the full repair below.
+  const finalTrustees = [['sy', 's-1-5-18'], ['ba', 's-1-5-32-544'], [currentUserSid.toLowerCase()]];
+  const isFinalDacl = (entry: TreeEntry, sddl: string): boolean => {
+    const parsed = /^D:P(?:AI)?((?:\([^()]*\))+)$/.exec(sddl);
+    if (!parsed) return false;
+    const inheritance = entry.directory ? 'oici' : '';
+    const trustees: string[] = [];
+    for (const ace of parsed[1]!.slice(1, -1).split(')(')) {
+      const fields = ace.toLowerCase().split(';');
+      if (fields.length !== 6 || fields[0] !== 'a' || fields[1] !== inheritance || fields[2] !== 'fa' || fields[3] !== '' || fields[4] !== '') return false;
+      trustees.push(fields[5]!);
     }
-    const trusted = [
-      ['nt authority\\system', 's-1-5-18'],
-      ['builtin\\administrators', 's-1-5-32-544'],
-      [currentUserName?.toLowerCase() ?? '', currentUserSid.toLowerCase()],
-    ];
-    return names.length === trusted.length && trusted.every((identities) => names.filter((name) => identities.includes(name)).length === 1);
+    return trustees.length === finalTrustees.length
+      && finalTrustees.every((aliases) => trustees.filter((trustee) => aliases.includes(trustee)).length === 1);
   };
   let alreadyFinal = true;
   for (const entry of allEntries) {
-    if (!await verify(entry.path, (output) => isFinalAcl(entry, output))) { alreadyFinal = false; break; }
+    if (!alreadyFinal) break;
+    const sddl = await readDacl(entry.path);
+    if (sddl === null || !isFinalDacl(entry, sddl)) alreadyFinal = false;
   }
   if (alreadyFinal) return;
 
@@ -157,6 +197,35 @@ export async function secureSecretsAcl(input: {
   // and verified. Directory inherit flags secure future descendants too.
   for (const entry of allEntries) {
     const result = await setObjectAcl({ ...entry, currentUserSid, mode: 'final', run: input.run });
-    if (result.status !== 0 || !await verify(entry.path, (output) => !hasBroadAce(output))) throw new Error('secrets-acl-failed');
+    if (result.status !== 0 || !await verify(entry.path, hasNoBroadAce)) throw new Error('secrets-acl-failed');
   }
+}
+
+/**
+ * Reads one object's DACL as SDDL. `icacls <path>` prints localized principal names and never SIDs, but
+ * `icacls <path> /save <file>` records the DACL as SDDL (UTF-16, one name line and one SDDL line), which does not
+ * depend on the Windows language. The tool's own messages are localized too, so only its exit status is used.
+ */
+export function createSddlReader(deps: {
+  run: SecurityCommand;
+  tempDir: string;
+  newName: () => string;
+  readFile: (path: string) => Promise<Uint8Array>;
+  remove: (path: string) => Promise<void>;
+}): (path: string) => Promise<string | null> {
+  return async (path) => {
+    const saved = join(deps.tempDir, `oi-dacl-${deps.newName()}.acl`);
+    try {
+      const result = await deps.run('icacls.exe', [path, '/save', saved]);
+      if (result.status !== 0) return null;
+      const bytes = await deps.readFile(saved);
+      if (bytes.length % 2 !== 0) return null;
+      const lines = new TextDecoder('utf-16le', { fatal: true }).decode(bytes).split(/\r?\n/).filter((line) => line !== '');
+      return lines.length === 2 && lines[1]!.startsWith('D:') ? lines[1]! : null;
+    } catch {
+      return null;
+    } finally {
+      await deps.remove(saved).catch(() => undefined);
+    }
+  };
 }

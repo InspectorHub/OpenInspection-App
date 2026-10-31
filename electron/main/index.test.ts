@@ -1,8 +1,9 @@
+import { writeFileSync } from 'node:fs';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = await vi.hoisted(async () => {
   const { EventEmitter } = await import('node:events');
-  return { locked: true, safeStorageAvailable: true, secretsDirExists: false, secretsDirIsLink: false, secretsDirIsReparse: false, aclDenied: false, order: [] as string[], ready: Promise.resolve(), create: vi.fn(), handle: vi.fn(), on: vi.fn(), send: vi.fn(), setAppUserModelId: vi.fn(), updater: new EventEmitter(), spawn: vi.fn((command: string, args: string[] = []) => {
+  return { locked: true, safeStorageAvailable: true, secretsDirExists: false, secretsDirIsLink: false, secretsDirIsReparse: false, aclDenied: false, executed: [] as string[], order: [] as string[], ready: Promise.resolve(), create: vi.fn(), handle: vi.fn(), on: vi.fn(), send: vi.fn(), setAppUserModelId: vi.fn(), updater: new EventEmitter(), spawn: vi.fn((command: string, args: string[] = []) => {
     if (command === 'icacls.exe' && args.includes('/deny')) state.aclDenied = true;
     if (command === 'icacls.exe' && args.includes('/remove:d')) state.aclDenied = false;
     if (command === 'powershell.exe') state.aclDenied = args[3]?.includes("$mode = 'barrier'") ?? false;
@@ -21,7 +22,14 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 }));
 vi.mock('node:child_process', () => ({
   execFile: (command: string, args: string[], _options: unknown, done: (error: (Error & { code: number }) | null, stdout: string, stderr: string) => void) => {
-    const result = state.spawn(command, args) as { status: number; stdout: string; stderr: string };
+    state.executed.push(command);
+    if (command.endsWith('icacls.exe') && args[1] === '/save') {
+      // `icacls <path> /save <file>` writes the name line and the SDDL line as UTF-16; the barrier shows as the ReadData (CC) denies.
+      const flags = args[0]?.endsWith('.secret') ? '' : 'OICI';
+      const dacl = `D:PAI${state.aclDenied ? `(D;${flags};CC;;;WD)(D;${flags};CC;;;BU)` : ''}(A;${flags};FA;;;SY)`;
+      writeFileSync(args[2]!, `name\r\n${dacl}\r\n`, 'utf16le');
+    }
+    const result = state.spawn(command.split(/[\\/]/).pop() ?? command, args) as { status: number; stdout: string; stderr: string };
     queueMicrotask(() => done(result.status === 0 ? null : Object.assign(new Error('exit'), { code: result.status }), result.stdout, result.stderr));
   },
 }));
@@ -48,7 +56,7 @@ vi.mock('electron-updater', () => ({ autoUpdater: state.updater }));
 vi.mock('./window.ts', () => ({ createWindowController: () => ({ ensure: () => state.create(), focus: vi.fn() }) }));
 vi.mock('./logger.ts', () => ({ createLogger: () => vi.fn() }));
 
-beforeEach(() => { vi.resetModules(); state.order.length = 0; state.app.removeAllListeners(); state.powerMonitor.removeAllListeners(); state.updater.removeAllListeners(); state.create.mockClear(); state.handle.mockClear(); state.on.mockClear(); state.send.mockClear(); state.setAppUserModelId.mockClear(); state.spawn.mockClear(); state.locked = true; state.safeStorageAvailable = true; state.secretsDirExists = false; state.secretsDirIsLink = false; state.secretsDirIsReparse = false; state.aclDenied = false; state.ready = Promise.resolve(); });
+beforeEach(() => { vi.resetModules(); state.order.length = 0; state.app.removeAllListeners(); state.powerMonitor.removeAllListeners(); state.updater.removeAllListeners(); state.create.mockClear(); state.handle.mockClear(); state.on.mockClear(); state.send.mockClear(); state.setAppUserModelId.mockClear(); state.spawn.mockClear(); state.locked = true; state.safeStorageAvailable = true; state.secretsDirExists = false; state.secretsDirIsLink = false; state.secretsDirIsReparse = false; state.aclDenied = false; state.executed.length = 0; state.ready = Promise.resolve(); });
 
 it('stops all ready/protocol/window setup after a failed lock', async () => {
   state.locked = false;
@@ -123,6 +131,9 @@ it.skipIf(process.platform !== 'win32')('does not continue startup after final A
     await state.ready;
     await vi.waitFor(() => expect(electron.app.exit).toHaveBeenCalledWith(1));
     expect(state.spawn.mock.calls[0]?.[0]).toBe('fsutil.exe');
+    // Every system tool the startup launched was addressed by an absolute path below System32, never by a bare name.
+    expect(state.executed.length).toBeGreaterThan(0);
+    expect(state.executed.every((file) => /^[A-Za-z]:\\.+\\System32\\.+\.exe$/i.test(file))).toBe(true);
     expect(state.spawn.mock.calls.some(([command, args]) => command === 'powershell.exe' && args?.[3]?.includes("$mode = 'barrier'") && args?.[3]?.includes('FileSystemRights]::ReadData'))).toBe(true);
     expect(state.spawn.mock.calls.some(([command, args]) => command === 'icacls.exe' && args?.includes('/deny'))).toBe(false);
     expect(electron.protocol.handle).not.toHaveBeenCalled();
