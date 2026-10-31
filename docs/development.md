@@ -212,6 +212,7 @@ It prints one JSON line when ready, for example `{"origin":"http://127.0.0.1:512
 
 - Android emulator: start with `--host 0.0.0.0` and point the app at `http://10.0.2.2:<port>`. iOS simulator: `http://localhost:<port>`.
 - The `control` origin is a second, loopback-only listener. Fault injection lives there, under `/__test__/` only: `GET /state`, `POST /unavailable {"value":true|false}`, `POST /upload-delay {"ms":n}`, `POST /compatibility {...}`. The engine port itself serves no test routes. `--host 0.0.0.0` exposes an unauthenticated server (fixed bearer token) to the whole LAN: use it on a trusted network only (the CLI prints a warning to stderr).
+- `GET /oauth/authorize` redirects straight back to the app (`io.inspectorhub.app:/oauth/callback` or an `http(s)://127.0.0.1|localhost` address) with a fixed code and the state echoed, so a real device's Custom Tab sign-in completes without interaction; any other `redirect_uri` is refused with 400.
 - The sign-in the engine offers (`/oauth/register`, `/oauth/token` hand out a fixed test token with no user interaction) exists only in this fake server. The client only knows a server address, and the release bundle contains none of the fake engine or its `/__test__/` prefix (`npm run check:bundle` and a grep of `dist` and `dist-electron` confirm it).
 
 ## Regenerating the app icons

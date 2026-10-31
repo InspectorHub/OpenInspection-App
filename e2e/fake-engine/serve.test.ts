@@ -54,6 +54,32 @@ function multipart(bytes: string): { body: string; type: string } {
 afterEach(stop);
 
 describe('standalone fake engine', () => {
+  it('the inspection scenario lists insp-7 and serves the reads its download needs, the default lists nothing', async () => {
+    const listed = async (origin: string) => ((await (await fetch(`${origin}/api/inspections?limit=50`)).json()) as { data: Array<{ id: string }> }).data.map((row) => row.id);
+    const withScenario = (await start(['--scenario', 'inspection'])).origin;
+    expect(await listed(withScenario)).toEqual(['insp-7']);
+    for (const path of ['results?scope=_default', 'report-data']) expect((await fetch(`${withScenario}/api/inspections/insp-7/${path}`)).status).toBe(200);
+    await stop();
+    expect(await listed((await start()).origin)).toEqual([]);
+  });
+
+  it('the authorize page redirects to the app callback with the state echoed, and refuses a foreign redirect_uri', async () => {
+    const { origin } = await start();
+    const go = (redirect: string, state = 'st-1') => fetch(`${origin}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'renderer-test-client', redirect_uri: redirect, state, code_challenge: 'abc', code_challenge_method: 'S256' })}`, { redirect: 'manual' });
+    const ok = await go('io.inspectorhub.app:/oauth/callback');
+    expect(ok.status).toBe(302);
+    const target = new URL(ok.headers.get('location') ?? '');
+    expect(target.protocol).toBe('io.inspectorhub.app:');
+    expect(target.pathname).toBe('/oauth/callback');
+    expect(target.searchParams.get('state')).toBe('st-1');
+    expect(target.searchParams.get('code')).toBe('renderer-auth-code');
+    const loop = await go('http://127.0.0.1:5173/oauth/callback', 's2');
+    expect(loop.status).toBe(302);
+    expect(new URL(loop.headers.get('location') ?? '').searchParams.get('state')).toBe('s2');
+    for (const bad of ['https://evil.example/cb', 'other.scheme:/oauth/callback', 'io.inspectorhub.app:/elsewhere']) expect((await go(bad)).status).toBe(400);
+    expect((await fetch(`${origin}/oauth/authorize?redirect_uri=io.inspectorhub.app:/oauth/callback`, { redirect: 'manual' })).status).toBe(400);
+  });
+
   it('prints one JSON line with the origin and serves the seeded inspection', async () => {
     const { origin } = await start();
     expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

@@ -102,6 +102,21 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       json({ success: true, data: { ...compatibility, serverContractVersion: 2, accountUrl: null } });
       return;
     }
+    if (request.method === 'GET' && route === '/oauth/authorize') {
+      // Test-only sign-in page: no user interaction, it sends the browser straight back to the app with a fixed code.
+      const query = new URL(request.url ?? '/', url).searchParams;
+      const redirect = query.get('redirect_uri') ?? '';
+      const state = query.get('state') ?? '';
+      let target: URL | null = null;
+      try { target = new URL(redirect); } catch { target = null; }
+      const appCallback = target !== null && target.protocol === 'io.inspectorhub.app:' && target.pathname === '/oauth/callback';
+      const loopback = target !== null && (target.protocol === 'http:' || target.protocol === 'https:') && (target.hostname === '127.0.0.1' || target.hostname === 'localhost');
+      if (target === null || !(appCallback || loopback) || state === '') { response.writeHead(400, { 'content-type': 'text/plain' }).end('bad authorize request'); return; }
+      target.searchParams.set('code', 'renderer-auth-code');
+      target.searchParams.set('state', state);
+      response.writeHead(302, { location: target.toString() }).end();
+      return;
+    }
     if (request.method === 'POST' && route === '/oauth/register') {
       void readBody(request).then(() => json({ client_id: 'renderer-test-client' }));
       return;
@@ -127,6 +142,9 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       return;
     }
     if (request.method === 'GET' && route === '/api/inspections/templates') { json({ success: true, data: [], meta: { page: 1, totalPages: 1 } }); return; }
+    // The two reads the offline editor needs besides the inspection row itself (a download without them is "not downloaded").
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/results') { json({ success: true, data: { results: {} } }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/report-data') { json({ success: true, data: { sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }], ratingLevels: [] } }); return; }
     if (request.method === 'GET' && route === '/api/inspections/insp-7/media') { json({ success: true, data: [] }); return; }
     if (request.method === 'GET' && route === '/api/inspections/insp-7/photo') {
       // Like the real route: the Bearer session is required (an <img> cannot send it), and with no image service the
@@ -197,7 +215,8 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       return;
     }
     if (route === '/api/inspections') {
-      json({ success: true, data: [] });
+      // The list the work-list download reads: the seeded inspection when the scenario shows it, so a fresh device can download it.
+      json({ success: true, data: options.showInspection ? [{ id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', propertyAddress: '77 Test Photo Lane' }] : [], meta: { nextCursor: null } });
       return;
     }
     json({ error: 'not-found' }, 404);
