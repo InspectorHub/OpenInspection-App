@@ -187,16 +187,17 @@ describe('PrivacyInfo.xcprivacy', () => {
     expect(resources).not.toContain('PrivacyInfo.xcprivacy');
     expect(resources).toContain('Assets.xcassets in Resources');
   });
-
-  it('looks at the App target, not at some other Resources phase in the file', () => {
-    const decoyPhase = '\t\tDEC0DE000000000000000001 /* Resources */ = {\r\n\t\t\tisa = PBXResourcesBuildPhase;\r\n\t\t\tfiles = (\r\n\t\t\t\tAB /* PrivacyInfo.xcprivacy in Resources */,\r\n\t\t\t);\r\n\t\t};\r\n';
-    const section = '/* Begin PBXResourcesBuildPhase section */\r\n';
-    const withDecoy = project.replace(section, section + decoyPhase);
+  it.each([['LF', '\n'], ['CRLF', '\r\n']])('looks at the App target, not at some other Resources phase (%s file)', (_name, eol) => {
+    const text = project.replaceAll('\r\n', '\n').replaceAll('\n', eol);
+    const decoyPhase = ['		DEC0DE000000000000000001 /* Resources */ = {', '			isa = PBXResourcesBuildPhase;', '			files = (', '				AB /* PrivacyInfo.xcprivacy in Resources */,', '			);', '		};', ''].join(eol);
+    const section = `/* Begin PBXResourcesBuildPhase section */${eol}`;
+    const withDecoy = text.replace(section, section + decoyPhase);
     expect(withDecoy).toContain('DEC0DE000000000000000001');
-    expect(appResourcesFiles(withDecoy)).toBe(appResourcesFiles(project));
+    expect(appResourcesFiles(withDecoy)).toBe(appResourcesFiles(text));
+    expect(appResourcesFiles(text)).toContain('PrivacyInfo.xcprivacy in Resources');
     // Without the App target's own entry, a decoy phase holding the file must not make the probe pass.
     const withoutAppEntry = withDecoy.replace(/^[^\n]*A1B2C3D42FEA00010072D4E8 \/\* PrivacyInfo\.xcprivacy in Resources \*\/,\r?\n/m, '');
-    expect(appResourcesFiles(withoutAppEntry)).not.toContain('PrivacyInfo');
+    expect(withoutAppEntry).not.toBe(withDecoy);
     expect(appResourcesFiles(withoutAppEntry)).not.toContain('PrivacyInfo');
   });
 
