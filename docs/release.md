@@ -17,7 +17,7 @@ git tags; two workflows do the building:
 > 0.3.0 or later in `package.json`). An older editor treats that answer as a failure, so a photo the server has already kept would be
 > reported as lost. Check the dependency before tagging.
 
-The current dependency is `@inspectorhub/field-ui` 0.6.0, which meets that prerequisite. Check it again when tagging a later version.
+The current dependency is `@inspectorhub/field-ui` 0.6.1, which meets that prerequisite. Check it again when tagging a later version.
 
 ## First tag run (`v0.1.0`, 2026-10-29)
 

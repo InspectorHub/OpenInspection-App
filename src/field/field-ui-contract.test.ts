@@ -46,8 +46,8 @@ export type PendingEntryFields = Assert<Equal<Extract<PendingMediaRecord, { kind
 export const appSlots: FieldHostSlots = { humanCheck: 'not-required' };
 export const appSlotsWithStatus: FieldHostSlots = { humanCheck: 'not-required', renderStatus: () => null };
 
-const PINNED = '0.6.0';
-const REREAD = `@inspectorhub/field-ui is no longer ${PINNED}. Before bumping the pin, re-read: this file, src/field/batch-attach.test.ts (it has its own pin and records a known ordering defect), src/field/uploader-refusal.test.ts, src/media/pending-doc-append.ts against the package's appendPendingPhoto, and src/field/photo-urls.ts against FieldUrls. Then update PINNED here and in batch-attach.test.ts after re-reading.`;
+const PINNED = '0.6.1';
+const REREAD = `@inspectorhub/field-ui is no longer ${PINNED}. Before bumping the pin, re-read: this file, src/field/batch-attach.test.ts (it has its own pin and models the photo-batch ordering of field-ui), src/field/uploader-refusal.test.ts, src/media/pending-doc-append.ts against the package's appendPendingPhoto, and src/field/photo-urls.ts against FieldUrls. Then update PINNED here and in batch-attach.test.ts after re-reading.`;
 
 describe('the installed @inspectorhub/field-ui', () => {
   it(`is exactly ${PINNED}`, () => {
