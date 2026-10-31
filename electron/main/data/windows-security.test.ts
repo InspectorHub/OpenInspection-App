@@ -160,7 +160,7 @@ describe('Windows secrets boundary', () => {
     // other two are the same message in the localized resources. Only the exit status and the saved file are used.
     const messages = {
       'en-US': 'processed file: C:\\x\nSuccessfully processed 1 files; Failed processing 0 files\n',
-      'zh-CN': '已处理的文件: C:\\x\n已成功处理 1 个文件; 处理 0 个文件时失败\n',
+      'zh-CN': '\u5df2\u5904\u7406\u7684\u6587\u4ef6: C:\\x\n\u5df2\u6210\u529f\u5904\u7406 1 \u4e2a\u6587\u4ef6; \u5904\u7406 0 \u4e2a\u6587\u4ef6\u65f6\u5931\u8d25\n',
       'de-DE': 'Verarbeitete Datei: C:\\x\n1 Dateien erfolgreich verarbeitet; Fehler bei der Verarbeitung von 0 Dateien\n',
     };
     const locales = Object.keys(messages) as Array<keyof typeof messages>;
