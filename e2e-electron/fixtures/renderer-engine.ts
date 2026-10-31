@@ -12,6 +12,14 @@ export interface RendererEngine {
   uploadCounts: Map<string, number>;
   uploadContentLengths: Array<number | null>;
   activeUploadCount: number;
+  /** Per key: how many upload responses were actually delivered with a 2xx (an attempt cut off by setUnavailable or an abort does not count). */
+  completedCounts: Map<string, number>;
+  /** Date.now() of every delivered 2xx upload response, in order. */
+  completedAt: number[];
+  /** While true the engine behaves like an unreachable host: every open connection is destroyed and new ones are reset at once. */
+  setUnavailable(value: boolean): void;
+  /** Request-body read failures that were NOT a connection abort. Specs should expect this to stay empty. */
+  errors: string[];
   close(): Promise<void>;
 }
 
@@ -42,6 +50,11 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
   let url = '';
   const requests: string[] = [];
   const sockets = new Set<Socket>();
+  const connections = new Set<Socket>();
+  const completedCounts = new Map<string, number>();
+  const completedAt: number[] = [];
+  const errors: string[] = [];
+  let unavailable = false;
   const uploads = new Map<string, Buffer>();
   const uploadCounts = new Map<string, number>();
   const uploadContentLengths: Array<number | null> = [];
@@ -114,13 +127,20 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
       void readBody(request).then((body) => {
         const file = multipartFile(body, request.headers['content-type']);
         const finish = () => {
+          if (response.destroyed) return;
           if (length === undefined) { response.writeHead(411).end(); return; }
           if (file === null || file.length === 0) { response.writeHead(400).end(); return; }
           uploads.set(key, file);
+          completedCounts.set(key, (completedCounts.get(key) ?? 0) + 1);
+          completedAt.push(Date.now());
           response.writeHead(201).end();
         };
         if ((options.uploadDelayMs ?? 0) > 0) setTimeout(finish, options.uploadDelayMs);
         else finish();
+      }, (error: unknown) => {
+        // A connection destroyed mid-body rejects the read: that is an aborted attempt. Anything else is recorded, not hidden.
+        const text = error instanceof Error ? `${(error as NodeJS.ErrnoException).code ?? ''} ${error.message}` : String(error);
+        if (!/ECONNRESET|aborted|premature close/i.test(text)) errors.push(`upload body read: ${text}`);
       });
       return;
     }
@@ -141,6 +161,12 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
       return;
     }
     json({ error: 'not-found' }, 404);
+  });
+  server.on('connection', (socket) => {
+    if (unavailable) { socket.destroy(); return; }
+    connections.add(socket);
+    socket.once('close', () => connections.delete(socket));
+    socket.on('error', () => undefined);
   });
   server.on('upgrade', (request, socket) => {
     sockets.add(socket);
@@ -164,7 +190,10 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
   url = `http://127.0.0.1:${address.port}`;
   // The cert file is only read to ensure the public test fixture stays available with this E2E bundle.
   await readFile(resolve('e2e-electron/fixtures/loopback-cert.pem'));
-  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {
+  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, completedCounts, completedAt, errors, setUnavailable(value) {
+    unavailable = value;
+    if (value) for (const socket of connections) socket.destroy();
+  }, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {
     for (const socket of sockets) socket.destroy();
     server.close(() => resolveClose());
     server.closeAllConnections();
