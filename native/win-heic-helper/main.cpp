@@ -279,7 +279,17 @@ bool StripPrimaryIrot(std::vector<BYTE>* bytes, UINT* rotation, UINT* primaryWid
   std::vector<BYTE> newMetaBody(bytes->begin() + static_cast<std::ptrdiff_t>(meta.start + meta.header), bytes->begin() + static_cast<std::ptrdiff_t>(iprp.start));
   newMetaBody.insert(newMetaBody.end(), newIprp.begin(), newIprp.end());
   newMetaBody.insert(newMetaBody.end(), bytes->begin() + static_cast<std::ptrdiff_t>(iprpEnd), bytes->begin() + static_cast<std::ptrdiff_t>(metaEnd));
+  // The iloc extents of a real file are absolute file offsets (construction method 0) that point past this box, so the
+  // rewritten meta must keep exactly its original size. Pad the removed bytes with a free box at the end of meta. A
+  // removed irot box alone is 9 bytes, so the padding always has room for the 8-byte free header.
+  const size_t unpaddedSize = newMetaBody.size() + 8;
+  if (unpaddedSize + 8 > meta.size) return false;
+  const size_t padding = meta.size - unpaddedSize;
+  AppendU32(&newMetaBody, static_cast<uint32_t>(padding));
+  newMetaBody.insert(newMetaBody.end(), {'f', 'r', 'e', 'e'});
+  newMetaBody.insert(newMetaBody.end(), padding - 8, 0);
   const auto newMeta = MakeBox("meta", newMetaBody);
+  if (newMeta.size() != meta.size) return false;
   std::vector<BYTE> rewritten;
   rewritten.insert(rewritten.end(), bytes->begin(), bytes->begin() + static_cast<std::ptrdiff_t>(meta.start));
   rewritten.insert(rewritten.end(), newMeta.begin(), newMeta.end());

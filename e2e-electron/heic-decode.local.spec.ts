@@ -227,5 +227,5 @@ test('classifies a truncated HEIC as corrupt at the real helper boundary', async
 test('refuses keep-original output when the JPEG quality floor still exceeds maxBytes', async () => {
   const file = await readFile(resolve('src/media/heic/fixtures/fixture-64x48.heic'));
   await expect(decode(file, { maxLongEdge: Infinity, keepOriginal: { maxBytes: 1 } }))
-    .resolves.toEqual({ ok: false, code: 'TOO_LARGE_PIXELS' });
+    .resolves.toEqual({ ok: false, code: 'TOO_LARGE_BYTES' });
 });
