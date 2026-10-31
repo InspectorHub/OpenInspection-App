@@ -301,3 +301,23 @@ Notes from running them on the emulator: the runner pins adb and Maestro to the 
 The flows wait for elements to appear (`extendedWaitUntil`, `scrollUntilVisible`); none sleeps. A full run takes a few minutes once the emulator is up. Maestro needs JDK 21 (set by `dev-env.ps1`).
 
 These flows are not run in CI: the CI jobs have no emulator. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.
+
+## Pre-push: tests related to your change
+
+The type check runs before a commit, but vitest does not, so a change to shared code can reach CI red. Install the repo hooks once per clone:
+
+```
+npm run hooks:install
+```
+
+This points `core.hooksPath` at `.githooks` and marks the hooks executable (`chmod +x`), so a clone that lost the executable bit still works. `.gitattributes` keeps the hooks LF on Windows checkouts.
+
+`.githooks/pre-push` runs `scripts/prepush-related-tests.mjs`. It diffs the pushed range (against the remote sha, or the merge-base with `origin/main` for a new branch) and runs `vitest related` serially (one worker) on:
+
+- the changed `.ts`/`.tsx` files under `src/`, `electron/` and `e2e/`;
+- the field-ui contract test (`src/field/field-ui-contract.test.ts`) whenever `package.json`, `package-lock.json`, a vite/vitest/tsconfig file or a `scripts/*.mjs` file changed, because such a change can break tests that no import reveals (it says so when it does this; `npm test` is the full suite);
+- the sibling tests of a deleted source file. Deleted files are reported as not covered, since a deleted file has no importers to follow.
+
+It skips with a message when none of that changed. It prints `N test file(s) run, P/T tests passed, F failed, S skipped`, fails the push on a red test or a suite that cannot load, and says so loudly when no test file is related or every test was skipped, instead of reporting green.
+
+The tests run on your working tree, so the hook refuses when the pushed commit is not `HEAD` or tracked files have uncommitted changes. `OI_SKIP_PREPUSH_VITEST=1 git push` is only for when the hook itself cannot run: it skips the tests and prints a warning listing the files that went untested. To preview a selection: `node scripts/prepush-related-tests.mjs src/export/copy.ts`.

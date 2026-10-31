@@ -27,6 +27,7 @@
     "test:e2e:electron": "playwright test -c e2e-electron/playwright.config.ts",
     "check:bundle": "node scripts/check-release-bundle.mjs",
     "test": "vitest run",
+    "hooks:install": "git config core.hooksPath .githooks && node -e \"const fs=require('fs');for(const f of fs.readdirSync('.githooks'))fs.chmodSync('.githooks/'+f,0o755)\"",
     "cap:sync": "cap sync",
     "api:types": "node scripts/api-types.mjs",
     "api:types:check": "node scripts/api-types.mjs --check",
