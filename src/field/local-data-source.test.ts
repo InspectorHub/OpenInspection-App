@@ -24,6 +24,15 @@ describe('the assembled data source', () => {
     expect(Object.keys(source.media).sort()).toEqual(['store', 'uploader']);
   });
 
+  it('exposes a host image decoder only when one is supplied', async () => {
+    const decodeImage = async () => null;
+    const withDecoder = await world({ decodeImage });
+    const withoutDecoder = await world();
+
+    expect(withDecoder.source.media.decodeImage).toBe(decodeImage);
+    expect(withoutDecoder.source.media.decodeImage).toBeUndefined();
+  });
+
   it('the editor-facing itemTags keeps a tag on the device and reads it back', async () => {
     const w = await world();
     w.online.value = false;

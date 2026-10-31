@@ -6,6 +6,7 @@ import config from '../vite.config';
 const ROOT = join(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string };
 const compose = readFileSync(join(ROOT, 'src', 'app', 'compose.ts'), 'utf8');
+const composeCapacitor = readFileSync(join(ROOT, 'src', 'app', 'compose-capacitor.ts'), 'utf8');
 
 /** Comments are prose: a rule that only appears in one must not satisfy a check. */
 function withoutComments(text: string): string {
@@ -51,7 +52,7 @@ describe('one version, from package.json', () => {
   it('the web bundle gets it as __APP_VERSION__, which is what the X-Client-Version header and Settings show', () => {
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(config.define?.__APP_VERSION__).toBe(JSON.stringify(pkg.version));
-    expect(compose).toContain('appVersion: __APP_VERSION__');
+    expect(composeCapacitor).toContain('appVersion: __APP_VERSION__');
     expect(compose).toContain("'X-Client-Version': appVersion");
   });
 

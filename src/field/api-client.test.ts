@@ -297,3 +297,41 @@ describe('a server too old for this app (serverTooOld)', () => {
     expect(r.requests).toHaveLength(1);
   });
 });
+
+describe('binary answers (photos)', () => {
+  function bytesResponse(status: number, bytes: Uint8Array, type: string): HttpResponse {
+    return { status, headers: new Headers({ 'content-type': type }), text: '', json: undefined, bytes, retryAfterMs: null, upgrade: null, serverDateMs: null };
+  }
+
+  it('asks for bytes with the Bearer session, bounded by the given cap, and hands back the bytes and content type', async () => {
+    const r = rig([bytesResponse(200, Uint8Array.from([1, 2, 3]), 'image/webp')]);
+    const out = await createApiClient(r.deps).send({ method: 'GET', path: apiPath('insp-1', 'photo'), query: { key: 'a/b.jpg', w: '480' }, binary: true, maxBytes: 5000 });
+    expect(out).toMatchObject({ kind: 'response', status: 200, bytes: Uint8Array.from([1, 2, 3]), contentType: 'image/webp' });
+    expect(r.requests[0]).toMatchObject({ url: `${ORIGIN}/api/inspections/insp-1/photo?key=a%2Fb.jpg&w=480`, binary: true, maxBytes: 5000 });
+    expect(r.requests[0]?.headers).toMatchObject({ Authorization: 'Bearer tok-1' });
+  });
+
+  it('a 401 is checked with the session and asked again once, as for any call', async () => {
+    const r = rig([bytesResponse(401, new Uint8Array(), 'text/plain'), bytesResponse(200, Uint8Array.from([9]), 'image/jpeg')], { tokens: ['old', 'new'] });
+    const out = await createApiClient(r.deps).send({ method: 'GET', path: apiPath('insp-1', 'photo'), query: { key: 'k' }, binary: true });
+    expect(out).toMatchObject({ kind: 'response', status: 200 });
+    expect(r.requests).toHaveLength(2);
+    expect(r.requests[1]?.headers).toMatchObject({ Authorization: 'Bearer new' });
+  });
+
+  it('control: an ordinary call asks for text, keeps the cap and has no bytes in its outcome', async () => {
+    const r = rig([response(200, { ok: true })]);
+    const out = await createApiClient(r.deps).send({ method: 'GET', path: '/api/admin/x' });
+    expect(out).toEqual({ kind: 'response', status: 200, json: { ok: true } });
+    expect(r.requests[0]?.binary).toBeUndefined();
+    expect(r.requests[0]?.maxBytes).toBe(1_048_576);
+  });
+
+  it('a read that cannot reach the server is offline, a locked device sends nothing', async () => {
+    const down = rig([new AuthError('server_unreachable')]);
+    expect(await createApiClient(down.deps).send({ method: 'GET', path: apiPath('insp-1', 'photo'), query: { key: 'k' }, binary: true })).toEqual({ kind: 'problem', problem: 'offline' });
+    const locked = rig([], { gate: () => false });
+    expect(await createApiClient(locked.deps).send({ method: 'GET', path: apiPath('insp-1', 'photo'), query: { key: 'k' }, binary: true })).toEqual({ kind: 'problem', problem: 'locked' });
+    expect(locked.requests).toHaveLength(0);
+  });
+});

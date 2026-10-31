@@ -1,5 +1,4 @@
 import type { Db } from './db';
-import type { DbUpgrade } from './db-capacitor';
 
 /**
  * One schema step. `statements` is the single source of truth for both paths:
@@ -120,9 +119,38 @@ export const MIGRATIONS: readonly Migration[] = [
       'CREATE INDEX IF NOT EXISTS idx_item_tags_inspection ON item_tags(account_key, inspection_id, state)',
     ],
   },
+  {
+    // Copies of photos the server holds, fetched so the editor can show a photo whose file is no longer on this device.
+    // One row per (account, inspection, key, size); `path` is the file under `photo-cache/`. Every row is a COPY: the
+    // server keeps the photo, so evicting a row loses nothing that was not already safe. It is not `media`, which holds
+    // photos that may exist nowhere else.
+    toVersion: 3,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS photo_cache (
+        hash TEXT PRIMARY KEY,
+        account_key TEXT NOT NULL,
+        inspection_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        size TEXT NOT NULL,
+        path TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        content_type TEXT NOT NULL,
+        last_used_at INTEGER NOT NULL,
+        fetched_at INTEGER NOT NULL
+      )`,
+      'CREATE INDEX IF NOT EXISTS idx_photo_cache_inspection ON photo_cache(account_key, inspection_id)',
+      'CREATE INDEX IF NOT EXISTS idx_photo_cache_used ON photo_cache(last_used_at)',
+    ],
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.toVersion ?? 0;
+
+/** One versioned step in the shape the SQLite plugin's `addUpgradeStatement` takes. */
+export interface DbUpgrade {
+  toVersion: number;
+  statements: string[];
+}
 
 /** The shape `openCapacitorDb` hands to the plugin's `addUpgradeStatement`. */
 export function toUpgradeStatements(migrations: readonly Migration[] = MIGRATIONS): DbUpgrade[] {

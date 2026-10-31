@@ -66,7 +66,7 @@ describe('a failed online upload of an item photo keeps the original', () => {
     ['LOCKED', MESSAGES.deviceLocked],
     ['AUTH', MESSAGES.sessionExpired],
     ['UPGRADE', MESSAGES.upgradeRequired],
-    ['TOO_LARGE', MESSAGES.photoTooLarge],
+    ['TOO_LARGE', 'TOO_LARGE'],
     ['TIMEOUT', MESSAGES.unreachable],
     ['NETWORK', MESSAGES.unreachable],
     ['REJECTED', MESSAGES.photoUploadFailed],
@@ -334,16 +334,18 @@ describe('the device store cannot keep the photo', () => {
     expect(await rowStates(w)).toEqual([]);
   });
 
-  it.each<[string, MediaError, string]>([
-    ['TOO_LARGE', new MediaError('TOO_LARGE'), MESSAGES.photoTooLarge],
-    ['UNSUPPORTED_TYPE', new MediaError('UNSUPPORTED_TYPE'), MESSAGES.photoTypeUnsupported],
-    ['EMPTY', new MediaError('EMPTY'), MESSAGES.photoNotPrepared],
-    ['BLOCKED', new MediaError('BLOCKED'), MESSAGES.blocked],
-  ])('a policy refusal (%s) is never kept and never sent directly', async (_name, error, sentence) => {
+  it.each<[string, MediaError, Record<string, unknown>]>([
+    // A refusal of the file itself carries its stable code and `permanent`, so the editor announces it once with its own
+    // wording and does not call it a failed save.
+    ['TOO_LARGE', new MediaError('TOO_LARGE'), { error: 'TOO_LARGE', permanent: true }],
+    ['UNSUPPORTED_TYPE', new MediaError('UNSUPPORTED_TYPE'), { error: 'UNSUPPORTED_TYPE', permanent: true }],
+    ['EMPTY', new MediaError('EMPTY'), { error: MESSAGES.photoNotPrepared }],
+    ['BLOCKED', new MediaError('BLOCKED'), { error: MESSAGES.blocked }],
+  ])('a policy refusal (%s) is never kept and never sent directly', async (_name, error, answer) => {
     const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { key: 'direct-key' } })) });
     const store: UploaderDeps['store'] = { ...w.world.store, getRow: (id) => w.world.store.getRow(id), put: () => Promise.reject(error), delete: (id) => w.world.store.delete(id) };
     const result = await createUploaderFactory({ ...w.deps, store })(INSPECTION, null).upload(photo('p1'));
-    expect(result).toStrictEqual({ ok: false, error: sentence });
+    expect(result).toStrictEqual({ ok: false, ...answer });
     expect(w.api.calls).toEqual([]);
     expect(w.docCalls).toEqual([]);
     expect(w.nativeCalls).toEqual([]);

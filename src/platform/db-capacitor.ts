@@ -1,15 +1,10 @@
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { Capacitor } from '@capacitor/core';
 import { createDb, type Db, type DbOptions } from './db';
-import { assertSchemaShape, CURRENT_SCHEMA_VERSION, SchemaTooNewError, toUpgradeStatements } from './schema';
+import { assertSchemaShape, CURRENT_SCHEMA_VERSION, type DbUpgrade, SchemaTooNewError, toUpgradeStatements } from './schema';
 
 /** The platforms the adapter distinguishes; anything that is not Android or iOS is `web`. */
 export type DbPlatform = 'android' | 'ios' | 'web';
-
-export interface DbUpgrade {
-  toVersion: number;
-  statements: string[];
-}
 
 export interface DbChanges {
   changes?: { changes?: number; lastId?: number };

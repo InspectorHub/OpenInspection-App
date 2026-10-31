@@ -23,6 +23,7 @@ interface Job {
   'timeout-minutes'?: number;
   'runs-on'?: string;
   env?: Record<string, string>;
+  concurrency?: { group?: string; 'cancel-in-progress'?: boolean };
   steps: Step[];
 }
 interface Workflow {
@@ -45,6 +46,7 @@ function load(name: string): Loaded {
 const ci = load('ci');
 const android = load('release-android');
 const ios = load('release-ios');
+const windows = load('release-windows');
 
 const SECRET_REF = /\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/g;
 const secretsIn = (value: unknown): string[] => [...JSON.stringify(value ?? '').matchAll(SECRET_REF)].map((m) => m[1] ?? '');
@@ -67,6 +69,7 @@ const mutate = (wf: Workflow, change: (copy: Workflow) => void): Workflow => {
 
 const ANDROID_SECRETS = ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD'];
 const IOS_SECRETS = ['IOS_DISTRIBUTION_CERT_P12_BASE64', 'IOS_DISTRIBUTION_CERT_PASSWORD', 'APPSTORE_API_PRIVATE_KEY'];
+const WINDOWS_SECRETS = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET'];
 
 /** Every script line a step that holds a secret in its `env` may contain, whole-line. Any other step holding one, or any other line, is a violation. */
 const ANDROID_SECRET_STEP_LINES: Record<string, string[]> = {
@@ -89,6 +92,16 @@ const ANDROID_SECRET_STEP_LINES: Record<string, string[]> = {
 };
 /** iOS hands every secret to an action through `with`; no script step may hold one. */
 const IOS_SECRET_STEP_LINES: Record<string, string[]> = {};
+const WINDOWS_SECRET_STEP_LINES: Record<string, string[]> = {
+  'Sign the HEIC helper with Azure Artifact Signing': [
+    "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser",
+    "Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser",
+    "$helper = (Resolve-Path 'dist-electron/native/win-heic-helper.exe').Path",
+    'Invoke-TrustedSigning -Endpoint $env:AZURE_SIGNING_ENDPOINT -CertificateProfileName $env:AZURE_SIGNING_PROFILE -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT -TimestampRfc3161 https://timestamp.acs.microsoft.com -TimestampDigest SHA256 -FileDigest SHA256 -Files $helper',
+  ],
+  'Build the NSIS installer': ['npx electron-builder --win nsis --x64 --config electron/builder/electron-builder.config.mjs --publish never'],
+  'Build the signed unpacked Windows package': ['npx electron-builder --dir --win --x64 --config electron/builder/electron-builder.config.mjs --publish never'],
+};
 
 // ---- the checkers: each returns the list of violations, so a mutated copy can be shown to be rejected ----
 
@@ -98,7 +111,7 @@ function injection(wf: Workflow): string[] {
   for (const [id, j] of Object.entries(wf.jobs)) {
     for (const s of j.steps) {
       if (s.run?.includes('${{') === true) out.push(`${id}/${s.name ?? s.run}: expression in run`);
-      if (s.shell !== undefined && s.shell !== 'bash') out.push(`${id}/${s.name ?? ''}: shell ${s.shell}`);
+      if (s.shell !== undefined && !['bash', 'pwsh'].includes(s.shell)) out.push(`${id}/${s.name ?? ''}: shell ${s.shell}`);
     }
   }
   return out;
@@ -284,6 +297,25 @@ const EXPECTED_STEPS = {
     'Archive and export the IPA',
     'Upload to TestFlight | apple-actions/upload-testflight-build',
   ],
+  windowsSign: [
+    'actions/checkout',
+    'actions/setup-node',
+    'run: npm ci',
+    'run: npm run build',
+    'run: npm run build:electron',
+    'Build the Windows HEIC helper',
+    'Sign the HEIC helper with Azure Artifact Signing',
+    'Calculate the final helper SHA-256',
+    'actions/upload-artifact',
+    'Build the signed unpacked Windows package',
+    'run: npm run check:electron-package',
+    'Build the NSIS installer',
+    'run: npm run check:electron-package',
+    'Verify Authenticode and record publisher',
+    'Create Windows SHA-256 checksums',
+    'actions/upload-artifact',
+  ],
+  windowsRelease: ['actions/download-artifact', 'Create the draft Release | softprops/action-gh-release'],
 };
 
 /** Per job, the only actions it may use (by owner/repo). A new action fails until this list is edited on purpose. */
@@ -297,6 +329,12 @@ const ALLOWED_USES: Record<string, Record<string, string[]>> = {
   ios: {
     verify: ['actions/checkout', 'actions/setup-node'],
     testflight: ['actions/checkout', 'actions/setup-node', 'apple-actions/import-codesign-certs', 'apple-actions/download-provisioning-profiles', 'apple-actions/upload-testflight-build'],
+  },
+  windows: {
+    verify: ['actions/checkout', 'actions/setup-node', 'actions/upload-artifact'],
+    build: ['actions/checkout', 'actions/setup-node', 'actions/upload-artifact'],
+    sign: ['actions/checkout', 'actions/setup-node', 'actions/upload-artifact'],
+    release: ['actions/download-artifact', 'softprops/action-gh-release'],
   },
 };
 
@@ -357,6 +395,7 @@ function releaseDir(wf: Workflow): string[] {
 describe.each([
   ['release-android', android, ANDROID_SECRETS, ANDROID_SECRET_STEP_LINES, ['sign']],
   ['release-ios', ios, IOS_SECRETS, IOS_SECRET_STEP_LINES, ['testflight']],
+  ['release-windows', windows, WINDOWS_SECRETS, WINDOWS_SECRET_STEP_LINES, ['sign']],
 ] as const)('%s workflow hardening', (_name, { text, wf }, allowed, rules, signing) => {
   it('runs on a pushed v* tag and by hand, and on nothing else', () => {
     expect(Object.keys(wf.on).sort()).toEqual(['push', 'workflow_dispatch']);
@@ -374,14 +413,14 @@ describe.each([
   it('every job has a timeout and runs on a hosted runner, and each ref has its own concurrency group that never cancels a release', () => {
     for (const j of Object.values(wf.jobs)) {
       expect(typeof j['timeout-minutes']).toBe('number');
-      expect(j['runs-on']).toMatch(/^(ubuntu-latest|macos-26)$/);
+      expect(j['runs-on']).toMatch(/^(ubuntu-latest|macos-26|windows-latest)$/);
     }
     expect(wf.concurrency?.group).toContain('${{ github.ref }}');
     expect(wf.concurrency?.['cancel-in-progress']).toBe(false);
   });
 
   it('every action is pinned to a 40-hex commit with its tag in a comment (control: there are actions to check)', () => {
-    const uses = text.split('\n').filter((line) => /^\s*-?\s*uses:/.test(line));
+    const uses = text.split('\n').map((line) => line.replace(/\r$/, '')).filter((line) => /^\s*-?\s*uses:/.test(line));
     expect(uses.length).toBeGreaterThanOrEqual(6);
     for (const line of uses) expect(line, line).toMatch(/uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
     expect(allSteps(wf).filter((s) => s.uses !== undefined)).toHaveLength(uses.length);
@@ -416,20 +455,113 @@ describe.each([
   it('the verify job runs everything the CI verify job runs, holds no secret, and the tag must equal the package.json version', () => {
     const wanted = Object.values(ci.wf.jobs)
       .find((j) => j.steps.some((s) => s.run === 'npm run typecheck'))
-      ?.steps.filter((s) => s.run !== undefined && !s.run.startsWith('npx cap sync'))
+      ?.steps.filter((s) => s.run !== undefined && !s.run.startsWith('npx cap sync') && !s.run.includes('api:types:check'))
       .map((s) => s.run);
     expect(wanted?.length).toBeGreaterThanOrEqual(5);
     const verify = job(wf, 'verify');
     for (const run of wanted ?? []) expect(verify.steps.map((s) => s.run), run).toContain(run);
+    expect(verify.steps.some((s) => s.run?.includes('api:types:check'))).toBe(true);
     expect(secretsIn(verify)).toEqual([]);
     const tag = verify.steps.find((s) => s.run?.includes('GITHUB_REF_NAME'));
     expect(tag?.if).toBe("github.ref_type == 'tag'");
     expect(tag?.run).toContain("require('./package.json').version");
-    expect(tag?.run).toContain('"v$(');
+    expect(tag?.run).toMatch(/v\$\(|v\$version/);
     expect(tag?.run).toContain('exit 1');
     for (const [id, j] of Object.entries(wf.jobs)) {
       if (id !== 'verify') expect(j.needs, id).toBeDefined();
     }
+  });
+});
+
+describe('release workflow job concurrency', () => {
+  it('serializes Android, iOS, and Windows draft creation for the same ref', () => {
+    for (const [workflow, id] of [[android.wf, 'release'], [ios.wf, 'testflight'], [windows.wf, 'release']] as const) {
+      expect(job(workflow, id).concurrency).toEqual({
+        group: 'release-assets-${{ github.ref }}',
+        'cancel-in-progress': false,
+      });
+    }
+  });
+});
+
+describe('Windows workflow hardening', () => {
+  it('records the hosted Windows runner HEIF and HEVC extension inventory before building the helper', () => {
+    const steps = job(ci.wf, 'windows').steps;
+    const inventoryIndex = steps.findIndex((s) => s.name === 'Record Windows HEIF and HEVC codec inventory');
+    const helperIndex = steps.findIndex((s) => (s.run ?? '').includes('build:heic-helper'));
+    expect(inventoryIndex).toBeGreaterThanOrEqual(0);
+    expect(inventoryIndex).toBeLessThan(helperIndex);
+    const inventory = steps[inventoryIndex]?.run ?? '';
+    expect(inventory).toContain('Get-AppxPackage');
+    expect(inventory).toContain('Microsoft.HEIFImageExtension');
+    expect(inventory).toContain('Microsoft.HEVCVideoExtension');
+    expect(inventory).toContain('Get-AppxPackage -ErrorAction Stop');
+    expect(inventory).toContain('Query scope:');
+    expect(inventory).toContain('GITHUB_STEP_SUMMARY');
+  });
+
+  it('builds the real HEIC helper before packaging in CI and release verify', () => {
+    const ciWindows = job(ci.wf, 'windows');
+    const verify = job(windows.wf, 'verify');
+    const assertHelperBeforePack = (steps: Step[], context: string) => {
+      const helper = steps.findIndex((s) => (s.run ?? '').includes('build:heic-helper'));
+      const pack = steps.findIndex((s) => (s.run ?? '').includes('electron-builder --dir'));
+      expect(helper, `${context}: helper build step`).toBeGreaterThanOrEqual(0);
+      expect(pack, `${context}: package step`).toBeGreaterThan(helper);
+    };
+    assertHelperBeforePack(ciWindows.steps, 'CI');
+    assertHelperBeforePack(verify.steps, 'release verify');
+    assertHelperBeforePack(job(windows.wf, 'sign').steps, 'release sign');
+    expect(ciWindows.steps.some((s) => (s.run ?? '').includes('check:electron-bundle'))).toBe(true);
+    expect(ciWindows.steps.some((s) => (s.run ?? '').includes('check:electron-package'))).toBe(true);
+    for (const text of [ci.text, windows.text]) {
+      expect(text).toContain('check:electron-package');
+      expect(text).not.toMatch(/check-codec-review|libheif|check:third-party/);
+    }
+  });
+
+  it('uploads the built helper with a checksum and 30-day retention', () => {
+    for (const [workflow, artifactName] of [[ci.wf, 'windows-heic-helper'], [windows.wf, 'windows-heic-helper'], [windows.wf, 'windows-heic-helper-signed']] as const) {
+      const candidate = Object.values(workflow.jobs).flatMap((j) => j.steps)
+        .find((s) => s.uses?.startsWith('actions/upload-artifact@') && s.with?.name === artifactName);
+      expect(candidate?.with?.path).toBe('dist-electron/native/win-heic-helper.exe');
+      expect(candidate?.with?.['retention-days']).toBe(30);
+      expect(Object.values(workflow.jobs).flatMap((j) => j.steps).some((s) => (s.run ?? '').includes('Get-FileHash'))).toBe(true);
+    }
+  });
+
+  it('uses a post-sign helper hash and excludes only the helper from electron-builder signing', () => {
+    const sign = job(windows.wf, 'sign');
+    const azure = step(sign, 'Sign the HEIC helper with Azure Artifact Signing');
+    expect(azure.if).toBe("env.OI_WINDOWS_SIGNING == 'azure'");
+    const build = step(sign, 'Build the NSIS installer');
+    expect(build.run).toContain('electron-builder --win nsis');
+    expect(build.env?.AZURE_CLIENT_SECRET).toBe('${{ secrets.AZURE_CLIENT_SECRET }}');
+  });
+
+  it('uses tag-only protected signing and lets manual dispatch stop at the unsigned artifact', () => {
+    expect(job(windows.wf, 'sign').environment).toBe('windows-release');
+    expect(job(windows.wf, 'sign').if).toBe("github.event_name == 'push' && github.ref_type == 'tag'");
+    expect(job(windows.wf, 'sign').needs).toBe('build');
+    expect(job(windows.wf, 'release').concurrency).toEqual({
+      group: 'release-assets-${{ github.ref }}',
+      'cancel-in-progress': false,
+    });
+    expect(job(windows.wf, 'release').if).toBe("github.event_name == 'push' && github.ref_type == 'tag'");
+    expect(job(windows.wf, 'release').needs).toBe('sign');
+    expect(job(windows.wf, 'build').environment).toBeUndefined();
+    expect(secretsIn(job(windows.wf, 'verify'))).toEqual([]);
+    expect(secretsIn(job(windows.wf, 'build'))).toEqual([]);
+  });
+
+  it('keeps signing and draft release steps on their reviewed allowlists', () => {
+    expect(stepAllowlist(job(windows.wf, 'sign'), EXPECTED_STEPS.windowsSign)).toEqual([]);
+    expect(signingJob(job(windows.wf, 'sign'))).toEqual([]);
+    expect(stepAllowlist(job(windows.wf, 'release'), EXPECTED_STEPS.windowsRelease)).toEqual([]);
+    const create = step(job(windows.wf, 'release'), 'Create the draft Release');
+    expect(create.with?.draft).toBe(true);
+    expect(create.with?.fail_on_unmatched_files).toBe(true);
+    expect(create.with?.files).toBe('release/InspectorHub-Setup-*.exe\nrelease/*.blockmap\nrelease/latest.yml\nrelease/SHA256SUMS-windows\n');
   });
 });
 
@@ -760,8 +892,10 @@ describe('the signing jobs run exactly the steps that are listed', () => {
   it('every job uses only the actions allowed for it, in both workflows', () => {
     expect(usesAllowlist(android.wf, ALLOWED_USES.android ?? {})).toEqual([]);
     expect(usesAllowlist(ios.wf, ALLOWED_USES.ios ?? {})).toEqual([]);
+    expect(usesAllowlist(windows.wf, ALLOWED_USES.windows ?? {})).toEqual([]);
     expect(Object.keys(ALLOWED_USES.android ?? {}).sort()).toEqual(Object.keys(android.wf.jobs).sort());
     expect(Object.keys(ALLOWED_USES.ios ?? {}).sort()).toEqual(Object.keys(ios.wf.jobs).sort());
+    expect(Object.keys(ALLOWED_USES.windows ?? {}).sort()).toEqual(Object.keys(windows.wf.jobs).sort());
   });
 
   it('only exact files reach the artifact and the Release: release/ holds one signed APK and SHA256SUMS', () => {

@@ -7,6 +7,7 @@ git tags; two workflows do the building:
 |---|---|---|
 | `.github/workflows/release-android.yml` | a pushed tag `vX.Y.Z`, or a manual run | on a tag: a signed APK, `SHA256SUMS` and a **draft** GitHub Release; from a branch: an unsigned APK as a pipeline check |
 | `.github/workflows/release-ios.yml` | a pushed tag `vX.Y.Z`, or a manual run on a tag | a signed build uploaded to TestFlight |
+| `.github/workflows/release-windows.yml` | a pushed tag `vX.Y.Z`, or a manual run | on a tag: a Windows installer and a **draft** GitHub Release; a manual run: an unsigned unpacked app artifact |
 
 > **The iOS workflow has not uploaded a build to TestFlight.** The `v0.1.0` tag run passed its verification job, then waited at the
 > protected TestFlight environment. It needs an Apple developer account and the items listed under "iOS: what the workflow cannot do
@@ -16,7 +17,7 @@ git tags; two workflows do the building:
 > 0.3.0 or later in `package.json`). An older editor treats that answer as a failure, so a photo the server has already kept would be
 > reported as lost. Check the dependency before tagging.
 
-The current dependency is `@inspectorhub/field-ui` 0.5.0, which meets that prerequisite. Check it again when tagging a later version.
+The current dependency is `@inspectorhub/field-ui` 0.6.1, which meets that prerequisite. Check it again when tagging a later version.
 
 ## First tag run (`v0.1.0`, 2026-10-29)
 
@@ -51,10 +52,11 @@ in the data it keeps on the device, is a major version.
 
 The app sends its version as `X-Client-Version`. The engine can refuse versions below a minimum:
 
-- `NATIVE_MIN_VERSION_ANDROID` / `NATIVE_MIN_VERSION_IOS`: a version below this answers **426 Upgrade Required** for editor writes; the
+- `NATIVE_MIN_VERSION_ANDROID` / `NATIVE_MIN_VERSION_IOS` / `NATIVE_MIN_VERSION_WINDOWS`: a version below this answers **426 Upgrade Required** for editor writes; the
   app turns editing off, keeps uploading what it already holds, and shows an update-required screen. `NATIVE_DOWNLOAD_URL_ANDROID`
   (an https address) gives that screen its button.
-- `NATIVE_RECOMMENDED_VERSION_ANDROID` / `NATIVE_RECOMMENDED_VERSION_IOS`: a dismissible banner, shown once per app version.
+- `NATIVE_RECOMMENDED_VERSION_ANDROID` / `NATIVE_RECOMMENDED_VERSION_IOS` / `NATIVE_RECOMMENDED_VERSION_WINDOWS`: a dismissible banner, shown once per app version.
+- `NATIVE_DOWNLOAD_URL_WINDOWS`: an HTTPS download URL used by the Windows update-required screen; point it at the GitHub Releases page.
 
 Before you publish a release:
 
@@ -243,3 +245,58 @@ the first run shows, and tighten this page.
 
 Delete the draft Release and the tag (`git push upstream :refs/tags/vX.Y.Z`) and cut the next patch version. Do not move a tag that
 anyone may have built from, and never reuse a published version: Android refuses to install a lower `versionCode` over a higher one.
+
+## Windows desktop
+
+The Windows workflow builds x64 NSIS installers. A pushed `vX.Y.Z` tag runs verification, creates the installer, and leaves a draft
+GitHub Release for a maintainer to review and publish. A `workflow_dispatch` run produces an unsigned unpacked application artifact
+for CI inspection; it does not enter `windows-release`, sign files, or create a Release. The initial pilot is unsigned, so Windows
+SmartScreen may show its usual first-run warning. Unsigned builds do not use the in-app updater; install a newer version manually
+from the Releases page. Uninstalling keeps the local InspectorHub data directory.
+
+Before distributing a Windows build, configure the engine variables `NATIVE_MIN_VERSION_WINDOWS`,
+`NATIVE_RECOMMENDED_VERSION_WINDOWS`, and `NATIVE_DOWNLOAD_URL_WINDOWS`. The download URL should point to the Releases page. Follow
+the version policy above: never set a minimum above a version users can install.
+
+To check a downloaded installer in PowerShell, compare its hash with `SHA256SUMS-windows` and inspect its signature:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\InspectorHub-Setup-X.Y.Z.exe
+Get-AuthenticodeSignature .\InspectorHub-Setup-X.Y.Z.exe | Format-List Status,SignerCertificate
+```
+
+The unsigned pilot should report `NotSigned`. When Azure signing is enabled, the workflow requires `Valid`; compare the publisher
+shown in the job summary before publishing the draft.
+
+### Windows signing configuration
+
+The protected GitHub environment is `windows-release`; the repository owner must create it, add required reviewers, and protect
+`v*` tags. The default `OI_WINDOWS_SIGNING` environment variable is `none`, matching the unsigned pilot. To switch to Azure Artifact
+Signing (formerly Trusted Signing), the owner must create the service account and certificate profile first, then set the following
+environment-scoped entries:
+
+| Name | Kind | Holds |
+|---|---|---|
+| `OI_WINDOWS_SIGNING` | variable | `none` or `azure` |
+| `AZURE_TENANT_ID` | secret | Microsoft Entra tenant ID |
+| `AZURE_CLIENT_ID` | secret | Signing app registration client ID |
+| `AZURE_CLIENT_SECRET` | secret | Signing app registration client secret |
+| `AZURE_SIGNING_ENDPOINT` | variable | Region-specific Artifact Signing endpoint |
+| `AZURE_SIGNING_ACCOUNT` | variable | Artifact Signing account name |
+| `AZURE_SIGNING_PROFILE` | variable | Certificate profile name |
+| `WINDOWS_PUBLISHER_NAME` | variable | Exact publisher name in the signing certificate |
+
+The helper is signed before its SHA-256 is embedded in the packaged metadata; electron-builder then signs the app and installer
+without changing those helper bytes. Only the tag-triggered `sign` job can read environment credentials. A draft release is never
+published automatically.
+
+### HEIC photos on Windows
+
+The Windows application does not include a HEIC or HEVC decoder. A small helper installed with the app calls Windows imaging
+components. Computers without Microsoft's HEIF Image Extensions and HEVC Video Extensions cannot decode iPhone HEIC photos; the app
+explains how to install the extensions, or users can export the photo as JPEG from the phone. The helper source is in
+`native/win-heic-helper/` and is signed together with the app when signing is enabled.
+
+The Web editor does not include an image decoder. Android and iOS apps continue to use the system WebView decoder. This release has
+no decoder sign-off record or license-approval step; if a bundled decoder is added later, revisit this documentation and the release
+process. Published versions are not recalled because update clients may already have seen them; ship a corrected patch version.

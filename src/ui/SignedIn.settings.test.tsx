@@ -11,6 +11,7 @@ import type { NotificationPermissionPort, NotificationState } from '../platform/
 import { backRegistry, pressBack } from './back-button';
 import { OfflineStackContext } from '../app/stack-context';
 import { createListWorld } from './test-support/worklist-world';
+import { seedExportableForSignedIn } from './test-support/export-view';
 import { SignedIn } from './SignedIn';
 
 afterEach(cleanup);
@@ -66,6 +67,7 @@ describe('SignedIn and Settings', () => {
 
   it('Export from Settings opens the export question over Settings, and closing it returns to Settings', async () => {
     const world = await createSignedInWorld();
+    await seedExportableForSignedIn(world.db);
     mount(world);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Settings' }));
@@ -156,6 +158,7 @@ describe('the notification question', () => {
 
   it('is asked after the first export closes, and waits while the export question is open', async () => {
     const world = await createSignedInWorld();
+    await seedExportableForSignedIn(world.db);
     const port = permission('prompt');
     mount(world, port);
     const user = userEvent.setup();
@@ -170,6 +173,7 @@ describe('the notification question', () => {
   it.each<NotificationState>(['granted', 'denied', 'unsupported'])('is never asked when the system already answered (%s)', async (state) => {
     const world = await createSignedInWorld();
     await seedLocalData(world.db);
+    await seedExportableForSignedIn(world.db);
     const port = permission(state);
     mount(world, port);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Export unsent data' }));

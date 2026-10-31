@@ -1,31 +1,14 @@
 import { isValidMediaId } from './errors';
 import type { ResolveResult } from './pending-doc';
-import {
-  isValidUploadedKey,
-  MAX_VIDEO_BYTES,
-  VIDEO_CHUNK_BYTES,
-  VIDEO_CONTENT_TYPES,
-  VIDEO_MAX_SECONDS,
-  type MediaRow,
-  type VideoSource,
-} from './store';
-import { clampRetryAfter, failure, isParseableUrlText, isRecord, resolveRelocatableUploadUrl, type KindContext, type KindStrategy, type TransferTarget } from './upload-kinds';
+import { isStreamUploadUrl, MAX_VIDEO_BYTES, STREAM_UPLOAD_HOST, VIDEO_CONTENT_TYPES, VIDEO_MAX_SECONDS } from './media-types';
+import { isValidUploadedKey, VIDEO_CHUNK_BYTES, type MediaRow, type VideoSource } from './store';
+import { clampRetryAfter, failure, isParseableUrlText, isRecord, resolveRelocatableUploadUrl } from './upload-kinds';
+import type { KindContext, KindStrategy, TransferTarget } from './upload-strategy';
 
-export { MAX_VIDEO_BYTES, VIDEO_MAX_SECONDS };
+export { MAX_VIDEO_BYTES, STREAM_UPLOAD_HOST, VIDEO_MAX_SECONDS };
 
 /** Free space below which recording is refused: the 200 MiB clip, the platform's own working copy, and room for the rest of the work package. */
 export const MIN_FREE_BYTES = 1024 * 1024 * 1024;
-
-/**
- * The only host a Stream direct-upload url may name. It is the host Cloudflare documents for direct creator uploads
- * (`https://upload.videodelivery.net/<uid>`, Cloudflare Stream docs, "Direct creator uploads"). The engine reaches
- * it through the Stream binding, which hands back whatever Cloudflare answered, so the app does not take the host
- * from the answer: it compares it to this constant, exactly, and also requires the path to be the uid of the same
- * answer's ref. A different Cloudflare host (for example a customer subdomain) is refused until it is added here on
- * purpose. The shape of the direct-upload url (host and single-segment path) is taken from the Cloudflare documentation
- * only; it has not been observed against a live Stream account.
- */
-export const STREAM_UPLOAD_HOST = 'upload.videodelivery.net';
 
 const VIDEO_UPLOAD_PATH = '/api/public/uploads/video';
 const STREAM_KEY_PREFIX = 'stream/';
@@ -84,7 +67,7 @@ export function resolveVideoUploadUrl(origin: string, ref: { provider: 'r2' } | 
   } catch {
     return null;
   }
-  if (url.protocol !== 'https:' || url.hostname !== STREAM_UPLOAD_HOST || url.port !== '') return null;
+  if (!isStreamUploadUrl(url)) return null;
   if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') return null;
   return url.pathname === `/${ref.streamUid}` ? url.href : null;
 }

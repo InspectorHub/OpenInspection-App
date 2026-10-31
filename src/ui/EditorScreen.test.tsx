@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useFieldDataSource, useFieldSlots, type EditorData } from '@inspectorhub/field-ui';
+import { useFieldDataSource, useFieldSlots, type EditorData, type FieldDataSource } from '@inspectorhub/field-ui';
 import type { EditorEvent, OfflineStack } from '../app/offline-stack';
 import { createSignedInWorld, type World } from '../app/test-support/world';
 import { createStackWorld, type StackWorld } from '../app/test-support/stack-world';
@@ -15,8 +15,10 @@ import { INSPECTION } from '../media/test-support/fakes';
 import type { Network } from '../platform/network';
 import { backRegistry, pressBack } from './back-button';
 import { EditorScreen, READ_ONLY_NOTICE } from './EditorScreen';
+import { editorObserver, type EditorObservation, type EditorProbe } from './editor-observer';
 
 const layers = vi.hoisted(() => ({ open: false }));
+let renderedSource: FieldDataSource | null = null;
 
 // The real editor needs a canvas and a layout engine; what this screen owns is what surrounds it.
 vi.mock('@inspectorhub/field-ui', async (importOriginal) => {
@@ -26,6 +28,7 @@ vi.mock('@inspectorhub/field-ui', async (importOriginal) => {
     escapeWillBeHandled: () => layers.open || actual.escapeWillBeHandled(),
     FieldEditor: ({ data, readOnly }: { data: EditorData; readOnly?: boolean }) => {
       const source = useFieldDataSource();
+      renderedSource = source;
       const slots = useFieldSlots();
       return (
         <div>
@@ -56,6 +59,7 @@ let stack: OfflineStack;
 
 beforeEach(async () => {
   layers.open = false;
+  renderedSource = null;
   stackWorld = await createStackWorld();
   world = await createSignedInWorld();
   stack = stackWorld.make();
@@ -66,13 +70,83 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mount(over: { stack?: OfflineStack; inspectionId?: string; onExit?: () => void; registry?: ReturnType<typeof createEditorRegistry> } = {}): ReactNode {
+function mount(over: { stack?: OfflineStack; inspectionId?: string; onExit?: () => void; registry?: ReturnType<typeof createEditorRegistry>; network?: Network | null } = {}): ReactNode {
   return (
-    <EditorScreen services={world.services} stack={over.stack ?? stack} origin={world.server.origin} inspectionId={over.inspectionId ?? INSPECTION} onExit={over.onExit ?? vi.fn()} network={network} {...(over.registry === undefined ? {} : { registry: over.registry })} />
+    <EditorScreen services={world.services} stack={over.stack ?? stack} origin={world.server.origin} inspectionId={over.inspectionId ?? INSPECTION} onExit={over.onExit ?? vi.fn()} {...(over.network === null ? {} : { network: over.network ?? network })} {...(over.registry === undefined ? {} : { registry: over.registry })} />
   );
 }
 
 const press = (exitApp: () => void): void => pressBack(backRegistry, { exitApp, escapeTarget: new EventTarget() });
+
+function currentSource(): FieldDataSource {
+  if (renderedSource === null) throw new Error('The editor has not opened');
+  return renderedSource;
+}
+
+describe('the editor screen link state', () => {
+  it('uses the supplied adapter for reads and changes, ignores browser state, and unsubscribes on unmount', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    const listeners = new Set<(online: boolean) => void>();
+    const supplied: Network = {
+      online: vi.fn(() => Promise.resolve(false)),
+      onChange: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const view = render(mount({ network: supplied }));
+    await screen.findByTestId('address');
+    expect(supplied.online).toHaveBeenCalledTimes(1);
+    expect(currentSource().isOnline()).toBe(false);
+    expect(listeners.size).toBe(1);
+    const seen: boolean[] = [];
+    currentSource().onOnlineChange((online) => seen.push(online));
+    act(() => window.dispatchEvent(new Event('online')));
+    expect(currentSource().isOnline()).toBe(false);
+    act(() => listeners.forEach((listener) => listener(true)));
+    expect(currentSource().isOnline()).toBe(true);
+    expect(seen).toEqual([true]);
+    view.unmount();
+    expect(listeners.size).toBe(0);
+  });
+
+  it.each([true, false])('without an adapter, starts with navigator.onLine=%s', async (online) => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(online);
+    render(mount({ network: null }));
+    await screen.findByTestId('address');
+    expect(currentSource().isOnline()).toBe(online);
+  });
+
+  it('without an adapter, follows browser link changes and disposes both browser listeners', async () => {
+    const link = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const view = render(mount({ network: null }));
+    await screen.findByTestId('address');
+    const source = currentSource();
+    const seen: boolean[] = [];
+    source.onOnlineChange((online) => seen.push(online));
+    const stopped: boolean[] = [];
+    const stop = source.onOnlineChange((online) => stopped.push(online));
+    stop();
+    link.mockReturnValue(true);
+    act(() => window.dispatchEvent(new Event('online')));
+    expect(source.isOnline()).toBe(true);
+    link.mockReturnValue(false);
+    act(() => window.dispatchEvent(new Event('offline')));
+    expect(source.isOnline()).toBe(false);
+    expect(seen).toEqual([true, false]);
+    expect(stopped).toEqual([]);
+    const browserListeners = add.mock.calls.filter(([event]) => event === 'online' || event === 'offline');
+    expect(browserListeners.map(([event]) => event).sort()).toEqual(['offline', 'online']);
+    view.unmount();
+    for (const [event, listener] of browserListeners) expect(remove).toHaveBeenCalledWith(event, listener);
+    link.mockReturnValue(true);
+    act(() => window.dispatchEvent(new Event('online')));
+    expect(source.isOnline()).toBe(false);
+    expect(seen).toEqual([true, false]);
+  });
+});
 
 describe('the editor screen', () => {
   it('opens the cached inspection in the editor, for android, with the human check opted out explicitly', async () => {
@@ -169,6 +243,33 @@ describe('the editor screen', () => {
   });
 
   it('shows what the editor says in a short-lived message', async () => {
+    render(mount());
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'write' }));
+    expect(await screen.findByRole('status')).toBeInTheDocument();
+  });
+});
+
+describe('an editor observer', () => {
+  afterEach(() => editorObserver.install(null));
+
+  it('is told what the editor says, is handed the data source before it loads, and is disposed with the screen', async () => {
+    const observation: EditorObservation = { notified: vi.fn(), attach: vi.fn(), dispose: vi.fn() };
+    const observer = vi.fn((_probe: EditorProbe) => observation);
+    editorObserver.install(observer);
+    const view = render(mount());
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'write' }));
+    expect(observer).toHaveBeenCalledOnce();
+    const probe = observer.mock.calls[0]![0];
+    expect(probe.readOnly).toBe(false);
+    expect(typeof probe.isOnline()).toBe('boolean');
+    expect(observation.attach).toHaveBeenCalledWith(currentSource());
+    expect(observation.notified).toHaveBeenCalled();
+    expect(observation.dispose).not.toHaveBeenCalled();
+    view.unmount();
+    expect(observation.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('control: with no observer installed the editor opens and speaks as before', async () => {
     render(mount());
     await userEvent.setup().click(await screen.findByRole('button', { name: 'write' }));
     expect(await screen.findByRole('status')).toBeInTheDocument();

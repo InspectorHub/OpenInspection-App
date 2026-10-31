@@ -5,6 +5,8 @@ import { useOfflineStack } from '../app/stack-context';
 import type { StoredIdentity } from '../auth/server-config';
 import { reconcileGateFor } from '../export/reconcile-gate';
 import type { Network } from '../platform/network';
+import type { DesktopSettingsPort } from '../desktop/updater-port';
+import type { DiagDeps } from '../dev/checks/types';
 import { ClientNotices } from './ClientNotices';
 import { DevDiagnostics } from './dev-diagnostics';
 import { EditorBoundary } from './EditorBoundary';
@@ -33,6 +35,8 @@ export interface SignedInProps {
   timers?: TimerPort;
   /** Link state for the editor. Defaults to the device's. */
   network?: Network;
+  desktopSettings?: DesktopSettingsPort;
+  diagnostics?: DiagDeps;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -49,7 +53,7 @@ export function roleLabel(role: string): string {
 }
 
 /** The home of a signed-in device: the work list (where there is an offline stack), the account, and the sign-out contract. */
-export function SignedIn({ services, origin, identity, onSignedOut, onWiping, timers, network }: SignedInProps) {
+export function SignedIn({ services, origin, identity, onSignedOut, onWiping, timers, network, desktopSettings, diagnostics }: SignedInProps) {
   const [view, setView] = useState<'home' | 'settings'>('home');
   // The inspection open in the editor, or null for the work list.
   const [editing, setEditing] = useState<string | null>(null);
@@ -61,7 +65,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
   const stack = useOfflineStack();
   const reconcile = useMemo(() => (stack === null ? undefined : reconcileGateFor(stack.reconciler)), [stack]);
   // After the first-level heading: the notices have second-level ones.
-  const notices = <ClientNotices services={services} origin={origin} />;
+  const notices = <ClientNotices services={services} origin={origin} desktop={desktopSettings} />;
 
   // Back from Settings lands on the button that opened it.
   useEffect(() => {
@@ -124,6 +128,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
           onCleared={onSignedOut}
           onWiping={onWiping}
           timers={timers}
+          desktop={desktopSettings}
         />
         {exportFlow}
         {prompt}
@@ -159,7 +164,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
         </Button>
       )}
       <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
-      <DevDiagnostics services={services} origin={origin} />
+      <DevDiagnostics services={services} origin={origin} deps={diagnostics} />
       {exportFlow}
       {prompt}
     </Screen>

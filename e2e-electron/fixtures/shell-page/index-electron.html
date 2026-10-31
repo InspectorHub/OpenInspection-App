@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InspectorHub desktop shell</title>
+    <link rel="stylesheet" href="/shell.css">
+    <script src="/shell.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">INSPECTORHUB / WINDOWS</p>
+      <h1>The desktop shell is ready.</h1>
+      <p>This local page verifies the isolated renderer, secure app origin, and desktop bridge.</p>
+      <dl>
+        <div><dt>Origin</dt><dd id="origin">Checking…</dd></div>
+        <div><dt>Desktop bridge</dt><dd id="bridge">Checking…</dd></div>
+        <div><dt>Node access</dt><dd id="node">Checking…</dd></div>
+      </dl>
+      <p class="status" id="status">Checking shell…</p>
+      <p id="callback">No protocol callback yet</p>
+    </main>
+  </body>
+</html>

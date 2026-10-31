@@ -16,6 +16,8 @@ import { UnreferencedPhotosSection } from './settings/UnreferencedPhotosSection'
 import { SignOutControl } from './SignOutControl';
 import { useBackHandler } from './use-back-handler';
 import { useWaitingCount } from './use-waiting-count';
+import { DesktopSettings } from './DesktopSettings';
+import type { DesktopSettingsPort } from '../desktop/updater-port';
 
 export interface SettingsProps {
   services: AppServices;
@@ -32,6 +34,8 @@ export interface SettingsProps {
   onWiping?(wiping: boolean): void;
   timers?: TimerPort;
   locale?: string;
+  /** Omitted by Capacitor; present only in the Electron renderer. */
+  desktop?: DesktopSettingsPort;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -52,7 +56,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tied to the server's version policy: whatever else is refused, a person can always get their data out and their sign-in off.
  * The back key and the Back button both return to the list.
  */
-export function Settings({ services, origin, stack, onBack, onExport, onSignedOut, onCleared, onWiping, timers, locale }: SettingsProps) {
+export function Settings({ services, origin, stack, onBack, onExport, onSignedOut, onCleared, onWiping, timers, locale, desktop }: SettingsProps) {
   const language = locale ?? FORMAT_LOCALE;
   const state = useClientState(services.clientState);
   const policy = clientPolicy(state, origin);
@@ -98,6 +102,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
         <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
         {accountUrl !== null && <ExternalLink services={services} url={accountUrl} label="Delete account" showHost />}
       </Section>
+      {desktop !== undefined && <DesktopSettings desktop={desktop} />}
       <AboutSection services={services} locale={language} />
     </Screen>
   );

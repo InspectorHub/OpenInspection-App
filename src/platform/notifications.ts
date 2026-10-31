@@ -1,4 +1,3 @@
-import { LocalNotifications } from '@capacitor/local-notifications';
 import type { ClientPlatform } from '../app/compose';
 
 /**
@@ -45,8 +44,4 @@ export function createNotificationPermission(plugin: NotificationPluginLike, pla
     check: () => ask(() => plugin.checkPermissions()),
     request: () => ask(() => plugin.requestPermissions()),
   };
-}
-
-export function createRealNotificationPermission(platform: ClientPlatform): NotificationPermissionPort {
-  return createNotificationPermission(LocalNotifications, platform);
 }

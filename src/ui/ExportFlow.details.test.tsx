@@ -156,7 +156,7 @@ describe('on Android the result promises ten minutes', () => {
     await threeWithOneQuarantined(world);
     world.sharer.mode = mode;
     const timers = createManualTimers();
-    render(<ExportFlow services={{ db: world.db, files: world.files, clock: world.clock, platform: 'android' }} sharer={world.sharer} timers={timers} reconcile={() => Promise.resolve(true)} onClose={vi.fn()} />);
+    render(<ExportFlow services={{ db: world.db, files: world.files, clock: world.clock, platform: 'android', sharer: world.sharer }} sharer={world.sharer} timers={timers} reconcile={() => Promise.resolve(true)} onClose={vi.fn()} />);
     await ready();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Export' }));
     const result = await screen.findByRole('dialog');

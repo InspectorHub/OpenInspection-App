@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
+import { DesktopOpenError } from '../desktop/db-ipc';
 import { refreshTokenKey } from '../auth/server-config';
 import { SchemaDriftError, SchemaTooNewError } from '../platform/schema';
 import { boot, decideScreen } from './boot';
@@ -94,6 +95,11 @@ describe('opening the app', () => {
   it('any other open failure is a distinct screen, not the newer-data one', async () => {
     const result = await boot(() => Promise.reject(new AuthError('storage_failed')), SECURE);
     expect(result).toEqual({ services: null, screen: { kind: 'open_failed' } });
+  });
+
+  it('keeps the typed desktop open reason for the recovery screen', async () => {
+    const result = await boot(() => Promise.reject(new DesktopOpenError('key-unreadable')), SECURE);
+    expect(result).toEqual({ services: null, screen: { kind: 'open_failed', reason: 'key-unreadable' } });
   });
 
   it('a failing first read closes the database it opened and shows the open-failed screen', async () => {

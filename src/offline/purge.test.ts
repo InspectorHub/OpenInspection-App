@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CollabBlockedError } from '../collab/connector';
 import type { Db } from '../platform/db';
-import { isNotFoundError } from '../platform/files';
+import { isNotFoundError } from '../platform/files-path';
 import { enqueue, OutboxError, accountKey } from './outbox';
 import { purgeAuthorityForTest } from './test-support/brands';
 import { purgeInspection, resumePurges, type PurgeDeps, type PurgeOutcome } from './purge';

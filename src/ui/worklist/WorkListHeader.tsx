@@ -2,12 +2,14 @@ import type { Ref } from 'react';
 import { Button } from '../kit';
 import { updatedLabel } from './format';
 import { LiveNote } from './LiveNote';
+import type { ConnectionChipView } from './connection';
 
 export interface WorkListHeaderProps {
   updatedAt: number | null;
   now: number;
   locale: string | undefined;
-  online: boolean | null;
+  /** What the connection chip shows (see `connectionChip`), or null for no chip. */
+  chip: ConnectionChipView | null;
   downloading: boolean;
   /** The sentence about the last download, or null. */
   summary: string | null;
@@ -21,12 +23,19 @@ export interface WorkListHeaderProps {
   settingsRef?: Ref<HTMLButtonElement> | undefined;
 }
 
-function ConnectionChip({ online }: { online: boolean | null }) {
-  if (online === null) return null;
+const CHIP_TONES = {
+  ok: ['bg-ih-ok-bg text-ih-ok-fg', 'bg-ih-ok'],
+  watch: ['bg-ih-watch-bg text-ih-watch-fg', 'bg-ih-watch-fg'],
+  muted: ['bg-ih-bg-muted text-ih-fg-2', 'bg-ih-fg-4'],
+} as const;
+
+function ConnectionChip({ view }: { view: ConnectionChipView | null }) {
+  if (view === null) return null;
+  const [chip, dot] = CHIP_TONES[view.tone];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-ih-pill px-2 py-1 text-xs font-bold ${online ? 'bg-ih-ok-bg text-ih-ok-fg' : 'bg-ih-bg-muted text-ih-fg-2'}`}>
-      <span aria-hidden="true" className={`size-2 rounded-full ${online ? 'bg-ih-ok' : 'bg-ih-fg-4'}`} />
-      {online ? 'Online' : 'Offline'}
+    <span className={`inline-flex items-center gap-1.5 rounded-ih-pill px-2 py-1 text-xs font-bold ${chip}`}>
+      <span aria-hidden="true" className={`size-2 rounded-full ${dot}`} />
+      {view.label}
     </span>
   );
 }
@@ -45,7 +54,7 @@ function GearIcon() {
   );
 }
 
-export function WorkListHeader({ updatedAt, now, locale, online, downloading, summary, onDownload, onExport, headingRef, onSettings, settingsRef }: WorkListHeaderProps) {
+export function WorkListHeader({ updatedAt, now, locale, chip, downloading, summary, onDownload, onExport, headingRef, onSettings, settingsRef }: WorkListHeaderProps) {
   return (
     <header className="flex flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -56,7 +65,7 @@ export function WorkListHeader({ updatedAt, now, locale, online, downloading, su
           <p className="text-sm text-ih-fg-3">{updatedLabel(updatedAt, now, locale)}</p>
         </div>
         <div className="flex items-center gap-3">
-          <ConnectionChip online={online} />
+          <ConnectionChip view={chip} />
           {onSettings !== undefined && (
             <button
               ref={settingsRef}

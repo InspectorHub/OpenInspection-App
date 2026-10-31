@@ -16,6 +16,16 @@ describe('photo urls', () => {
     expect(photo(INSPECTION, KEY)).toBe(LOCAL);
   });
 
+  it('ignores the optional size hint: the device keeps one copy of a photo, so thumb, view and original answer alike', () => {
+    const index = createMemoryPhotoIndex();
+    index.set(INSPECTION, [[KEY, LOCAL]]);
+    const photo = createPhotoUrls({ tenantId: TENANT, index });
+    for (const size of ['thumb', 'view', 'original'] as const) expect(photo(INSPECTION, KEY, size)).toBe(LOCAL);
+    // Control: a hint does not unlock a photo that is not cached or not this account's.
+    expect(photo(INSPECTION, `other/inspections/${INSPECTION}/photos/p1.jpg`, 'original')).toBe(PHOTO_PLACEHOLDER_URL);
+    expect(photo(INSPECTION, `${TENANT}/inspections/${INSPECTION}/photos/p9.jpg`, 'thumb')).toBe(PHOTO_PLACEHOLDER_URL);
+  });
+
   it('answers the marked placeholder for a photo that is not cached, never a server address', () => {
     const photo = createPhotoUrls({ tenantId: TENANT, index: createMemoryPhotoIndex() });
     const url = photo(INSPECTION, KEY);
@@ -124,5 +134,72 @@ describe('indexUploadedRows', () => {
     index.set(INSPECTION, [[KEY, LOCAL]]);
     expect(await indexUploadedRows(index, broken, INSPECTION)).toBe(0);
     expect(index.lookup(INSPECTION, KEY)).toBe(LOCAL);
+  });
+});
+
+describe('photos that are only on the server', () => {
+  const stub = (answer: string | null) => {
+    const asked: [string, string, string][] = [];
+    return { asked, cache: { lookup: (inspectionId: string, key: string, size: string) => (asked.push([inspectionId, key, size]), answer) } };
+  };
+
+  it('without a local copy the cache is asked, in the size the caller needs (no hint: the original)', () => {
+    const { asked, cache } = stub(`${LOCAL}?cached`);
+    const photo = createPhotoUrls({ tenantId: TENANT, index: createMemoryPhotoIndex(), cache });
+    expect(photo(INSPECTION, KEY, 'thumb')).toBe(`${LOCAL}?cached`);
+    photo(INSPECTION, KEY, 'view');
+    photo(INSPECTION, KEY);
+    expect(asked.map((a) => a[2])).toEqual(['thumb', 'view', 'original']);
+  });
+
+  it('a placeholder while the cache has nothing yet', () => {
+    const photo = createPhotoUrls({ tenantId: TENANT, index: createMemoryPhotoIndex(), cache: stub(null).cache });
+    expect(photo(INSPECTION, KEY, 'thumb')).toBe(PHOTO_PLACEHOLDER_URL);
+  });
+
+  it('a photo with a local copy never asks the cache (control for the test above)', () => {
+    const index = createMemoryPhotoIndex();
+    index.set(INSPECTION, [[KEY, LOCAL]]);
+    const { asked, cache } = stub('http://localhost/other.jpg');
+    expect(createPhotoUrls({ tenantId: TENANT, index, cache })(INSPECTION, KEY, 'thumb')).toBe(LOCAL);
+    expect(asked).toEqual([]);
+  });
+
+  it('a key that is not under this account and inspection never reaches the cache', () => {
+    const { asked, cache } = stub('http://localhost/x.jpg');
+    const photo = createPhotoUrls({ tenantId: TENANT, index: createMemoryPhotoIndex(), cache });
+    for (const key of ['tenant-2/inspections/insp-1/photos/p1.jpg', `${TENANT}/inspections/insp-2/photos/p1.jpg`, '../x', `${KEY}?token=abc`]) {
+      expect(photo(INSPECTION, key, 'thumb'), key).toBe(PHOTO_PLACEHOLDER_URL);
+    }
+    expect(asked).toEqual([]);
+  });
+});
+
+describe('which addresses the index keeps, per platform', () => {
+  const key = (n: string): string => `${TENANT}/inspections/${INSPECTION}/photos/${n}.jpg`;
+
+  it('desktop: the shell media address of a file in its media folder is local', () => {
+    const index = createMemoryPhotoIndex();
+    index.set(INSPECTION, [[key('a'), 'oi-media://media/photo-cache/abc.webp'], [key('b'), 'oi-media://media/media/p1.jpg']]);
+    expect(index.lookup(INSPECTION, key('a'))).toBe('oi-media://media/photo-cache/abc.webp');
+    expect(index.lookup(INSPECTION, key('b'))).toBe('oi-media://media/media/p1.jpg');
+  });
+
+  it('desktop: that scheme with another host or a credential is not local', () => {
+    const index = createMemoryPhotoIndex();
+    index.set(INSPECTION, [[key('a'), 'oi-media://evil/x.jpg'], [key('b'), 'oi-media://u:p@media/x.jpg'], [key('c'), 'oi-media://media/x.jpg?token=1']]);
+    for (const n of ['a', 'b', 'c']) expect(index.lookup(INSPECTION, key(n)), n).toBeNull();
+  });
+
+  it('android and ios: the web view file addresses stay local, and a remote address still is not', () => {
+    const index = createMemoryPhotoIndex();
+    index.set(INSPECTION, [
+      [key('a'), 'https://localhost/_capacitor_file_/photo-cache/abc.jpg'],
+      [key('b'), 'http://localhost/_capacitor_file_/media/p1.jpg'],
+      [key('c'), 'capacitor://localhost/_capacitor_file_/media/p1.jpg'],
+      [key('d'), 'https://app.example.com/photo-cache/abc.jpg'],
+    ]);
+    for (const n of ['a', 'b', 'c']) expect(index.lookup(INSPECTION, key(n)), n).not.toBeNull();
+    expect(index.lookup(INSPECTION, key('d'))).toBeNull();
   });
 });

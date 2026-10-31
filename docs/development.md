@@ -66,11 +66,163 @@ When you are done, stop the dev servers first, then run `adb reverse --remove-al
 
 ## Windows (Electron)
 
+The Windows pilot runs the same `src/` app as Android in an Electron shell. Use Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0` (see `package.json`); on Windows, install the dependencies from the repository root with `npm ci`.
+
 ```
 npm run dev:electron
 ```
 
+`dev:electron` watches and builds the Electron renderer and main/preload bundles, then launches Electron. It does not start the web Vite development server: the desktop shell must exercise the same local `https://localhost` protocol handler and strict CSP used by the packaged app. For the normal local sign-in flow, start the OpenInspection engine separately with `NATIVE_CLIENT_ENABLED=1` in its `.dev.vars`; its default local address is `http://localhost:8787`. In the app, enter that address as the server URL. The desktop app uses the system browser for OAuth and returns through the registered `io.inspectorhub.app` protocol.
+
+`npm run build:electron` builds the main process and preload script to CommonJS with esbuild, then builds the renderer. `npm run typecheck` checks `src/` and `electron/` with separate tsconfigs, so Node and DOM types never mix.
+
+### Local data, logs, and reset
+
+By default, the app stores its profile under `%APPDATA%\InspectorHub` (typically `C:\Users\<you>\AppData\Roaming\InspectorHub`). The profile includes the encrypted database under `db/`, OS-protected secrets under `secrets/`, media/cache files, `kv.json`, and rotating logs under `logs/`. Settings → Open logs opens the log directory. Do not copy the `secrets/` directory to another Windows account or machine: Electron `safeStorage` protects it with the current Windows user context.
+
+To run an isolated development instance, pass Electron's standard `--user-data-dir` switch, for example:
+
+```powershell
+npm run build:electron
+npx electron . --user-data-dir="$env:TEMP\InspectorHub-dev-profile"
+```
+
+The switch changes only that instance's profile; it is separate from the development-only `OI_USER_DATA_DIR` override. To reset a profile, quit the app first, rename or back up its whole profile directory, then start the app again. Resetting or uninstalling deletes local offline work only if you delete that profile yourself. The NSIS uninstaller is configured to preserve AppData.
+
+Development builds register `io.inspectorhub.app` to the Electron executable and current app script. A forced process termination can leave that Windows protocol registration pointing to the development tree; start and cleanly quit the same development build, or install another build, to refresh/remove it. Packaged builds register the installed app. Avoid launching a stale development checkout from OAuth callbacks.
+
+### Electron tests and installer smoke
+
+Run the desktop Playwright suite against the fake loopback engine with:
+
+```powershell
+npm run test:e2e:electron
+```
+
+This launches a development build and uses isolated temporary profiles and test-only engine routes; it does not test a production server or real Windows HEIF codecs. To create and inspect a local unsigned x64 installer:
+
+```powershell
+npm run package:win
+npm run check:electron-package
+```
+
+Then run the install/launch/protocol/uninstall smoke (it uses a temporary install and profile, and checks that user data survives uninstall):
+
+```powershell
+scripts\smoke-installer.ps1
+```
+
+The smoke script stops if the current-user `io.inspectorhub.app` protocol handler already exists. `-Force` is only for a maintainer who has verified that the existing registry entry can be restored; the script exports and restores that entry. An unsigned pilot installer may trigger Microsoft SmartScreen; the pilot has no signing certificate and automatic updates are disabled for unsigned builds.
+
+`npm run check:electron-package` inspects `release-win` by default; pass a directory to check another output, for example `node scripts/check-electron-package.mjs C:\temp\oi-1.0.0`.
+
+### Local update rehearsal (two versions, loopback feed)
+
+Never hand electron-builder `-c.publish.provider=generic -c.publish.url=...` on the command line: it is rejected ("configuration.publish should be one of these") because the config already sets a GitHub `publish` block. Instead set `OI_UPDATE_FEED_URL`, which `electron/builder/config-factory.mjs` honours for rehearsals only. It is off by default, and it accepts only an `http(s)` URL on `127.0.0.1` or `localhost` (no credentials); anything else makes the build fail, so a release build can never point at a stray feed. `-c.extraMetadata.oiSigned=true` is still needed: automatic updates stay disabled for builds that are not marked signed, and this flag marks the rehearsal build as one without producing a real signature.
+
+1. Build version A and version B into separate output directories (bump `version` in `package.json` between the two, and restore it afterwards):
+
+```powershell
+$env:OI_UPDATE_FEED_URL = 'http://127.0.0.1:4545/'
+npm run build; npm run build:electron; npm run build:heic-helper
+npx electron-builder --config electron/builder/electron-builder.config.mjs --publish never -c.extraMetadata.oiSigned=true -c.directories.output=C:\temp\oi-rehearsal\a
+# change the version, then repeat with output ...\b
+Remove-Item Env:OI_UPDATE_FEED_URL
+```
+
+2. Serve version B's directory (it holds `latest.yml` and the installer) with `node scripts/local-update-feed.mjs C:\temp\oi-rehearsal\b 4545`.
+3. Silently install version A (`InspectorHub-Setup-<A>.exe /S`), start it, and let the updater download B and reach `ready`; `installAndRestart` then relaunches the app as B.
+
+**Profile hazard.** A packaged build ignores `OI_USER_DATA_DIR` (the development-only overrides are dropped when `app.isPackaged`), and only honours Chromium's `--user-data-dir` when it is passed on the command line. The updater's relaunch (`quitAndInstall`) does not forward `--user-data-dir`, and an app started from the Start menu or a protocol callback never has it. A rehearsal that does not isolate the profile therefore reads and writes your real `%APPDATA%\InspectorHub`. Do not run the packaged rehearsal on a machine or Windows account that holds real InspectorHub data: use a throwaway Windows user, a VM, or a machine with no real data. The app's behaviour is deliberately unchanged here.
+
+The installer also registers nothing for `io.inspectorhub.app`; the app writes `HKCU\Software\Classes\io.inspectorhub.app` itself on first run. The NSIS uninstaller (`electron/builder/installer.nsh`) deletes that key, but only when its command launches the executable in the install directory being removed, so a stale key pointing elsewhere is left alone. It is skipped during an update. This script runs only inside a real NSIS uninstall and has not been executed in automated tests.
+
+Budget 0.5–1 GB for the Electron app itself. Packaging and Playwright are also memory intensive: on a 16 GB development machine, do not run a full engine type-check, Gradle build, or emulator at the same time as `npm run package:win` or the full Electron E2E suite.
+
+When recording acceptance evidence, keep screenshots in `.superpowers/sdd/<plan>/screenshots/<task>/`, use descriptive names, and record the window size and light/dark scheme in the matching progress note. Capture only synthetic or otherwise non-sensitive test data; Playwright screenshots show renderer content, not Windows-native dialogs, title bars, installer UI, taskbar, notifications, or SmartScreen.
+
+Import boundaries, enforced by `src/electron-boundaries.test.ts`:
+
+- Code in `src/` outside `src/desktop/` never imports `electron`.
+- `src/desktop/` reaches the main-process directory only through `electron/shared/`.
+- `electron/` imports only a short allowlist of pure `src` modules (database, schema, path helpers, callback constants, media types).
+
 The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt binaries for Electron's N-API ABI; no native compiler is needed.
+
+The desktop shell serves local renderer files from `https://localhost`. Its page, script, and Worker responses share one strict CSP, including in development: neither `unsafe-eval` nor `wasm-unsafe-eval` is allowed. An earlier plan relaxed the Worker policy for a bundled WASM HEIC decoder. The 2026-10-27 revision moved decoding to a main-process system helper and removed that relaxation entirely. A future bundled decoder (L2) must revisit this decision together with the CSP tests.
+
+### HEIC photos on Windows
+
+HEIC import relies on Microsoft's Windows HEIF Image Extensions and HEVC Video Extensions. The app ships no HEVC decoder: `native/win-heic-helper/` builds a small native WIC helper, which is individually signed in Azure-signed builds. The main process checks the helper's SHA-256 against the value recorded in the packaged app before starting it. If Windows cannot create the required WIC decoder, the app rejects that photo with a short explanation and links to the Microsoft Store extension guidance; exporting the photo as JPEG on the phone is another option. The renderer has no bundled WASM decoder, which is why its CSP does not allow WASM execution. HDR PQ/HLG is not tone-mapped.
+
+The only H0 extension-positive measurement recorded below is on Windows 11 Pro build 26300 with both extensions present. Windows 10 22H2, Windows 11 without one or both extensions, and default extension availability have not been compared, so do not infer a preinstall difference from that measurement.
+
+### HEIC decoder H0 probe (2026-10-29)
+
+The development machine reported Windows 11 Pro, version `10.0.26300` (64-bit). The current-user AppX inventory contained `Microsoft.HEIFImageExtension` 1.2.62.0 and `Microsoft.HEVCVideoExtension` 2.5.48.0. A one-off WIC COM probe returned `S_OK` when creating both the HEIF decoder and encoder components. This confirms the components are registered on that machine; the synthetic decode result is described below.
+
+Initially, no HEIC fixture or `heif-enc` executable was available in the repository or on `PATH`. Three synthetic 64×48 WIC encoding variants using `WritePixels` failed with `0x80070057` (`E_INVALIDARG`). A follow-up using `CreateBitmapFromMemory` and `IWICBitmapFrameEncode::WriteSource` succeeded: a 3,115-byte synthetic HEIC decoded through WPF `BitmapDecoder` as one 64×48 Bgr32 frame. This validates only the small-image encode/decode path on this host.
+
+A synthetic primary-item `irot` fixture was then added for an application-level check. With the rotation property present, WIC reports the expected 48×64 frame size, but `CopyPixels` fails with `0xC00D36BE` (`WINCODEC_ERR_UNSUPPORTEDOPERATION`) on this machine. The helper now removes the primary item's `irot` association from a private temporary copy, decodes the original pixels through WIC, applies the quarter-turn itself, and removes the temporary input on process exit. The local Electron test imports baseline, 90°, 180°, and 270° variants offline and compares decoded JPEG pixels against the corresponding orientation mapping; all four pass on this host. The 180°/270° variants are made by changing the `irot` value in a synthetic fixture at test runtime. This validates all three non-zero quarter-turn values in the application path, not real iPhone orientation metadata, grid layout, or codec behavior on another machine.
+
+The offline Electron editor flow also checks a tiny HEIC whose primary `ispe` declares more than 64 MP and a truncated HEIC. With the freshly built native helper, both show the per-file decode reason, skip only the invalid HEIC, and persist the valid JPEG selected after it. The editor E2E file passes 7/7 locally. These synthetic negative fixtures do not establish behavior for real iPhone files or machines with different codec states.
+
+A separate CC0 synthetic Display P3 HEIC fixture was generated from the public [ICC Display P3 encoding definition](https://registry.color.org/rgb-registry/displayp3), using a test-owned profile rather than Apple's profile binary. WIC reports one embedded profile. The helper initially preserved the encoded P3 sample (`230, 80, 30`) instead of converting it; the new WIC color-transform path stores an sRGB JPEG sample (`235, 47, 20`) closer to the ICC reference (`249, 61, 0`). A direct helper E2E and the actual offline Electron editor import both pass on this host, including light/dark screenshots. The observed WIC transform differs from the LittleCMS reference by up to 20 channel values for this synthetic patch; this is not a real iPhone color-accuracy result.
+
+Separate WIC performance probes generated deterministic synthetic 12 MP and 48 MP HEIC files. On this host, five WPF `BitmapDecoder` samples for 12 MP had a median of 1,655.67 ms and nearest-rank IQR of 68.54 ms. Three native C++ WIC decode samples for 48 MP had a median of 3,031.63 ms and nearest-rank IQR of 190.73 ms; the largest whole-process peak working set was about 456.6 MiB. The 12 MP memory figures were also whole-process observations, not isolated decoder allocations. These measurements are not packaged-helper or iPhone-photo performance results.
+
+Follow-up large-image measurement (2026-10-30): task-local `heif-enc` 1.21.2 encoded deterministic synthetic 16-bit RGB gradient/noise inputs as 10-bit, 4:2:0 HEIC (`-b 10 -q 45 -p preset=ultrafast`); `heif-info` confirmed 4032×3024 and 8064×6048 at 10 bits. Five fresh `h0-wic-decode.exe` processes per size measured WIC decoder creation, frame retrieval, BGRA32 conversion setup, and full `CopyPixels`; peak working set is the whole probe process. For 12 MP, elapsed median was 598.09 ms (range 461.06–927.14 ms; MAD 129.61 ms), with median peak working set 452.8 MiB (range 319.7–453.0 MiB; MAD 0.3 MiB). For 48 MP, elapsed median was 2794.24 ms (range 2516.97–2910.96 ms; MAD 116.72 ms), with median peak working set 1410.5 MiB (range 1410.4–1410.6 MiB; MAD <0.1 MiB). The HEIC files were 2.84 MB and 5.74 MB. The high 48 MP peak was not isolated to the packaged helper or explained; these synthetic measurements characterize only this host's WIC path, not a real iPhone image or packaged-app performance.
+
+The synthetic 2×2 tiled HEIC now decodes through the native helper and editor; the test checks the complete dimensions and all four tile colors. A separate scratch WIC probe encoded two top-level HEVC still-image items with distinct colors: after changing `pitm` from item 1 to item 2, WIC `GetFrame(0)` returned item 2 and `GetFrame(1)` returned item 1 on this host (Windows 11 build 26300 with HEIF 1.2.62.0 and HEVC 2.5.48.0). This verifies primary-item ordering for this synthetic WIC file only; actual iPhone burst/auxiliary layouts and other Windows versions remain unverified. A synthetic Main10 fixture also decodes through the helper, but HDR PQ/HLG appearance and real iPhone photos remain unverified. The missing-extension HRESULT and Windows 10 baseline are still unmeasured. A follow-up in the actual Electron 44.7.0 / Chromium 152.0.7977.130 renderer supplied the synthetic `.heic` through Playwright to `<input accept="image/*">`; Chromium reported an empty `File.type`. A separate visible probe opened the native Windows picker for the same input: its image filter included `.heic` and it displayed the 64×48, 12 MP, and 48 MP project synthetic fixtures. No file was selected. This verifies picker visibility on this host only. No codec was installed or removed. The extension inventory and WIC registration do not establish whether Windows 11 24H2 ships either extension by default.
+
+The Windows CI job records its HEIF/HEVC AppX inventory in the GitHub Actions step summary, using an all-users query with a current-user fallback if access is denied. Hosted run `41033601813` observed no installed HEIF or HEVC package on its `windows-latest` runner. This is one runner inventory result and does not establish Windows 11's default extension availability.
+
+The desktop decoder does not tone-map HDR PQ/HLG. HDR visual output remains untested.
+
+The Microsoft Store listings verified for the user-facing install guidance are [HEIF Image Extension](https://apps.microsoft.com/detail/9pmmsr1cgpwg) and [HEVC Video Extensions from Device Manufacturer](https://apps.microsoft.com/detail/9n4wgh0z6vhq). The paid [HEVC Video Extensions](https://apps.microsoft.com/detail/9nmzlz57r3t7) listing is separate. The user's Store availability and regional behavior were not tested.
+
+Run the shell smoke test after `npm run build:electron` with `npm run test:e2e:electron -- --project=ci shell.spec.ts`. The fixture checks renderer isolation, navigation, single-instance focus, and loopback WebSocket, HTTPS Range and streamed responses. Its loopback certificate and private key are public test fixtures, never production credentials. Real-server `wss://` coverage belongs to the Diagnostics collaboration-ticket checks in the later integration tasks.
+
+Development-only `OI_USER_DATA_DIR`, `OI_RENDERER_ROOT`, `OI_E2E_HEIC_HELPER`, and `OI_E2E_NO_HEIC_DECODER` overrides are ignored before access in packaged builds. Chromium's own `--user-data-dir` switch is separate from these test overrides.
+
+### Measured facts (2026-10-27)
+
+| Item | Value | How it was checked |
+|---|---|---|
+| Electron (pinned, no `^`) | 44.7.0 | `npm view electron@44.7.0 version`; the registry's latest was 45.0.0 |
+| Runtime inside Electron 44.7.0 | Node 24.21.0, Chromium 152.0.7977.130, `NODE_MODULE_VERSION` 149, N-API 10 | `process.versions` printed from the main process |
+| esbuild (pinned) | 0.28.2 | `npm view esbuild version`; `target` is `node24`, the Node major above |
+| `better-sqlite3-multiple-ciphers` | 13.0.3, engines `node >=22` | `npm view`; tarball unpacked with `npm pack` |
+| Its prebuilds | `win32-x64.node` and `win32-arm64.node` are both present, plus darwin, linux and linuxmusl | `prebuilds/` listing in the tarball |
+| `electron-builder` / `electron-updater` | 26.15.3 and 6.8.9 exist; the registry's latest is 26.18.0 and 6.8.11 | `npm view`; neither is a dependency yet |
+| `@playwright/test`, `@electron/fuses` | latest 1.64.1 and 2.1.3 | `npm view`; not dependencies yet |
+| Electron upstream Windows floor | Windows 10 or later for Electron v23.0.0 and higher | [Electron breaking changes](https://www.electronjs.org/docs/latest/breaking-changes) |
+
+InspectorHub's pilot support target is Windows 10 22H2 or later, or Windows 11, on `x64`; the first packaged build targets `x64`. This client is only tested on Windows 11 and on the `windows-latest` CI image. An `arm64` machine runs the x64 build under Windows 11's x64 emulation. A native `arm64` build is possible later because the database module ships a `win32-arm64` prebuild.
+
+## Standalone fake engine (test-only)
+
+The loopback engine behind the Electron E2E also runs on its own, so the same behaviour can serve Android emulator and iOS simulator tests (`e2e/fake-engine/`). It needs plain Node 22.18 or newer (built-in type stripping) and no build step.
+
+```
+node e2e/fake-engine/serve.mjs --port 0 --host 127.0.0.1 [--scenario default|inspection] [--upload-delay-ms 0]
+```
+
+It prints one JSON line when ready, for example `{"origin":"http://127.0.0.1:51234","control":"http://127.0.0.1:51235"}`, and exits cleanly on SIGINT/SIGTERM on POSIX (on Windows a signal terminates the process without the handler).
+
+- Android emulator: start with `--host 0.0.0.0` and point the app at `http://10.0.2.2:<port>`. iOS simulator: `http://localhost:<port>`.
+- The `control` origin is a second, loopback-only listener. Fault injection lives there, under `/__test__/` only: `GET /state`, `POST /unavailable {"value":true|false}`, `POST /upload-delay {"ms":n}`, `POST /compatibility {...}`. The engine port itself serves no test routes. `--host 0.0.0.0` exposes an unauthenticated server (fixed bearer token) to the whole LAN: use it on a trusted network only (the CLI prints a warning to stderr).
+- The sign-in the engine offers (`/oauth/register`, `/oauth/token` hand out a fixed test token with no user interaction) exists only in this fake server. The client only knows a server address, and the release bundle contains none of the fake engine or its `/__test__/` prefix (`npm run check:bundle` and a grep of `dist` and `dist-electron` confirm it).
+
+## Regenerating the app icons
+
+The Windows and Android icons (and the iOS marketing icon) are generated from `branding/inspectorhub-mark.svg`:
+
+```powershell
+node scripts/build-icons.mjs
+```
+
+It rasterises the SVG with Playwright's Chromium and writes `electron/builder/icon.png`, `icon.ico`, the Android `mipmap-*` launcher set, and the iOS 1024 icon (on white, no alpha). The output is deterministic for a given Chromium build (a different Chromium may rasterise slightly differently); each file's SHA-256 is printed. If Playwright's own Chromium is not downloaded, the script falls back to the newest Chromium in the Playwright cache (or `OI_ICON_CHROMIUM=<chrome.exe>`). See `branding/README.md`.
 
 ## Memory
 
@@ -149,3 +301,23 @@ Notes from running them on the emulator: the runner pins adb and Maestro to the 
 The flows wait for elements to appear (`extendedWaitUntil`, `scrollUntilVisible`); none sleeps. A full run takes a few minutes once the emulator is up. Maestro needs JDK 21 (set by `dev-env.ps1`).
 
 These flows are not run in CI: the CI jobs have no emulator. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.
+
+## Pre-push: tests related to your change
+
+The type check runs before a commit, but vitest does not, so a change to shared code can reach CI red. Install the repo hooks once per clone:
+
+```
+npm run hooks:install
+```
+
+This points `core.hooksPath` at `.githooks` and marks the hooks executable (`chmod +x`), so a clone that lost the executable bit still works. `.gitattributes` keeps the hooks LF on Windows checkouts.
+
+`.githooks/pre-push` runs `scripts/prepush-related-tests.mjs`. It diffs the pushed range (against the remote sha, or the merge-base with `origin/main` for a new branch) and runs `vitest related` serially (one worker) on:
+
+- the changed `.ts`/`.tsx` files under `src/`, `electron/` and `e2e/`;
+- the field-ui contract test (`src/field/field-ui-contract.test.ts`) whenever `package.json`, `package-lock.json`, a vite/vitest/tsconfig file or a `scripts/*.mjs` file changed, because such a change can break tests that no import reveals (it says so when it does this; `npm test` is the full suite);
+- the sibling tests of a deleted source file. Deleted files are reported as not covered, since a deleted file has no importers to follow.
+
+It skips with a message when none of that changed. It prints `N test file(s) run, P/T tests passed, F failed, S skipped`, fails the push on a red test or a suite that cannot load, and says so loudly when no test file is related or every test was skipped, instead of reporting green.
+
+The tests run on your working tree, so the hook refuses when the pushed commit is not `HEAD` or tracked files have uncommitted changes. `OI_SKIP_PREPUSH_VITEST=1 git push` is only for when the hook itself cannot run: it skips the tests and prints a warning listing the files that went untested. To preview a selection: `node scripts/prepush-related-tests.mjs src/export/copy.ts`.

@@ -3,7 +3,7 @@ import { unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { resultsDocName } from '../collab/connector';
 import { recordServerStateVector } from '../collab/sync-proof';
-import { MAX_MEDIA_BYTES } from '../media/store';
+import { MAX_MEDIA_BYTES } from '../media/media-types';
 import { buildPackage } from './build-package';
 import { collectPlan } from './collect';
 import { ALICE, NOW, createExportWorld, localDoc, seedInspection, type ExportWorld } from './test-support/world';

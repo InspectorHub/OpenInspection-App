@@ -3,6 +3,7 @@ import type { NativeUploader } from '../media/native-uploader';
 import type { MediaStore } from '../media/store';
 import { createBlockedGuard, type IsBlocked } from '../offline/blocked';
 import type { Account } from '../offline/outbox';
+import type { ClientPlatform } from '../app/compose';
 import type { ReconcilerHandle } from '../app/offline-stack';
 import type { WorkPackageRefresher } from '../offline/work-package';
 import type { Clock } from '../platform/clock';
@@ -14,11 +15,13 @@ import type { Api } from './api-client';
 import { createAfterWrite } from './after-write';
 import { wrapCollab } from './collab-wrapper';
 import { createExecutor } from './commands';
+import { fieldPlatformOf } from './field-platform';
 import { createEditorLoader } from './editor-data';
 import type { EditorRegistry } from './editor-registry';
 import { failureOf, MESSAGES } from './messages';
 import { withMediaCleanup } from './media-cleanup';
 import type { NetworkFlag } from './network-flag';
+import type { PhotoCache } from './photo-cache';
 import { createMemoryPhotoIndex, createPhotoUrls, indexUploadedRows, type PhotoIndex } from './photo-urls';
 import type { MediaReconciler } from '../media/reconcile';
 import { hasQueuedWrites, unsentPhotos } from './queued-writes';
@@ -87,7 +90,7 @@ export interface LocalDataSourceDeps {
    * the replayer): captured work is always delivered. Omitted: editing is allowed.
    */
   canEdit?(): boolean;
-  platform: 'ios' | 'android';
+  platform: ClientPlatform;
   /** The time stamped on an inspector signature. It MUST be anchored to the server's clock: the device clock can be set to any time. */
   signedAtMs(): number;
   clock: Clock;
@@ -105,6 +108,8 @@ export interface LocalDataSourceDeps {
   /** Defaults to the stack's blocked guard over its database. */
   isBlocked?: IsBlocked;
   photoIndex?: PhotoIndex;
+  /** Copies of server photos for the thumbnails whose file is no longer on the device. Omitted: only photos stored here are shown. */
+  photoCache?: PhotoCache;
   /** A fresh UUID. Defaults to `crypto.randomUUID`. */
   newId?(): string;
   /** The write succeeded but the cached copy could not be brought up to date. */
@@ -113,16 +118,28 @@ export interface LocalDataSourceDeps {
   onError?(error: unknown): void;
   /** The stack's document step for clips: bound to the real one here. */
   resolveVideo?: DeferredResolveVideo;
+  /** Optional host decoder for image formats the browser cannot decode. */
+  decodeImage?: FieldDataSource['media']['decodeImage'];
 }
 
 /** A host that is not a real one: presence is off, so this address is never opened. */
 const PRESENCE_OFF_ORIGIN = 'wss://presence-off.invalid';
 
+/** The server keys of the photos uploaded for an inspection whose rows are still on the device. */
+async function uploadedKeys(store: Pick<MediaStore, 'listRows'>, inspectionId: string): Promise<string[]> {
+  try {
+    const rows = await store.listRows({ inspectionId, states: ['uploaded'], kinds: ['photo'] });
+    return rows.flatMap((row) => (row.state === 'uploaded' && row.uploadedKey !== null ? [row.uploadedKey] : []));
+  } catch {
+    return [];
+  }
+}
+
 export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSource {
   const { stack } = deps;
   const isBlocked = deps.isBlocked ?? createBlockedGuard(stack.db);
   const photoIndex = deps.photoIndex ?? createMemoryPhotoIndex();
-  const photoUrl = createPhotoUrls({ tenantId: stack.account.tenantId, index: photoIndex });
+  const photoUrl = createPhotoUrls({ tenantId: stack.account.tenantId, index: photoIndex, ...(deps.photoCache === undefined ? {} : { cache: deps.photoCache }) });
   const report = (error: unknown): void => {
     try {
       deps.onError?.(error);
@@ -241,7 +258,17 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
         }
       }
       // Photos that are on the server but whose file is still on this device can be shown from it.
-      if (scope === undefined) await indexUploadedRows(photoIndex, stack.store, inspectionId);
+      if (scope === undefined) {
+        if (deps.photoCache === undefined) await indexUploadedRows(photoIndex, stack.store, inspectionId);
+        else {
+          // With a cache the uploaded photos still on the device are copied into it now instead of being indexed by their
+          // file: a file that cleanup deletes later would leave a broken thumbnail, a cache copy does not.
+          await deps.photoCache.warm(inspectionId);
+          const unshown = await deps.photoCache.prime(inspectionId, await uploadedKeys(stack.store, inspectionId));
+          // What the cache cannot hold (a HEIC original) is still shown from its file, as before the cache.
+          if (unshown.length > 0) await indexUploadedRows(photoIndex, stack.store, inspectionId, new Set(unshown));
+        }
+      }
       return data;
     },
     session: () => deps.session,
@@ -278,9 +305,14 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     isOnline: () => deps.network.isOnline(),
     onOnlineChange: (cb) => deps.network.onOnlineChange(cb),
     collab: withMediaCleanup(wrapCollab(stack.connector, deps.registry), { store: stack.store, onError: report }),
-    media: { store: mediaStore, uploader },
+    media: {
+      store: mediaStore,
+      uploader,
+      ...(deps.decodeImage === undefined ? {} : { decodeImage: deps.decodeImage }),
+    },
     urls: {
       photo: photoUrl,
+      ...(deps.photoCache === undefined ? {} : { subscribe: (listener: () => void) => deps.photoCache?.subscribe(listener) ?? (() => undefined) }),
       // The report preview, the PDFs and the video objects are server pages that need the web session; the app has none.
       reportPreview: () => null,
       reportPdf: () => null,
@@ -292,6 +324,6 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       editorPath: (inspectionId) => `/inspections/${encodeURIComponent(inspectionId)}/edit`,
     },
     resources: { ...resources, video: videoAdapter.video },
-    platform: deps.platform,
+    platform: fieldPlatformOf(deps.platform),
   };
 }

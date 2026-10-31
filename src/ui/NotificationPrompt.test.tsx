@@ -10,6 +10,7 @@ import { createMemoryKeyValue } from '../platform/kv';
 import type { NotificationPermissionPort } from '../platform/notifications';
 import { backRegistry, pressBack } from './back-button';
 import { NotificationPrompt } from './NotificationPrompt';
+import { escapeLayerCount } from './escape-layer';
 
 afterEach(cleanup);
 
@@ -53,11 +54,16 @@ describe('NotificationPrompt', () => {
     const kv = createMemoryKeyValue();
     const permission = port();
     const services = { db: world.db, notificationAsk: createNotificationAsk({ kv, permission }) };
+    const layersBefore = escapeLayerCount();
     render(<NotificationPrompt services={services} exportsClosed={0} suspended={false} timers={createManualTimers()} />);
     await screen.findByRole('alertdialog');
+    await waitFor(() => expect(escapeLayerCount()).toBe(layersBefore + 1));
     const exit = vi.fn();
     act(() => pressBack(backRegistry, { exitApp: exit, escapeTarget: window }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(escapeLayerCount()).toBe(layersBefore);
+    });
     expect(kv.entries()[ASK_KEY]).toBe('declined');
     expect(permission.request).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();

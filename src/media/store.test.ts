@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Db } from '../platform/db';
-import { createMediaStore, MAX_MEDIA_BYTES } from './store';
+import { MAX_MEDIA_BYTES } from './media-types';
+import { createMediaStore } from './store';
 import { createMediaWorld, INSPECTION, jpegBlob, jpegBytes, photoRecord } from './test-support/fakes';
 import { createMemoryFiles } from '../app/test-support/memory-files';
 import { neverBlocked } from '../test-support/never-blocked';

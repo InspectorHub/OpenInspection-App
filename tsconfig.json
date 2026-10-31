@@ -15,5 +15,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["src", "capacitor.config.ts", "vite.config.ts"]
+  "include": ["src", "e2e/fake-engine", "capacitor.config.ts", "vite.config.ts"]
 }

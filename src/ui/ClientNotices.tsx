@@ -1,5 +1,6 @@
 import { clientPolicy, factsFor } from '../app/client-state';
 import type { AppServices } from '../app/compose';
+import type { DesktopSettingsPort } from '../desktop/updater-port';
 import { useClientState } from '../app/use-client-state';
 import { useExpiryNotice } from './BuildExpiry';
 import { ReconcileUnsupported } from './ReconcileUnsupported';
@@ -13,13 +14,14 @@ export interface ClientNoticesProps {
   /** The server this session belongs to. Facts about any other server are ignored. */
   origin: string;
   locale?: string;
+  desktop?: DesktopSettingsPort;
 }
 
 /**
  * What the client has learned about the server and about its own build, as the notices above the work. Renders nothing when there
  * is none. These panels have second-level headings: put this component after the screen's own first-level heading.
  */
-export function ClientNotices({ services, origin, locale }: ClientNoticesProps) {
+export function ClientNotices({ services, origin, locale, desktop }: ClientNoticesProps) {
   const state = useClientState(services.clientState);
   const expiry = useExpiryNotice(services);
   const facts = factsFor(state, origin);
@@ -31,9 +33,9 @@ export function ClientNotices({ services, origin, locale }: ClientNoticesProps) 
   if (!showUpdateRequired && !showServerTooOld && !showRecommended && !showReconcile && expiry === null) return null;
   return (
     <div className="flex flex-col gap-3">
-      {showUpdateRequired && <UpgradeRequired platform={services.platform} downloadUrl={facts.downloadUrl} openExternal={services.openExternal} />}
+      {showUpdateRequired && <UpgradeRequired platform={services.platform} downloadUrl={facts.downloadUrl} openExternal={services.openExternal} desktop={desktop} />}
       {showServerTooOld && <ServerTooOld />}
-      {showRecommended && <UpdateRecommended platform={services.platform} downloadUrl={facts.downloadUrl} openExternal={services.openExternal} onDismiss={() => services.clientState.dismissBanner(origin)} />}
+      {showRecommended && <UpdateRecommended platform={services.platform} downloadUrl={facts.downloadUrl} openExternal={services.openExternal} onDismiss={() => services.clientState.dismissBanner(origin)} desktop={desktop} />}
       {expiry !== null && <TestflightExpiry notice={expiry} {...(locale === undefined ? {} : { locale })} />}
       {showReconcile && <ReconcileUnsupported onDismiss={() => services.clientState.dismissReconcileNotice(origin)} />}
     </div>
