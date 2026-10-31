@@ -6,7 +6,7 @@ import { finished } from 'node:stream/promises';
 import { join } from 'node:path';
 import * as asar from '@electron/asar';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { checkElectronPackage } from './check-electron-package.mjs';
+import { checkElectronPackage, packageOptionsFromArgv } from './check-electron-package.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -134,5 +134,18 @@ describe('Windows electron-builder configuration', () => {
     const icon = readFileSync(config.win.icon);
     expect(icon.readUInt32BE(16)).toBeGreaterThanOrEqual(512);
     expect(icon.readUInt32BE(20)).toBeGreaterThanOrEqual(512);
+  });
+});
+
+describe('packageOptionsFromArgv', () => {
+  it('leaves the default package root alone when no directory is given', () => {
+    expect(packageOptionsFromArgv(['node', 'check-electron-package.mjs'])).toEqual({});
+  });
+
+  it('honours an explicit directory, and the checker then inspects that directory', async () => {
+    const value = await fixture({ nativeFiles: ['node_modules/better-sqlite3-multiple-ciphers/prebuilds/win32-x64.node'] });
+    const parsed = packageOptionsFromArgv(['node', 'check-electron-package.mjs', value.root]);
+    expect(parsed).toEqual({ packageRoot: value.root });
+    expect(checkElectronPackage({ ...options(value.app), ...parsed })).toMatchObject({ nativeModules: 1 });
   });
 });

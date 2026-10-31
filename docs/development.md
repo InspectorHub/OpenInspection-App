@@ -114,6 +114,29 @@ scripts\smoke-installer.ps1
 
 The smoke script stops if the current-user `io.inspectorhub.app` protocol handler already exists. `-Force` is only for a maintainer who has verified that the existing registry entry can be restored; the script exports and restores that entry. An unsigned pilot installer may trigger Microsoft SmartScreen; the pilot has no signing certificate and automatic updates are disabled for unsigned builds.
 
+`npm run check:electron-package` inspects `release-win` by default; pass a directory to check another output, for example `node scripts/check-electron-package.mjs C:\temp\oi-1.0.0`.
+
+### Local update rehearsal (two versions, loopback feed)
+
+Never hand electron-builder `-c.publish.provider=generic -c.publish.url=...` on the command line: it is rejected ("configuration.publish should be one of these") because the config already sets a GitHub `publish` block. Instead set `OI_UPDATE_FEED_URL`, which `electron/builder/config-factory.mjs` honours for rehearsals only. It is off by default, and it accepts only an `http(s)` URL on `127.0.0.1` or `localhost` (no credentials); anything else makes the build fail, so a release build can never point at a stray feed. `-c.extraMetadata.oiSigned=true` is still needed: automatic updates stay disabled for builds that are not marked signed, and this flag marks the rehearsal build as one without producing a real signature.
+
+1. Build version A and version B into separate output directories (bump `version` in `package.json` between the two, and restore it afterwards):
+
+```powershell
+$env:OI_UPDATE_FEED_URL = 'http://127.0.0.1:4545/'
+npm run build; npm run build:electron; npm run build:heic-helper
+npx electron-builder --config electron/builder/electron-builder.config.mjs --publish never -c.extraMetadata.oiSigned=true -c.directories.output=C:\temp\oi-rehearsal\a
+# change the version, then repeat with output ...\b
+Remove-Item Env:OI_UPDATE_FEED_URL
+```
+
+2. Serve version B's directory (it holds `latest.yml` and the installer) with `node scripts/local-update-feed.mjs C:\temp\oi-rehearsal\b 4545`.
+3. Silently install version A (`InspectorHub-Setup-<A>.exe /S`), start it, and let the updater download B and reach `ready`; `installAndRestart` then relaunches the app as B.
+
+**Profile hazard.** A packaged build ignores `OI_USER_DATA_DIR` (the development-only overrides are dropped when `app.isPackaged`), and only honours Chromium's `--user-data-dir` when it is passed on the command line. The updater's relaunch (`quitAndInstall`) does not forward `--user-data-dir`, and an app started from the Start menu or a protocol callback never has it. A rehearsal that does not isolate the profile therefore reads and writes your real `%APPDATA%\InspectorHub`. Do not run the packaged rehearsal on a machine or Windows account that holds real InspectorHub data: use a throwaway Windows user, a VM, or a machine with no real data. The app's behaviour is deliberately unchanged here.
+
+The installer also registers nothing for `io.inspectorhub.app`; the app writes `HKCU\Software\Classes\io.inspectorhub.app` itself on first run. The NSIS uninstaller (`electron/builder/installer.nsh`) deletes that key, but only when its command launches the executable in the install directory being removed, so a stale key pointing elsewhere is left alone. It is skipped during an update. This script runs only inside a real NSIS uninstall and has not been executed in automated tests.
+
 Budget 0.5–1 GB for the Electron app itself. Packaging and Playwright are also memory intensive: on a 16 GB development machine, do not run a full engine type-check, Gradle build, or emulator at the same time as `npm run package:win` or the full Electron E2E suite.
 
 When recording acceptance evidence, keep screenshots in `.superpowers/sdd/<plan>/screenshots/<task>/`, use descriptive names, and record the window size and light/dark scheme in the matching progress note. Capture only synthetic or otherwise non-sensitive test data; Playwright screenshots show renderer content, not Windows-native dialogs, title bars, installer UI, taskbar, notifications, or SmartScreen.

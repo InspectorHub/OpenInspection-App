@@ -82,9 +82,14 @@ export function checkElectronPackage({ packageRoot = 'release-win', runFuses = (
   return { archive, helper, executable, nativeModules: nativeModules.length, installers: installers.length };
 }
 
+// The CLI takes an optional directory (release-win by default): node scripts/check-electron-package.mjs <dir>
+export function packageOptionsFromArgv(argv) {
+  return argv[2] ? { packageRoot: argv[2] } : {};
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const result = checkElectronPackage();
+    const result = checkElectronPackage(packageOptionsFromArgv(process.argv));
     process.stdout.write(`Windows package verified: ${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : 'electron-package:unknown'}\n`);
