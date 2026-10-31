@@ -91,6 +91,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     log('second-instance');
   };
   const windows = createWindowController({ packaged: app.isPackaged, noHeicDecoder: paths.noHeicDecoder, preload: join(__dirname, '../preload/index.cjs'),
+    icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(app.getAppPath(), 'electron', 'builder', 'icon.png'),
     create: (options) => new BrowserWindow(options), setApplicationMenu: (menu) => Menu.setApplicationMenu(menu),
     openExternal: (url) => isAllowedExternalUrl(url, { packaged: app.isPackaged }) ? shell.openExternal(url) : Promise.resolve(), log,
     onActiveChange: (active) => { try { uploaderContents?.send(EVENT_CHANNELS.activeChange, active); } catch { /* renderer lifecycle can race a transition */ } },

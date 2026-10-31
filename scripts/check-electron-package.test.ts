@@ -119,7 +119,7 @@ describe('Windows electron-builder configuration', () => {
       npmRebuild: false,
       asarUnpack: ['node_modules/better-sqlite3-multiple-ciphers/prebuilds/**'],
       electronLanguages: ['en-US'],
-      win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'electron/builder/icon.png', signExts: ['!win-heic-helper.exe'] },
+      win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'electron/builder/icon.ico', signExts: ['!win-heic-helper.exe'] },
       nsis: { oneClick: true, perMachine: false, deleteAppDataOnUninstall: false, artifactName: '${productName}-Setup-${version}.${ext}' },
       protocols: [{ name: 'InspectorHub sign-in', schemes: ['io.inspectorhub.app'] }],
       publish: { provider: 'github', owner: 'InspectorHub', repo: 'OpenInspection-App' },
@@ -128,12 +128,21 @@ describe('Windows electron-builder configuration', () => {
     });
     expect(config.files).toContain('!node_modules/**');
     expect(config.files).toContain('node_modules/better-sqlite3-multiple-ciphers/prebuilds/win32-x64.node');
-    expect(config.extraResources).toEqual([{ from: 'dist-electron/native/win-heic-helper.exe', to: 'heic-helper/win-heic-helper.exe' }]);
+    // The helper, plus the window icon the main process hands to BrowserWindow (resources/icon.png).
+    expect(config.extraResources).toEqual([
+      { from: 'dist-electron/native/win-heic-helper.exe', to: 'heic-helper/win-heic-helper.exe' },
+      { from: 'electron/builder/icon.png', to: 'icon.png' },
+    ]);
     expect(config.extraMetadata.oiHeicHelperSha256).toMatch(/^[a-f\d]{64}$/);
     expect(config.win).not.toHaveProperty('azureSignOptions');
-    const icon = readFileSync(config.win.icon);
-    expect(icon.readUInt32BE(16)).toBeGreaterThanOrEqual(512);
-    expect(icon.readUInt32BE(20)).toBeGreaterThanOrEqual(512);
+    // The window icon is a large PNG; the exe icon is an .ico that carries every size Windows asks for, up to 256.
+    const png = readFileSync('electron/builder/icon.png');
+    expect(png.readUInt32BE(16)).toBeGreaterThanOrEqual(512);
+    expect(png.readUInt32BE(20)).toBeGreaterThanOrEqual(512);
+    const ico = readFileSync(config.win.icon);
+    expect([ico.readUInt16LE(0), ico.readUInt16LE(2)]).toEqual([0, 1]);
+    const sizes = Array.from({ length: ico.readUInt16LE(4) }, (_, index) => ico[6 + 16 * index] || 256);
+    expect(sizes).toEqual(expect.arrayContaining([16, 32, 48, 256]));
   });
 });
 

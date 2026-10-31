@@ -200,6 +200,16 @@ Development-only `OI_USER_DATA_DIR`, `OI_RENDERER_ROOT`, `OI_E2E_HEIC_HELPER`, a
 
 InspectorHub's pilot support target is Windows 10 22H2 or later, or Windows 11, on `x64`; the first packaged build targets `x64`. This client is only tested on Windows 11 and on the `windows-latest` CI image. An `arm64` machine runs the x64 build under Windows 11's x64 emulation. A native `arm64` build is possible later because the database module ships a `win32-arm64` prebuild.
 
+## Regenerating the app icons
+
+The Windows and Android icons (and the iOS marketing icon) are generated from `branding/inspectorhub-mark.svg`:
+
+```powershell
+node scripts/build-icons.mjs
+```
+
+It rasterises the SVG with Playwright's Chromium and writes `electron/builder/icon.png`, `icon.ico`, the Android `mipmap-*` launcher set, and the iOS 1024 icon (on white, no alpha). The output is deterministic for a given Chromium build (a different Chromium may rasterise slightly differently); each file's SHA-256 is printed. If Playwright's own Chromium is not downloaded, the script falls back to the newest Chromium in the Playwright cache (or `OI_ICON_CHROMIUM=<chrome.exe>`). See `branding/README.md`.
+
 ## Memory
 
 Gradle, the Android emulator and the engine's type-checks are all memory hungry. On a 16 GB machine, do not run a Gradle build and a full type-check of the engine at the same time.

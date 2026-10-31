@@ -31,6 +31,16 @@ it.each([true, false])('creates one isolated window with the fixed entry: packag
   expect(setApplicationMenu.mock.calls).toEqual(packaged ? [[null]] : []);
 });
 
+it('passes the window icon only when one is supplied', () => {
+  const { create, win } = setup();
+  createWindowController({ packaged: true, preload: '/preload.cjs', icon: '/res/icon.png', create, setApplicationMenu: vi.fn(), openExternal: async () => {}, log: vi.fn() }).ensure();
+  expect(create.mock.calls[0]![0].icon).toBe('/res/icon.png');
+  expect(win.loadURL).toHaveBeenCalled();
+  const plain = setup();
+  plain.controller.ensure();
+  expect('icon' in plain.create.mock.calls[0]![0]).toBe(false);
+});
+
 it('logs window-ready only after the renderer entry finishes loading', async () => {
   const { controller, win, log } = setup(true);
   let finish!: () => void;

@@ -19,6 +19,7 @@ export function createWindowController(deps: {
   packaged: boolean;
   noHeicDecoder?: boolean;
   preload: string;
+  icon?: string;
   create(options: BrowserWindowConstructorOptions): ShellWindow;
   setApplicationMenu(menu: null): void;
   openExternal(url: string): Promise<void>;
@@ -34,6 +35,7 @@ export function createWindowController(deps: {
       if (deps.packaged) deps.setApplicationMenu(null);
       const created = deps.create({
         width: 1280, height: 800, minWidth: 480, minHeight: 640, title: 'InspectorHub',
+        ...(deps.icon ? { icon: deps.icon } : {}),
         webPreferences: { preload: deps.preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true,
           ...(deps.noHeicDecoder ? { additionalArguments: ['--oi-no-heic-decoder'] } : {}),
           allowRunningInsecureContent: false, backgroundThrottling: false, devTools: !deps.packaged, spellcheck: false, webviewTag: false },

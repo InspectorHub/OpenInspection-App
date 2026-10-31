@@ -41,11 +41,11 @@ export function createElectronBuilderConfig({ helperPath = join(process.cwd(), '
     '!node_modules/better-sqlite3-multiple-ciphers/prebuilds/darwin-*',
     '!node_modules/better-sqlite3-multiple-ciphers/prebuilds/win32-arm64*',
   ],
-  extraResources: [{ from: 'dist-electron/native/win-heic-helper.exe', to: 'heic-helper/win-heic-helper.exe' }],
+  extraResources: [{ from: 'dist-electron/native/win-heic-helper.exe', to: 'heic-helper/win-heic-helper.exe' }, { from: 'electron/builder/icon.png', to: 'icon.png' }],
   electronLanguages: ['en-US'],
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
-    icon: 'electron/builder/icon.png',
+    icon: 'electron/builder/icon.ico',
     // The Azure job signs this helper before electron-builder reads the helper hash into app.asar.
     // Keep the already-signed bytes intact while still signing the main app and NSIS installer.
     signExts: ['!win-heic-helper.exe'],
