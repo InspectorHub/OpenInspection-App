@@ -16,6 +16,16 @@ describe('photo urls', () => {
     expect(photo(INSPECTION, KEY)).toBe(LOCAL);
   });
 
+  it('ignores the optional size hint: the device keeps one copy of a photo, so thumb, view and original answer alike', () => {
+    const index = createMemoryPhotoIndex();
+    index.set(INSPECTION, [[KEY, LOCAL]]);
+    const photo = createPhotoUrls({ tenantId: TENANT, index });
+    for (const size of ['thumb', 'view', 'original'] as const) expect(photo(INSPECTION, KEY, size)).toBe(LOCAL);
+    // Control: a hint does not unlock a photo that is not cached or not this account's.
+    expect(photo(INSPECTION, `other/inspections/${INSPECTION}/photos/p1.jpg`, 'original')).toBe(PHOTO_PLACEHOLDER_URL);
+    expect(photo(INSPECTION, `${TENANT}/inspections/${INSPECTION}/photos/p9.jpg`, 'thumb')).toBe(PHOTO_PLACEHOLDER_URL);
+  });
+
   it('answers the marked placeholder for a photo that is not cached, never a server address', () => {
     const photo = createPhotoUrls({ tenantId: TENANT, index: createMemoryPhotoIndex() });
     const url = photo(INSPECTION, KEY);

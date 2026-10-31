@@ -172,7 +172,7 @@ describe('when the device store cannot take a defect photo', () => {
   it('a policy refusal is never sent directly (control: the disk failure above is)', async () => {
     const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { key: 'direct-key' } })) });
     const result = await createUploaderFactory({ ...w.deps, store: withFailingPut(w, new MediaError('TOO_LARGE')) })(INSPECTION, null).upload(defect('d-1'));
-    expect(result).toStrictEqual({ ok: false, error: 'TOO_LARGE' });
+    expect(result).toStrictEqual({ ok: false, error: 'TOO_LARGE', permanent: true });
     expect(w.api.calls).toEqual([]);
   });
 });

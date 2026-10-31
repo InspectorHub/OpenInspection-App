@@ -92,9 +92,9 @@ describe('item photo (the online path)', () => {
   it('refuses what the engine would refuse with a stable size reason and stores nothing', async () => {
     const w = await createUploaderWorld();
     const big = await w.factory(INSPECTION, null).upload(itemPhoto('p1', { blob: jpegBlob(1, MAX_MEDIA_BYTES + 1) }));
-    expect(big).toEqual({ ok: false, error: 'TOO_LARGE' });
+    expect(big).toEqual({ ok: false, error: 'TOO_LARGE', permanent: true });
     const gif = await w.factory(INSPECTION, null).upload(itemPhoto('p2', { blob: jpegBlob(1, 64, 'image/gif') }));
-    expect(gif).toEqual({ ok: false, error: MESSAGES.photoTypeUnsupported });
+    expect(gif).toEqual({ ok: false, error: 'UNSUPPORTED_TYPE', permanent: true });
     const empty = await w.factory(INSPECTION, null).upload(itemPhoto('p3', { blob: new Blob([], { type: 'image/jpeg' }) }));
     expect(empty).toEqual({ ok: false, error: MESSAGES.photoNotPrepared });
     expect(await w.world.store.listRows()).toEqual([]);

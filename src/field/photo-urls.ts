@@ -1,3 +1,4 @@
+import type { PhotoSize } from '@inspectorhub/field-ui';
 import { isValidUploadedKey, type MediaStore } from '../media/store';
 
 /**
@@ -92,7 +93,11 @@ function belongs(tenantId: string, inspectionId: string, key: string): boolean {
   return isValidUploadedKey(key) && key.startsWith(`${tenantId}/inspections/${inspectionId}/`);
 }
 
-export function createPhotoUrls(deps: PhotoUrlsDeps): (inspectionId: string, key: string) => string {
+/**
+ * `size` is the editor's optional hint (`thumb` | `view` | `original`). The device keeps one copy of each photo and has no
+ * resized variants, so every size answers with that copy; the hint is accepted and ignored on purpose.
+ */
+export function createPhotoUrls(deps: PhotoUrlsDeps): (inspectionId: string, key: string, size?: PhotoSize) => string {
   return (inspectionId, key) => {
     if (!belongs(deps.tenantId, inspectionId, key)) return PHOTO_PLACEHOLDER_URL;
     return deps.index.lookup(inspectionId, key) ?? PHOTO_PLACEHOLDER_URL;

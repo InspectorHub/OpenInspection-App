@@ -3,6 +3,7 @@ import type { MediaFileResult, MediaUploader, PendingMediaRecord } from '@inspec
 import { realTimers, type TimerPort } from '../collab/timers';
 import { defectTargetOf } from '../media/defect-target';
 import { isMediaError, MediaError } from '../media/errors';
+import { sniffMediaKind } from '../media/media-types';
 import type { NativeUploader, UploadFailureCode } from '../media/native-uploader';
 import { appendPendingInDoc, hasPendingEntryInDoc } from '../media/pending-doc-append';
 import type { WithDoc } from '../media/pending-doc';
@@ -68,7 +69,7 @@ export interface UploaderDeps {
  * What `MediaUploader.upload` answers. `kept` says the bytes are on the device AND the document names them; it is not
  * part of the editor package's type before 0.3.0, where an extra property on a failure is ignored.
  */
-type Result = { ok: true; key: string; result?: MediaFileResult } | { ok: false; error: string; kept?: true };
+type Result = { ok: true; key: string; result?: MediaFileResult } | { ok: false; error: string; kept?: true; permanent?: true };
 
 const ENTRY_TRIES = 3;
 const ENTRY_RETRY_MS = 500;
@@ -95,18 +96,47 @@ function uploadFailureMessage(code: UploadFailureCode): string {
   }
 }
 
-function storeFailureMessage(error: unknown): string {
-  if (!isMediaError(error)) return MESSAGES.photoNotPrepared;
+/**
+ * A refusal of the file itself. The editor words it from the stable code, once, and `permanent` tells it that nothing is
+ * left waiting to be saved: it must not also report a failed save. (The editor checks the same two things before it
+ * sends a file, so this is the answer for a file that got past that check and was still refused here.)
+ */
+const refusedFile = (code: 'TOO_LARGE' | 'UNSUPPORTED_TYPE'): Result => ({ ok: false, error: code, permanent: true });
+
+function storeFailure(error: unknown): Result {
+  if (!isMediaError(error)) return fail(MESSAGES.photoNotPrepared);
   switch (error.code) {
     case 'TOO_LARGE':
-      return 'TOO_LARGE';
     case 'UNSUPPORTED_TYPE':
-      return MESSAGES.photoTypeUnsupported;
+      return refusedFile(error.code);
     case 'BLOCKED':
-      return MESSAGES.blocked;
+      return fail(MESSAGES.blocked);
     default:
-      return MESSAGES.photoNotPrepared;
+      return fail(MESSAGES.photoNotPrepared);
   }
+}
+
+/**
+ * The photo with its declared type corrected to what its leading bytes really are. A browser declares the type from the
+ * file NAME, so a real PNG called photo.jpg arrives as image/jpeg. The store keeps a file under its declared type's
+ * extension and the desktop main process refuses bytes that do not match that extension, so a valid photo with a wrong
+ * label would fail to write. The editor already admitted it by its bytes, and the server stores by bytes too, so the
+ * label is fixed here, before the first `store.put`, and the photo is stored under its real type, never refused.
+ *
+ * Bytes that are not a supported image (sniff finds nothing) are left exactly as they are: this does not decide to refuse
+ * them. If the store then cannot write them, the old behaviour stands (one direct upload, where the server decides).
+ */
+async function withRealType(rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<Extract<PendingMediaRecord, { kind: 'photo' }>> {
+  let kind: ReturnType<typeof sniffMediaKind>;
+  try {
+    kind = sniffMediaKind(new Uint8Array(await rec.blob.slice(0, 4096).arrayBuffer()));
+  } catch {
+    return rec;
+  }
+  if (kind === null) return rec;
+  const real = `image/${kind}`;
+  const declared = (rec.blob.type.split(';')[0] ?? '').trim().toLowerCase();
+  return declared === real ? rec : { ...rec, blob: new Blob([rec.blob], { type: real }) };
 }
 
 /** The bytes of a stored record, read back from its file; null when the row or the file cannot be read. */
@@ -183,11 +213,14 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     }
   }
 
-  /** The device store refused the bytes. Disk or database trouble gets one direct upload; a policy refusal does not. */
+  /**
+   * The device store refused the bytes. Disk, database or write trouble gets one direct upload and is never permanent;
+   * only the store's own decision about the type or size (a policy refusal) is permanent, and that is never sent.
+   */
   async function afterStoreFailure(rec: Extract<PendingMediaRecord, { kind: 'photo' }>, error: unknown): Promise<Result> {
-    if (!isStoreTrouble(error)) return fail(storeFailureMessage(error));
+    if (!isStoreTrouble(error)) return storeFailure(error);
     const direct = await (rec.meta.targetType === 'defect' ? deps.foreground.defectPhoto(rec) : deps.foreground.itemPhotoDirect(rec));
-    return direct.ok ? direct : fail(storeFailureMessage(error));
+    return direct.ok ? direct : storeFailure(error);
   }
 
   async function storedPhoto(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<Result> {
@@ -243,7 +276,7 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
   async function route(inspectionId: string, doc: Y.Doc | null, rec: PendingMediaRecord): Promise<Result> {
     switch (rec.kind) {
       case 'photo':
-        return storedPhoto(inspectionId, rec);
+        return storedPhoto(inspectionId, await withRealType(rec));
       case 'crop':
         return deps.foreground.crop(rec, doc);
       case 'annotate':

@@ -169,6 +169,11 @@ test('imports valid photos and reports an unsupported neighbor in the same libra
     { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
   ]);
   await partialFailure;
+  // The editor checks the bytes before anything is sent: the unsupported file gets its own sentence, once, and the batch
+  // is not reported as a failed save (the neighbours were saved, and the refused file has nothing left to save).
+  await expect(page.getByText('1 photo could not be added because the file type is not supported.', { exact: true })).toHaveCount(1);
+  await expect(page.getByText(/Save failed/)).toHaveCount(0);
+  await expect(page.getByText(/did NOT reach the server/)).toHaveCount(0);
   await expect(page.getByText('2 photos', { exact: true })).toBeVisible();
   await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(2);
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -197,6 +202,45 @@ test('imports valid photos and reports an unsupported neighbor in the same libra
   await page.getByRole('button', { name: 'Add from library' }).click();
   await (await narrowPicker).setFiles({ name: 'narrow.jpg', mimeType: 'image/jpeg', buffer: jpeg });
   await expect(page.getByText('3 photos', { exact: true })).toBeVisible();
+});
+
+test('online: a batch of only unsupported files gets its sentence, sends nothing and is not a failed save', async () => {
+  await signIn();
+  await seedEditorPackage();
+  await page.locator('input[type=file][multiple]').evaluate((element) => element.removeAttribute('accept'));
+  const chooser = await openLibrary();
+  await chooser.setFiles([
+    { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') },
+    { name: 'fake.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('MZ payload') },
+  ]);
+  await expect(page.getByText('2 photos could not be added because the file type is not supported.', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Save failed/)).toHaveCount(0);
+  await expect(page.getByText(/did NOT reach the server/)).toHaveCount(0);
+  await expect(page.getByText(/photos? uploaded/)).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
+  await expect.poll(async () => mediaRows()).toHaveLength(0);
+  // The media directory is created lazily, so a missing one means nothing was stored.
+  await expect.poll(() => readdir(join(userData, 'media')).catch((error: NodeJS.ErrnoException) => (error.code === 'ENOENT' ? [] : Promise.reject(error)))).toEqual([]);
+});
+
+test('online: an oversized original is refused with the size sentence while its neighbour uploads', async () => {
+  test.setTimeout(120_000);
+  await signIn();
+  await seedEditorPackage();
+  await openReportSettings();
+  await page.getByTestId('original-quality-uploads').check();
+  await page.getByRole('button', { name: 'Close' }).click();
+  const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
+  const oversized = Buffer.concat([jpeg, Buffer.alloc(12 * 1024 * 1024 - jpeg.length)]);
+  await page.locator('input[type=file][multiple]').setInputFiles([
+    { name: 'large.jpg', mimeType: 'image/jpeg', buffer: oversized },
+    { name: 'ok.jpg', mimeType: 'image/jpeg', buffer: jpeg },
+  ]);
+  await expect(page.getByText('This photo is larger than the maximum photo size and cannot be added.', { exact: true })).toHaveCount(1, { timeout: 45_000 });
+  await expect(page.getByText(/Save failed/)).toHaveCount(0);
+  await expect.poll(() => engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(1);
+  expect(engine.uploadContentLengths.every((length) => length !== null && length < 10 * 1024 * 1024)).toBe(true);
 });
 
 test('a missing Windows codec skips only the HEIC while JPEG and PNG in its batch upload', async () => {
