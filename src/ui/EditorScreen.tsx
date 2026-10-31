@@ -12,6 +12,8 @@ import { editorRegistry, type EditorRegistry } from '../field/editor-registry';
 import { createLocalDataSource } from '../field/local-data-source';
 import { MESSAGES } from '../field/messages';
 import { openNetworkFlag } from '../field/network-flag';
+import { createPhotoCache, type PhotoCache } from '../field/photo-cache';
+import { createUploadedCopyReader } from '../field/photo-urls';
 import { loadSessionInfo } from '../field/session-info';
 import type { Network } from '../platform/network';
 import { useToasts } from './EditorToasts';
@@ -78,6 +80,9 @@ export function EditorScreen(props: EditorScreenProps) {
   return <EditorSession key={epoch} {...props} onRestart={() => setEpoch((n) => n + 1)} />;
 }
 
+/** The cache folder is swept for orphans once per run of the app, not at every editor open. */
+let orphansSwept = false;
+
 function EditorSession({ services, stack, origin, inspectionId, onExit, onRestart, network, timers = realTimers, registry = editorRegistry }: EditorScreenProps & { onRestart(): void }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const toasts = useToasts(timers);
@@ -100,6 +105,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
 
   useEffect(() => {
     let live = true;
+    let photoCache: PhotoCache | undefined;
     const release = registry.register(inspectionId);
     const flag = openNetworkFlag(network ?? browserNetwork, { timers });
     const observation = editorObserver.current()?.({ isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, readOnly: !canEdit });
@@ -118,9 +124,27 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           gate: ports.api.gate,
           serverTooOld: ports.api.serverTooOld,
         });
+        // Copies of server photos, so a thumbnail whose file left the device still shows (and shows offline once seen).
+        photoCache = createPhotoCache({
+          db: stack.db,
+          files: services.files,
+          api,
+          account: stack.account,
+          network: flag,
+          clock: services.clock,
+          timers,
+          localCopy: createUploadedCopyReader(stack.store, services.files),
+        });
+        if (!live) photoCache.dispose();
+        else if (!orphansSwept) {
+          // Once per run of the app: files a crash left without a row.
+          orphansSwept = true;
+          void photoCache.sweepOrphans();
+        }
         const source: FieldDataSource = createLocalDataSource({
           stack,
           api,
+          photoCache,
           files: services.files,
           ...(services.decodeImage === undefined ? {} : { decodeImage: services.decodeImage }),
           network: flag,
@@ -159,6 +183,8 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     })();
     return () => {
       live = false;
+      // Drops downloads still in flight so they cannot write after the editor is left or the account is signed out.
+      photoCache?.dispose();
       stopEvents();
       flag.dispose();
       observation?.dispose();

@@ -37,8 +37,8 @@ interface ActiveWrite {
 
 const MAX_ACTIVE = 4;
 const IDLE_TIMEOUT_MS = 60_000;
-const MEDIA_EXTENSIONS = new Set(['jpg', 'png', 'heic', 'mp4', 'mov']);
-const PHOTO_EXTENSIONS = new Set(['jpg', 'png', 'heic']);
+const MEDIA_EXTENSIONS = new Set(['jpg', 'png', 'webp', 'heic', 'mp4', 'mov']);
+const PHOTO_EXTENSIONS = new Set(['jpg', 'png', 'webp', 'heic']);
 
 const mapFsError = (error: unknown): never => {
   if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOSPC') throw new IpcError('disk-full');
@@ -74,6 +74,7 @@ function headerLength(path: string, prefix: Uint8Array<ArrayBufferLike> = new Ui
   const ext = extension(path);
   if (ext === 'jpg') return 3;
   if (ext === 'png') return 8;
+  if (ext === 'webp') return 12;
   if (ext === 'mp4' || ext === 'mov') return 8;
   if (prefix.length < 12) return 12;
   const size = ((prefix[0] ?? 0) * 2 ** 24) + ((prefix[1] ?? 0) << 16) + ((prefix[2] ?? 0) << 8) + (prefix[3] ?? 0);
@@ -84,6 +85,7 @@ function validHeader(path: string, bytes: Uint8Array): boolean {
   const ext = extension(path);
   if (!MEDIA_EXTENSIONS.has(ext) || bytes.length < headerLength(path, bytes)) return false;
   if (ext === 'jpg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (ext === 'webp') return [0x52, 0x49, 0x46, 0x46].every((v, i) => bytes[i] === v) && [0x57, 0x45, 0x42, 0x50].every((v, i) => bytes[8 + i] === v);
   if (ext === 'png') return [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => bytes[i] === v);
   if (ext === 'heic') return bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70 && sniffMediaKind(bytes) === 'heic';
   return bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70;

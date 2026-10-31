@@ -99,6 +99,35 @@ export async function startDesktopHarness(options: { uploadDelayMs?: number; qui
   return harness;
 }
 
+/** Puts the insp-7 work package in the app's database so the work list shows it, then opens its first item in the editor. */
+export async function seedEditorPackage(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const db = window.oiDesktop.db;
+    const accountKey = 'renderer-tenant:renderer-user';
+    const inspectionId = 'insp-7';
+    const snapshot = { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] };
+    const entries: Array<[string, unknown, string]> = [
+      [`/api/inspections/${inspectionId}`, { inspection: { id: inspectionId, status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyType: 'single_family', propertyAddress: '77 Test Photo Lane', reportStatus: 'in_progress', templateSnapshot: snapshot }, v: 1 }, inspectionId],
+      [`/api/inspections/${inspectionId}/results`, { results: {}, resultId: 'result-1' }, inspectionId],
+      [`/api/inspections/${inspectionId}/report-data`, { sections: [{ id: 'sec_roof', name: 'Roof', items: [{ id: 'itm_cover', name: 'Roof cover', type: 'rich' }] }], ratingLevels: [] }, inspectionId],
+      ['/api/session/context', { user: { role: 'inspector', timezone: 'America/New_York', locale: 'en-US', dateFormat: 'us', timeFormat: '12h' }, branding: { tenantSlug: 'renderer-test', defaultTimezone: 'America/New_York', defaultLocale: 'en-US', dateFormat: 'us', timeFormat: '12h' }, videoProvider: 'r2', collabEditing: false }, '$global'],
+      ['/api/tags', [], '$global'], ['/api/recommendations', [], '$global'], ['/api/contractor-types', [], '$global'], ['/api/admin/defect-categories', [], '$global'],
+    ];
+    await db.run('INSERT OR REPLACE INTO work_package (inspection_id, refreshed_at, pinned, scheduled_at, completed, server_confirmed, tenant_id, user_id, purging, package_gen) VALUES (?, ?, 0, ?, 0, 1, ?, ?, 0, 1)', [inspectionId, Date.now(), Date.parse('2026-11-01T10:00:00Z'), 'renderer-tenant', 'renderer-user']);
+    for (const [key, data, packageId] of entries) {
+      await db.run('INSERT OR REPLACE INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, ?, ?, ?)', [accountKey, key, JSON.stringify({ success: true, data }), Date.now(), packageId]);
+    }
+  });
+  await openSeededEditor(page);
+}
+
+export async function openSeededEditor(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
+  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+}
+
 async function launch(environment: Record<string, string>, errors: string[]): Promise<ElectronApplication> {
   const app = await _electron.launch({ args: ['dist-electron/main/index.cjs'], env: environment });
   app.on('console', (message) => { if (message.type() === 'error') errors.push(`console: ${message.text()}`); });

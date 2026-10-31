@@ -11,6 +11,8 @@ export interface RendererEngine {
   uploads: Map<string, Buffer>;
   uploadCounts: Map<string, number>;
   uploadContentLengths: Array<number | null>;
+  /** Every `GET /api/inspections/insp-7/photo`: the key, the `w` asked for and whether the Bearer session was right. */
+  photoRequests: Array<{ key: string; w: string | null; authorized: boolean }>;
   activeUploadCount: number;
   /** Per key: how many upload responses were actually delivered with a 2xx (an attempt cut off by setUnavailable or an abort does not count). */
   completedCounts: Map<string, number>;
@@ -58,6 +60,7 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
   const uploads = new Map<string, Buffer>();
   const uploadCounts = new Map<string, number>();
   const uploadContentLengths: Array<number | null> = [];
+  const photoRequests: Array<{ key: string; w: string | null; authorized: boolean }> = [];
   const activeUploadResponses = new Set<import('node:http').ServerResponse>();
   const uploadTokens = new Map<string, string>();
   const compatibility = { minSupported: null as string | null, recommended: null as string | null, downloadUrl: null as string | null };
@@ -101,6 +104,19 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
     }
     if (request.method === 'GET' && route === '/api/inspections/templates') { json({ success: true, data: [], meta: { page: 1, totalPages: 1 } }); return; }
     if (request.method === 'GET' && route === '/api/inspections/insp-7/media') { json({ success: true, data: [] }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/photo') {
+      // Like the real route: the Bearer session is required (an <img> cannot send it), and with no image service the
+      // original bytes come back whatever `w` says.
+      const query = new URL(request.url ?? '/', url).searchParams;
+      const key = query.get('key') ?? '';
+      const authorized = request.headers.authorization === 'Bearer renderer-access-token';
+      photoRequests.push({ key, w: query.get('w'), authorized });
+      const stored = uploads.get(key);
+      if (!authorized) { response.writeHead(401).end(); return; }
+      if (stored === undefined) { response.writeHead(404).end(); return; }
+      response.writeHead(200, { 'content-type': key.endsWith('.png') ? 'image/png' : 'image/jpeg', 'content-length': stored.length }).end(stored);
+      return;
+    }
     if (request.method === 'POST' && route === '/api/inspections/insp-7/media/upload-url') {
       void readBody(request).then((raw) => {
         const body = JSON.parse(raw.toString('utf8')) as { pendingId: string; contentType: string };
@@ -190,7 +206,7 @@ export async function startRendererEngine(options: { uploadDelayMs?: number; sho
   url = `http://127.0.0.1:${address.port}`;
   // The cert file is only read to ensure the public test fixture stays available with this E2E bundle.
   await readFile(resolve('e2e-electron/fixtures/loopback-cert.pem'));
-  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, completedCounts, completedAt, errors, setUnavailable(value) {
+  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, photoRequests, completedCounts, completedAt, errors, setUnavailable(value) {
     unavailable = value;
     if (value) for (const socket of connections) socket.destroy();
   }, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {

@@ -1,7 +1,7 @@
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { open, realpath, stat, type FileHandle } from 'node:fs/promises';
 
-const MIME: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.heic': 'image/heic', '.mp4': 'video/mp4', '.mov': 'video/quicktime' };
+const MIME: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.heic': 'image/heic', '.mp4': 'video/mp4', '.mov': 'video/quicktime' };
 
 export interface MediaProtocolDeps {
   mediaRoot: string;

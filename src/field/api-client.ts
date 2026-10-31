@@ -24,6 +24,10 @@ export interface ApiCall {
   /** Sent as `Idempotency-Key`, for the writes that would duplicate a record if repeated. */
   idempotencyKey?: string;
   timeoutMs?: number;
+  /** Read the answer as bytes (a photo): the outcome carries `bytes`, `contentType` and `retryAfterMs`, and `maxBytes` bounds it. */
+  binary?: boolean;
+  /** The longest a binary answer may be; the JSON cap applies when absent. */
+  maxBytes?: number;
 }
 
 /**
@@ -37,7 +41,7 @@ export interface ApiCall {
  */
 export type ApiProblem = 'offline' | 'unknown' | 'auth' | 'locked' | 'upgrade' | 'server_too_old';
 
-export type ApiOutcome = { kind: 'response'; status: number; json: unknown } | { kind: 'problem'; problem: ApiProblem };
+export type ApiOutcome = { kind: 'response'; status: number; json: unknown; bytes?: Uint8Array; contentType?: string | null; retryAfterMs?: number | null } | { kind: 'problem'; problem: ApiProblem };
 
 export interface Api {
   send(call: ApiCall): Promise<ApiOutcome>;
@@ -167,7 +171,8 @@ export function createApiClient(deps: ApiClientDeps): Api {
           headers,
           ...(call.form !== undefined ? { form: call.form } : call.json !== undefined ? { body: JSON.stringify(call.json) } : {}),
           timeoutMs: call.timeoutMs ?? (call.form !== undefined ? FORM_TIMEOUT_MS : JSON_TIMEOUT_MS),
-          maxBytes: RESPONSE_MAX_BYTES,
+          maxBytes: call.binary === true ? (call.maxBytes ?? RESPONSE_MAX_BYTES) : RESPONSE_MAX_BYTES,
+          ...(call.binary === true ? { binary: true } : {}),
         });
       } catch (error) {
         // A read changes nothing, so losing its answer is just being offline. A write that went out may have been applied.
@@ -175,7 +180,11 @@ export function createApiClient(deps: ApiClientDeps): Api {
       }
 
       if (res.status === 426) return { kind: 'problem', problem: 'upgrade' };
-      if (res.status !== 401) return { kind: 'response', status: res.status, json: res.json };
+      if (res.status !== 401) {
+        return call.binary === true
+          ? { kind: 'response', status: res.status, json: undefined, bytes: res.bytes ?? new Uint8Array(), contentType: res.headers.get('content-type'), retryAfterMs: res.retryAfterMs }
+          : { kind: 'response', status: res.status, json: res.json };
+      }
       if (refreshed) return { kind: 'problem', problem: 'auth' };
       refreshed = true;
       try {

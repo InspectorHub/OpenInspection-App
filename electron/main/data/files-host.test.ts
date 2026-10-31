@@ -68,6 +68,15 @@ describe('createFilesHost', () => {
     expect(await host.list('Dir')).toEqual([{ name: 'MiXeD.jpg', mtimeMs: expect.any(Number) }]);
     expect(await host.list('media')).toEqual([{ name: 'Dir', mtimeMs: expect.any(Number) }]);
   });
+  it('stores a webp picture (the photo cache copy) under photo-cache/, shows it through the media scheme, and refuses bytes that are not webp', async () => {
+    const webp = Uint8Array.from([0x52, 0x49, 0x46, 0x46, 9, 9, 9, 9, 0x57, 0x45, 0x42, 0x50, 1, 2]);
+    await expect(host.write('photo-cache/abc.webp', webp)).resolves.toMatch(/^file:\/\//);
+    expect(await host.read('photo-cache/abc.webp')).toEqual(webp);
+    expect(await host.displayUrl('photo-cache/abc.webp')).toBe('oi-media://media/photo-cache/abc.webp');
+    // Control: the same extension with jpeg bytes, and a riff file that is not webp, are refused.
+    await expect(host.write('photo-cache/bad.webp', Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))).rejects.toMatchObject({ code: 'invalid-argument' });
+    await expect(host.write('photo-cache/wav.webp', Uint8Array.from([0x52, 0x49, 0x46, 0x46, 9, 9, 9, 9, 0x57, 0x41, 0x56, 0x45, 1]))).rejects.toMatchObject({ code: 'invalid-argument' });
+  });
   it('maps ENOSPC to disk-full', async () => {
     const noSpaceFs = { ...await import('node:fs/promises'), mkdir: async () => { throw Object.assign(new Error('full'), { code: 'ENOSPC' }); } };
     const noSpace = createFilesHost({ fs: noSpaceFs as never, mediaRoot: join(root, 'm'), cacheRoot: join(root, 'c'), clock: { now: Date.now, setTimeout, clearTimeout } });

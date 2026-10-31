@@ -34,6 +34,20 @@ describe('createMediaProtocolHandler', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(fetchFile.mock.calls[0]?.[1].headers.get('range')).toBe('bytes=0-2');
   });
+  it('serves a webp file in a sub folder as image/webp', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oi-protocol-webp-'));
+    try {
+      await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'photo-cache')));
+      await writeFile(join(root, 'photo-cache', 'a.webp'), 'bytes');
+      const handler = createMediaProtocolHandler({ mediaRoot: root, fetchFile: createMediaFileResponse });
+      const response = await handler(new Request('oi-media://media/photo-cache/a.webp'));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/webp');
+      expect(await response.text()).toBe('bytes');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it('rejects extensions outside the media MIME allowlist', async () => {
     expect((await call('oi-media://media/a.html')).response.status).toBe(404);
   });

@@ -15,12 +15,16 @@ export interface HttpRequest {
   form?: FormData;
   timeoutMs?: number;
   maxBytes?: number;
+  /** Read the answer as bytes (`bytes` on the response, `text` empty and `json` undefined). The size cap and every other check are unchanged. */
+  binary?: boolean;
 }
 
 export interface HttpResponse {
   status: number;
   headers: Headers;
   text: string;
+  /** The body, only when the request asked for `binary`. */
+  bytes?: Uint8Array;
   /** The parsed body, or `undefined` when it is empty or not JSON. */
   json: unknown;
   retryAfterMs: number | null;
@@ -137,6 +141,39 @@ async function readCapped(response: Response, maxBytes: number): Promise<string>
   return text + decoder.decode();
 }
 
+async function readBytesCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const declared = Number(response.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    response.body?.cancel().catch(() => undefined);
+    throw new AuthError('server_response_invalid');
+  }
+  if (!response.body) {
+    const whole = new Uint8Array(await response.arrayBuffer());
+    if (whole.byteLength > maxBytes) throw new AuthError('server_response_invalid');
+    return whole;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      reader.cancel().catch(() => undefined);
+      throw new AuthError('server_response_invalid');
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 function parseJson(text: string): unknown {
   if (!text) return undefined;
   try {
@@ -185,9 +222,12 @@ export function createHttp(deps: HttpDeps): Http {
           response.body?.cancel().catch(() => undefined);
           throw new AuthError('server_redirected');
         }
-        let text: string;
+        let text = '';
+        let bytes: Uint8Array | undefined;
         try {
-          text = await readCapped(response, req.maxBytes ?? deps.defaultMaxBytes ?? DEFAULT_MAX_BYTES);
+          const cap = req.maxBytes ?? deps.defaultMaxBytes ?? DEFAULT_MAX_BYTES;
+          if (req.binary === true) bytes = await readBytesCapped(response, cap);
+          else text = await readCapped(response, cap);
         } catch (err) {
           if (err instanceof AuthError) throw err;
           throw new AuthError(timedOut ? 'server_timeout' : 'server_unreachable');
@@ -206,6 +246,7 @@ export function createHttp(deps: HttpDeps): Http {
           status: response.status,
           headers: response.headers,
           text,
+          ...(bytes === undefined ? {} : { bytes }),
           json: parseJson(text),
           retryAfterMs: parseRetryAfter(response.headers.get('retry-after')),
           upgrade,
