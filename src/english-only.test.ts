@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -13,7 +14,11 @@ const RANGES: [number, number][] = [
   [0xac00, 0xd7af], // Hangul syllables
 ];
 const ROOT = join(import.meta.dirname, '..');
-const EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.css', '.html', '.json']);
+const EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.css', '.html', '.json', '.yml', '.yaml', '.swift', '.sh',
+  '.plist', '.strings', '.storyboard', '.xcprivacy', '.xcconfig', '.md', '.pbxproj',
+]);
+// Generated or vendored trees: not ours to police, and large.
+const EXCLUDED_DIRS = new Set(['Pods', 'DerivedData', 'build', '.build', 'public', 'node_modules']);
 
 function hasCjk(text: string): boolean {
   for (const ch of text) {
@@ -27,7 +32,9 @@ function walk(dir: string, out: string[]): string[] {
   if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
+    if (statSync(full).isDirectory()) {
+      if (!EXCLUDED_DIRS.has(name)) walk(full, out);
+    }
     else if (EXTENSIONS.has(name.slice(name.lastIndexOf('.')))) out.push(full);
   }
   return out;
@@ -45,10 +52,38 @@ function offenders(files: string[]): string[] {
 }
 
 describe('the public repository stays English-only', () => {
-  const files = ['src', 'scripts', 'electron', 'e2e-electron'].flatMap((dir) => walk(join(ROOT, dir), []));
+  const files = ['src', 'scripts', 'electron', 'e2e-electron', '.github', 'ios'].flatMap((dir) => walk(join(ROOT, dir), []));
 
   it('scans a real set of files (the scan is not vacuously empty)', () => {
     expect(files.length).toBeGreaterThan(100);
+  });
+
+  it('english-only scan visits .github/ and ios/ Swift sources, and covers shell scripts by extension', () => {
+    const rel = files.map((file) => relative(ROOT, file).split(sep).join('/'));
+    expect(rel.some((f) => f.startsWith('.github/workflows/') && f.endsWith('.yml'))).toBe(true);
+    expect(rel.some((f) => f.startsWith('ios/') && f.endsWith('.swift'))).toBe(true);
+    expect(rel.some((f) => f.startsWith('ios/') && f.endsWith('Info.plist'))).toBe(true);
+    expect(rel.some((f) => f.startsWith('ios/') && f.endsWith('project.pbxproj'))).toBe(true);
+  });
+
+  it('walk flags CJK in a shell script and a plist, and skips excluded directories but not normal ones', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'english-only-'));
+    try {
+      const cjk = `# ${String.fromCodePoint(0x4e2d)}
+`;
+      mkdirSync(join(dir, 'normal'));
+      mkdirSync(join(dir, 'Pods'));
+      mkdirSync(join(dir, 'App', 'public'), { recursive: true });
+      writeFileSync(join(dir, 'normal', 'run.sh'), cjk);
+      writeFileSync(join(dir, 'normal', 'Info.plist'), cjk);
+      writeFileSync(join(dir, 'Pods', 'vendored.swift'), cjk);
+      writeFileSync(join(dir, 'App', 'public', 'bundle.js'), cjk);
+      const found = walk(dir, []).map((f) => relative(dir, f).split(sep).join('/')).sort();
+      expect(found).toEqual(['normal/Info.plist', 'normal/run.sh']);
+      expect(offenders(walk(dir, [])).length).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('english-only scan visits electron/ and e2e-electron/', () => {
