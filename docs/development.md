@@ -200,6 +200,20 @@ Development-only `OI_USER_DATA_DIR`, `OI_RENDERER_ROOT`, `OI_E2E_HEIC_HELPER`, a
 
 InspectorHub's pilot support target is Windows 10 22H2 or later, or Windows 11, on `x64`; the first packaged build targets `x64`. This client is only tested on Windows 11 and on the `windows-latest` CI image. An `arm64` machine runs the x64 build under Windows 11's x64 emulation. A native `arm64` build is possible later because the database module ships a `win32-arm64` prebuild.
 
+## Standalone fake engine (test-only)
+
+The loopback engine behind the Electron E2E also runs on its own, so the same behaviour can serve Android emulator and iOS simulator tests (`e2e/fake-engine/`). It needs plain Node 22.18 or newer (built-in type stripping) and no build step.
+
+```
+node e2e/fake-engine/serve.mjs --port 0 --host 127.0.0.1 [--scenario default|inspection] [--upload-delay-ms 0]
+```
+
+It prints one JSON line when ready, for example `{"origin":"http://127.0.0.1:51234","control":"http://127.0.0.1:51235"}`, and exits cleanly on SIGINT/SIGTERM on POSIX (on Windows a signal terminates the process without the handler).
+
+- Android emulator: start with `--host 0.0.0.0` and point the app at `http://10.0.2.2:<port>`. iOS simulator: `http://localhost:<port>`.
+- The `control` origin is a second, loopback-only listener. Fault injection lives there, under `/__test__/` only: `GET /state`, `POST /unavailable {"value":true|false}`, `POST /upload-delay {"ms":n}`, `POST /compatibility {...}`. The engine port itself serves no test routes. `--host 0.0.0.0` exposes an unauthenticated server (fixed bearer token) to the whole LAN: use it on a trusted network only (the CLI prints a warning to stderr).
+- The sign-in the engine offers (`/oauth/register`, `/oauth/token` hand out a fixed test token with no user interaction) exists only in this fake server. The client only knows a server address, and the release bundle contains none of the fake engine or its `/__test__/` prefix (`npm run check:bundle` and a grep of `dist` and `dist-electron` confirm it).
+
 ## Regenerating the app icons
 
 The Windows and Android icons (and the iOS marketing icon) are generated from `branding/inspectorhub-mark.svg`:
