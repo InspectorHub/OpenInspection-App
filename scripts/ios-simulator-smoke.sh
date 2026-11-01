@@ -84,7 +84,6 @@ save_app_log() {
   if grep -q 'BackupExclusion failed' "$OUT/${label}.log"; then fail "$label: BackupExclusion.apply reported a failure (see the log above)"; fi
   # Control first: a capture that saw nothing proves nothing. Capacitor prints lines of its own while it loads, so an empty
   # capture means the capture is blind (or logging is off in this build) and a green result would be meaningless.
-  cat "$OUT/${label}.stdout" "$OUT/${label}.stderr" > "$OUT/${label}.console" 2>/dev/null || true
   echo "--- $label: what the app printed to stdout/stderr ($(wc -l < "$OUT/${label}.console" | tr -d ' ') lines; full: ${label}.console) ---"
   head -40 "$OUT/${label}.console" || true
   [ -s "$OUT/${label}.console" ] || fail "$label: nothing was captured from the app's stdout/stderr, so this check cannot see its errors"
@@ -106,9 +105,11 @@ smoke_device() {
   xcrun simctl boot "$udid" 2>/dev/null || true
   xcrun simctl bootstatus "$udid" -b
   xcrun simctl install "$udid" "$APP_PATH"
-  # The app's JavaScript console reaches the native side as plain stdout/stderr, not the unified log that `log show`
-  # reads (run 41266196908 was green while the app sat on its could-not-open screen and the log had no [boot] line).
-  xcrun simctl launch --stdout="$OUT/${label}.stdout" --stderr="$OUT/${label}.stderr" "$udid" "$APP_ID"
+  # The app's JavaScript console reaches the native side through Swift print() on stdout, not the unified log that
+  # `log show` reads. Redirected to a FILE, stdout is block-buffered and stays empty until the buffer fills (runs 41266804318
+  # and 41267660047 captured 0 bytes of it), so the app is launched with a PTY, which makes stdout line-buffered.
+  xcrun simctl launch --console-pty "$udid" "$APP_ID" > "$OUT/${label}.console" 2>&1 &
+  LAUNCH_PID=$!
   sleep "$SETTLE_SECONDS"
   app_is_running "$udid" || fail "$label: the app is not running $SETTLE_SECONDS seconds after launch"
   echo "ok: $label: the app is still running after launch"
@@ -144,6 +145,8 @@ smoke_device() {
   done
 
   xcrun simctl terminate "$udid" "$APP_ID" 2>/dev/null || true
+  kill "$LAUNCH_PID" 2>/dev/null || true
+  wait "$LAUNCH_PID" 2>/dev/null || true
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   CURRENT_UDID=""
 }
