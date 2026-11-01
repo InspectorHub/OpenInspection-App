@@ -169,7 +169,7 @@ describe('confirming', () => {
     expect(view.calls).toHaveLength(1);
 
     // Control: once the first import has finished, "Import this file again" is not held by the latch.
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Import another package' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Import another file' }));
     await choose(zipFile(makePackage({ inspections: 1 }).zip));
     const second = await toConfirm();
     await userEvent.setup().click(within(second).getByRole('button', { name: 'Import package' }));
@@ -214,9 +214,9 @@ describe('leaving', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('Done on the result goes back, and Import another package starts over at the choice (and forgets the old file)', async () => {
+  it('Done on the result goes back, and Import another file starts over at the choice (and forgets the old file)', async () => {
     const view = await runToResult(makePackage({ inspections: 1 }), (_n, b) => ok(b));
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Import another package' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Import another file' }));
     expect(screen.getByRole('button', { name: 'Choose a package file' })).toBeVisible();
     expect(screen.queryByTestId('import-result')).toBeNull();
     expect(view.onClose).not.toHaveBeenCalled();

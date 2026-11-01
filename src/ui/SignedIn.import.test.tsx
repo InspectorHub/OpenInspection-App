@@ -52,7 +52,7 @@ describe('SignedIn: the import entry', () => {
     });
     await user.click(await screen.findByRole('button', { name: 'Review and import' }));
     await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Import package' }));
-    expect(await screen.findByText('Everything in this package was imported.')).toBeVisible();
+    expect(await screen.findByText('All 2 inspections were imported.')).toBeVisible();
 
     const sent = world.server.requests.filter((r) => r.path === '/api/client/import');
     expect(sent).toHaveLength(1);

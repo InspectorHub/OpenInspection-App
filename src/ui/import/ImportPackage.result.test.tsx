@@ -5,123 +5,201 @@ import { act, cleanup, configure, screen, waitFor, within } from '@testing-libra
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { confirmedBody, makePackage } from '../../offline/test-support/import-fixtures';
+import type { ApiOutcome } from '../../field/api-client';
 import { idsOf, ok, refused, runToResult } from '../test-support/import-test-kit';
+import { bannedWordsIn } from './result-model';
 
 configure({ asyncUtilTimeout: 5000 });
 afterEach(cleanup);
 
-describe('the result', () => {
-  it('everything imported: four numbers and a plain sentence, nothing left behind', async () => {
-    const made = makePackage({ inspections: 3, updates: { 0: 1 } });
-    await runToResult(made, (_n, b) => ok(b));
-    const result = screen.getByTestId('import-result');
-    expect(within(result).getByText('Everything in this package was imported.')).toBeVisible();
-    expect(within(result).getByText('Imported').nextElementSibling?.textContent).toBe('3');
-    expect(screen.queryByTestId('import-held-back')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Import this file again' })).toBeNull();
+const result = (): HTMLElement => screen.getByTestId('import-result');
+const mainText = (): string => result().textContent ?? '';
+const primary = (): HTMLElement => screen.getByTestId('import-primary-action');
+const primaryButtons = (): HTMLElement[] => within(result()).getAllByRole('button').filter((b) => b.className.includes('bg-ih-primary text-ih-primary-fg'));
+const notFoundFor = (id: string) => (_n: number, b: Uint8Array): ApiOutcome => (idsOf(b).includes(id) ? refused(404, 'NOT_FOUND', { inspectionId: id }) : ok(b));
+
+describe('the result page: structure', () => {
+  it('everything imported: the sentence is a second-level heading, one primary action, details closed', async () => {
+    await runToResult(makePackage({ inspections: 3, updates: { 0: 1 } }), (_n, b) => ok(b));
+    expect(within(result()).getByRole('heading', { level: 2, name: 'All 3 inspections were imported.' })).toBeVisible();
+    expect(within(result()).getByText('Your file was not changed. Delete it when you no longer need it.')).toBeVisible();
+    expect(primary()).toHaveTextContent('Done');
+    expect(primaryButtons()).toEqual([primary()]);
+    expect(screen.queryByTestId('import-details')).toBeNull();
+    expect(within(result()).queryByTestId('import-row')).toBeNull();
   });
 
-  it('a 404 that names an inspection lists it by name, with the faithful explanation, and imports the rest', async () => {
-    const made = makePackage({ inspections: 3 });
-    await runToResult(made, (_n, b) => (idsOf(b).includes('insp-1') ? refused(404, 'NOT_FOUND', { inspectionId: 'insp-1' }) : ok(b)));
-    const held = screen.getByTestId('import-held-back');
-    const rows = within(held).getAllByTestId('held-back-row');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveTextContent('Inspection insp-1');
-    expect(rows[0]).toHaveTextContent('Not found');
-    expect(rows[0]).toHaveTextContent('Server answer: 404 NOT_FOUND');
-    expect(within(held).getByText('This inspection does not exist in this company.')).toBeVisible();
-    expect(screen.getByText('Imported').nextElementSibling?.textContent).toBe('2');
-    expect(screen.getByRole('button', { name: 'Import this file again' })).toBeVisible();
+  it('the primary action is the first control after the summary, before any list', async () => {
+    await runToResult(makePackage({ inspections: 3 }), notFoundFor('insp-1'));
+    const buttons = within(result()).getAllByRole('button');
+    expect(buttons[0]).toBe(primary());
+    const list = within(result()).getAllByTestId('import-row')[0];
+    expect(primary().compareDocumentPosition(list as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('an expired package says the days the server named', async () => {
+  it('a 404 for one inspection: plain sentence, the inspection by name, what to do, and no answer code in the main text', async () => {
+    await runToResult(makePackage({ inspections: 3 }), notFoundFor('insp-1'));
+    expect(within(result()).getByRole('heading', { level: 2 })).toHaveTextContent('2 of 3 inspections were imported. 1 was not.');
+    expect(within(result()).getByText('Safe: 2 inspections are on the server now.')).toBeVisible();
+    expect(within(result()).getByText('1 is not on the server.')).toBeVisible();
+    const group = screen.getByTestId('import-group-not_found');
+    expect(within(group).getByRole('heading', { level: 3 })).toHaveTextContent('The server could not find it in your company.');
+    expect(within(group).getByTestId('import-row')).toHaveTextContent('Inspection insp-1');
+    expect(primary()).toHaveTextContent('Save the 1 that was not imported');
+    expect(primaryButtons()).toEqual([primary()]);
+    // The one group that can be saved has no second Save beside the primary one.
+    expect(within(group).queryByRole('button')).toBeNull();
+    expect(mainText()).not.toMatch(/404|NOT_FOUND|not_found/);
+  });
+
+  it('Details is a real button with aria-expanded; opening it shows the server answer, closing hides it again', async () => {
+    await runToResult(makePackage({ inspections: 3 }), notFoundFor('insp-1'));
+    const user = userEvent.setup();
+    const toggle = within(result()).getByRole('button', { name: 'Details' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', screen.getByTestId('import-details').id);
+    expect(screen.getByTestId('import-details')).toHaveTextContent('insp-1: not_found. Server answer: 404 NOT_FOUND.');
+    expect(screen.getByTestId('import-details')).toHaveTextContent('Requests sent:');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('import-details')).toBeNull();
+  });
+
+  it('an expired file names the days the server gave, and the only action is Done', async () => {
     await runToResult(makePackage({ inspections: 2 }), () => refused(422, 'PACKAGE_EXPIRED', { maxAgeDays: 30 }));
-    const group = screen.getByTestId('held-back-group-package_rejected:expired');
-    expect(group).toHaveTextContent('more than 30 days old');
-    expect(within(group).getAllByTestId('held-back-row')).toHaveLength(2);
-    expect(screen.getByText(/Nothing in this package could be imported/)).toBeVisible();
+    expect(within(result()).getByRole('heading', { level: 2 })).toHaveTextContent('Nothing was imported.');
+    expect(screen.getByTestId('import-group-file_expired')).toHaveTextContent('This file is more than 30 days old, so it cannot be imported.');
+    expect(within(screen.getByTestId('import-group-file_expired')).getAllByTestId('import-row')).toHaveLength(2);
+    expect(primary()).toHaveTextContent('Done');
+    expect(primaryButtons()).toEqual([primary()]);
   });
 
-  it('queued changes the server refused are listed on their own and are not counted as left behind', async () => {
+  it('queued changes the server did not apply are listed on their own, with the code only in Details', async () => {
     const made = makePackage({ inspections: 2, updates: { 0: 1 } });
     await runToResult(made, (_n, b) => ({
       kind: 'response',
       status: 200,
       json: confirmedBody(b, { applied: 0, failed: [{ idempotencyKey: 'k-insp-0-0', op: 'inspection.update', inspectionId: 'insp-0', status: 422, reason: 'invalid' }] }),
     }));
-    const attention = screen.getByTestId('import-attention');
-    expect(attention).toHaveTextContent('inspection.update on inspection insp-0');
-    expect(attention).toHaveTextContent('Server answer: 422 - Reason: invalid');
-    expect(screen.getByText('Not imported').nextElementSibling?.textContent).toBe('0');
-    expect(screen.getByText('Refused changes').nextElementSibling?.textContent).toBe('1');
-    expect(screen.queryByTestId('import-held-back')).toBeNull();
+    expect(within(result()).getByRole('heading', { level: 2 })).toHaveTextContent('All 2 inspections were imported. 1 change was not applied.');
+    expect(screen.getByTestId('import-attention')).toHaveTextContent('Change to inspection insp-0');
+    expect(mainText()).not.toMatch(/inspection\.update|422|invalid/);
+    await userEvent.setup().click(within(result()).getByRole('button', { name: 'Details' }));
+    expect(screen.getByTestId('import-details')).toHaveTextContent('inspection.update on inspection insp-0: server answer 422, reason invalid');
   });
+});
 
-  it('"Save this part" writes a package of just that inspection and opens the share sheet', async () => {
+describe('the result page: saving what was not imported', () => {
+  it('"Save the 1 that was not imported" writes a file of just that inspection and opens the share sheet', async () => {
     const made = makePackage({ inspections: 3, photos: { 1: 1 } });
-    const view = await runToResult(made, (_n, b) => (idsOf(b).includes('insp-1') ? refused(404, 'NOT_FOUND', { inspectionId: 'insp-1' }) : ok(b)));
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Save this part' }));
+    const view = await runToResult(made, notFoundFor('insp-1'));
+    await userEvent.setup().click(primary());
     await waitFor(() => expect(view.world.sharer.calls).toHaveLength(1));
-    const shared = view.world.sharer.calls[0]?.bytes;
-    expect(shared).toBeDefined();
-    const summary = readPackageSummary(shared ?? new Uint8Array());
+    const summary = readPackageSummary(view.world.sharer.calls[0]?.bytes ?? new Uint8Array());
     expect(summary.manifest.inspections.map((i) => i.id)).toEqual(['insp-1']);
     expect(summary.counts.photos).toBe(1);
     expect(await screen.findByText(/Saved\. Choose where to keep it/)).toBeVisible();
   });
 
-  it('control: a share sheet that fails says so and changes nothing else', async () => {
-    const made = makePackage({ inspections: 2 });
-    const view = await runToResult(made, (_n, b) => (idsOf(b).includes('insp-1') ? refused(404, 'NOT_FOUND', { inspectionId: 'insp-1' }) : ok(b)));
+  it('control: a share sheet that fails says so in plain words and changes nothing else', async () => {
+    const view = await runToResult(makePackage({ inspections: 2 }), notFoundFor('insp-1'));
     view.world.sharer.mode = 'error';
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Save this part' }));
-    expect(await screen.findByText(/could not be saved/)).toBeVisible();
-    expect(screen.getByTestId('import-held-back')).toBeVisible();
+    await userEvent.setup().click(primary());
+    expect(await screen.findByText('The file could not be saved. Nothing was changed. Try again.')).toBeVisible();
+    expect(screen.getByTestId('import-group-not_found')).toBeVisible();
   });
 
   it('two taps on Save in one frame open the sheet once', async () => {
-    const made = makePackage({ inspections: 2 });
-    const view = await runToResult(made, (_n, b) => (idsOf(b).includes('insp-1') ? refused(404, 'NOT_FOUND', { inspectionId: 'insp-1' }) : ok(b)));
-    const save = screen.getByRole('button', { name: 'Save this part' });
+    const view = await runToResult(makePackage({ inspections: 2 }), notFoundFor('insp-1'));
     await act(async () => {
-      save.click();
-      save.click();
+      primary().click();
+      primary().click();
     });
     await waitFor(() => expect(view.world.sharer.calls).toHaveLength(1));
     expect(view.world.sharer.calls).toHaveLength(1);
   });
+
+  it('with several groups each has its own Save, next to a single primary', async () => {
+    const view = await runToResult(makePackage({ inspections: 4 }), (_n, b) => {
+      const ids = idsOf(b);
+      if (ids.includes('insp-1')) return refused(404, 'NOT_FOUND', { inspectionId: 'insp-1' });
+      if (ids.includes('insp-2')) return refused(409, 'PACKAGE_INSPECTION_DELETED', { inspectionId: 'insp-2', inspectionIds: ['insp-2'] });
+      return ok(b);
+    });
+    expect(primaryButtons()).toEqual([primary()]);
+    expect(primary()).toHaveTextContent('Save the 2 that were not imported');
+    const group = screen.getByTestId('import-group-deleted');
+    await userEvent.setup().click(within(group).getByRole('button', { name: 'Save this one' }));
+    await waitFor(() => expect(view.world.sharer.calls).toHaveLength(1));
+    expect(readPackageSummary(view.world.sharer.calls[0]?.bytes ?? new Uint8Array()).manifest.inspections.map((i) => i.id)).toEqual(['insp-2']);
+  });
 });
 
-describe('an import that cannot go on', () => {
+describe('the result page: when sending could not go on', () => {
   it.each([
-    ['auth', 'Sign in again'],
-    ['locked', 'This device is locked'],
-    ['upgrade', 'Update the app'],
-    ['server_too_old', 'The server is too old'],
-  ] as const)('"%s" ends in one clear instruction, not a list of unconfirmed inspections', async (problem, title) => {
+    ['auth', 'These were not sent because you were signed out.', 'Try again'],
+    ['locked', 'These were not sent because this device is locked.', 'Try again'],
+    ['upgrade', 'These were not sent because this version of the app is too old for your server.', 'Done'],
+    ['server_too_old', 'These were not sent because your server is too old for this app.', 'Done'],
+  ] as const)('"%s": one sentence, nothing was uploaded, one next step', async (problem, heading, label) => {
     const view = await runToResult(makePackage({ inspections: 4 }), () => ({ kind: 'problem', problem }));
-    expect(within(screen.getByTestId('import-result')).getByText(title)).toBeVisible();
     expect(view.calls).toHaveLength(1);
-    expect(screen.queryByTestId('import-held-back')).toBeNull();
-    expect(screen.getByTestId('import-unsent')).toHaveTextContent('4 inspections were not sent.');
+    expect(within(result()).getByRole('heading', { level: 2 })).toHaveTextContent('Nothing was imported.');
+    expect(within(result()).getByRole('heading', { level: 3 })).toHaveTextContent(heading);
+    expect(result()).toHaveTextContent('Nothing was uploaded for them.');
+    expect(within(result()).getAllByTestId('import-row')).toHaveLength(4);
+    expect(primary()).toHaveTextContent(label);
+    expect(primaryButtons()).toEqual([primary()]);
   });
 
-  it('a part that lost its answer and was then stopped is "not confirmed", never "not sent"', async () => {
+  it('"Try again" imports the same file again, without choosing it again', async () => {
+    const view = await runToResult(makePackage({ inspections: 2 }), (n, b) => (n === 1 ? { kind: 'problem', problem: 'auth' } : ok(b)));
+    await userEvent.setup().click(primary());
+    await waitFor(() => expect(screen.getByTestId('import-headline')).toHaveTextContent('All 2 inspections were imported.'));
+    expect(view.calls).toHaveLength(2);
+  });
+
+  it('a request that lost its answer and was then cut short by the sign-in is NOT described as unsent', async () => {
     const view = await runToResult(makePackage({ inspections: 3 }), (n) => ({ kind: 'problem', problem: n === 1 ? 'offline' : 'auth' }));
     expect(view.calls).toHaveLength(2);
-    expect(within(screen.getByTestId('import-result')).getByText('Sign in again')).toBeVisible();
-    expect(screen.queryByTestId('import-unsent')).toBeNull();
-    expect(screen.queryByText(/were not sent/)).toBeNull();
-    expect(screen.getByTestId('held-back-group-gave_up')).toHaveTextContent('did not confirm this part in time');
-    expect(screen.getByTestId('held-back-group-gave_up')).toHaveTextContent('importing is safe to repeat');
+    const group = screen.getByTestId('import-group-no_answer');
+    expect(group).toHaveTextContent('The server did not answer in time for these.');
+    expect(group).toHaveTextContent('It may or may not have received them.');
+    expect(group).toHaveTextContent('Trying again is safe');
+    expect(group).toHaveTextContent('Sign in again first.');
+    expect(mainText()).not.toMatch(/Nothing was uploaded|not sent/);
+    expect(within(result()).getByText('3 may or may not be on the server.')).toBeVisible();
   });
 
-  it('control: no answer at all ends in the retry limit and the ordinary unconfirmed explanation', async () => {
+  it('control: no answer at all ends in the retry limit and the same plain explanation', async () => {
     const view = await runToResult(makePackage({ inspections: 2 }), () => ({ kind: 'problem', problem: 'offline' }));
     expect(view.calls).toHaveLength(5);
-    expect(screen.getByTestId('held-back-group-gave_up')).toHaveTextContent('did not confirm this part in time');
-    expect(screen.queryByText('Sign in again')).toBeNull();
+    expect(screen.getByTestId('import-group-no_answer')).toHaveTextContent('The server did not answer in time for these.');
+    expect(primary()).toHaveTextContent('Try again');
+    expect(mainText()).not.toMatch(/signed out/);
   });
 });
 
+describe('the result page: plain words and design tokens in every situation', () => {
+  const situations: Array<[string, Parameters<typeof makePackage>[0], Parameters<typeof runToResult>[1]]> = [
+    ['all imported', { inspections: 3 }, (_n, b) => ok(b)],
+    ['partial', { inspections: 3 }, notFoundFor('insp-1')],
+    ['expired', { inspections: 2 }, () => refused(422, 'PACKAGE_EXPIRED', { maxAgeDays: 30 })],
+    ['forbidden', { inspections: 2 }, () => refused(403, 'FORBIDDEN')],
+    ['signed out', { inspections: 3 }, () => ({ kind: 'problem', problem: 'auth' })],
+    ['locked', { inspections: 3 }, () => ({ kind: 'problem', problem: 'locked' })],
+    ['timeout then sign-out', { inspections: 3 }, (n) => ({ kind: 'problem', problem: n === 1 ? 'offline' : 'auth' })],
+    ['offline', { inspections: 2 }, () => ({ kind: 'problem', problem: 'offline' })],
+  ];
+
+  it.each(situations)('%s: no jargon, no exclamation mark, one primary action, no raw colours, no fixed sizes', async (_name, spec, respond) => {
+    await runToResult(makePackage(spec), respond);
+    expect(bannedWordsIn(mainText())).toEqual([]);
+    expect(mainText()).not.toContain('!');
+    expect(primaryButtons()).toHaveLength(1);
+    expect(result().innerHTML).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|(?:bg|text|border)-(?:red|green|blue|yellow|orange|gray|slate)-\d/i);
+    expect(result().innerHTML).not.toMatch(/style="[^"]*(?:width|height)\s*:\s*\d+px/i);
+  });
+});
