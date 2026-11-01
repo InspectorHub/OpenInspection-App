@@ -418,12 +418,14 @@ npm run hooks:install
 
 This points `core.hooksPath` at `.githooks` and marks the hooks executable (`chmod +x`), so a clone that lost the executable bit still works. `.gitattributes` keeps the hooks LF on Windows checkouts.
 
-`.githooks/pre-push` runs `scripts/prepush-related-tests.mjs`. It diffs the pushed range (against the remote sha, or the merge-base with `origin/main` for a new branch) and runs `vitest related` serially (one worker) on:
+`.githooks/pre-push` runs `scripts/prepush-related-tests.mjs`. It diffs the pushed range (against the remote sha, or the merge-base with `origin/main` for a new branch) and runs `vitest related` on (five files at once by default; each file keeps its own isolated environment):
 
 - the changed `.ts`/`.tsx` files under `src/`, `electron/` and `e2e/`;
 - the field-ui contract test (`src/field/field-ui-contract.test.ts`) whenever `package.json`, `package-lock.json`, a vite/vitest/tsconfig file or a `scripts/*.mjs` file changed, because such a change can break tests that no import reveals (it says so when it does this; `npm test` is the full suite);
 - the sibling tests of a deleted source file. Deleted files are reported as not covered, since a deleted file has no importers to follow.
 
 It skips with a message when none of that changed. It prints `N test file(s) run, P/T tests passed, F failed, S skipped`, fails the push on a red test or a suite that cannot load, and says so loudly when no test file is related or every test was skipped, instead of reporting green.
+
+**Speed.** The hook used to run one worker. On 8 logical CPUs, with one fixed set of 7 changed files that relate to 238 test files (4253 tests), it took 404 s with 1 worker, 211 s with 3, 166 s with 5 (about 2.1 GB at the peak) and 153 s with 7, so the default is `min(5, CPUs - 2)`. `OI_PREPUSH_WORKERS=<1..16> git push` overrides it; `1` restores the serial run for a machine that is busy with something heavy. `--no-isolate` was measured at 217 s but made 40 tests in 7 files fail by polluting each other, so it is not used.
 
 The tests run on your working tree, so the hook refuses when the pushed commit is not `HEAD` or tracked files have uncommitted changes. `OI_SKIP_PREPUSH_VITEST=1 git push` is only for when the hook itself cannot run: it skips the tests and prints a warning listing the files that went untested. To preview a selection: `node scripts/prepush-related-tests.mjs src/export/copy.ts`.
