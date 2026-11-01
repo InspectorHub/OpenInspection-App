@@ -144,11 +144,19 @@ smoke_device() {
   CURRENT_UDID=""
 }
 
-IPHONE="$(pick_device iPhone)"
-IPAD="$(pick_device iPad)"
-[ -n "$IPHONE" ] || fail "no available iPhone simulator"
-[ -n "$IPAD" ] || fail "no available iPad simulator"
-
-smoke_device iphone "$IPHONE"
-smoke_device ipad "$IPAD"
+# SMOKE_DEVICES: iphone, ipad or both (default). CI runs one device per job so the two boots happen in parallel.
+case "${SMOKE_DEVICES:-both}" in
+  iphone|ipad|both) ;;
+  *) fail "SMOKE_DEVICES must be iphone, ipad or both (got: ${SMOKE_DEVICES})" ;;
+esac
+if [ "${SMOKE_DEVICES:-both}" != "ipad" ]; then
+  IPHONE="$(pick_device iPhone)"
+  [ -n "$IPHONE" ] || fail "no available iPhone simulator"
+  smoke_device iphone "$IPHONE"
+fi
+if [ "${SMOKE_DEVICES:-both}" != "iphone" ]; then
+  IPAD="$(pick_device iPad)"
+  [ -n "$IPAD" ] || fail "no available iPad simulator"
+  smoke_device ipad "$IPAD"
+fi
 echo "ios-simulator-smoke: all checks passed; screenshots are in $OUT"

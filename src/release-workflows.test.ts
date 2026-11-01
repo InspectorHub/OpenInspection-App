@@ -1085,3 +1085,56 @@ describe('CI iOS simulator job', () => {
     expect(smokeScript).toContain('set -Eeuo pipefail');
   });
 });
+
+describe('CI parallelism keeps full coverage', () => {
+  const win = job(ci.wf, 'windows') as Job & { strategy?: { matrix?: { shard?: number[] } } };
+  const sim = job(ci.wf, 'ios-simulator') as Job & { strategy?: { matrix?: { device?: string[] } } };
+  const shards = win.strategy?.matrix?.shard ?? [];
+  const shardArg = (run: string | undefined): { index: string; total: number } | undefined => {
+    const m = /--shard=\$\{\{ matrix\.shard \}\}\/(\d+)/.exec(run ?? '');
+    return m === null ? undefined : { index: 'matrix.shard', total: Number(m[1]) };
+  };
+
+  it('Windows is split into N shards and BOTH the unit tests and the Electron end-to-end tests run the same N (no shard count that leaves a slice untested)', () => {
+    expect(shards).toEqual([1, 2, 3]);
+    const vitest = win.steps.find((s) => (s.run ?? '').startsWith('npx vitest run'));
+    const playwright = win.steps.find((s) => (s.run ?? '').includes('playwright test'));
+    expect(shardArg(vitest?.run)?.total).toBe(shards.length);
+    expect(shardArg(playwright?.run)?.total).toBe(shards.length);
+    // Control: the matrix-less steps elsewhere carry no shard flag, so the check can fail.
+    expect(shardArg('npx vitest run')).toBeUndefined();
+  });
+
+  it('only the first shard does the once-per-run work (type-check, inventory, helper hash and upload)', () => {
+    const once = ['npm run typecheck', 'Record Windows HEIF and HEVC codec inventory', 'Record the helper SHA-256', 'windows-heic-helper'];
+    for (const needle of once) {
+      const found = win.steps.find((s) => (s.run ?? '') === needle || s.name === needle || s.with?.name === needle);
+      expect(found, needle).toBeDefined();
+      expect(found?.if, needle).toBe('matrix.shard == 1');
+    }
+    // Control: the build and the end-to-end run happen on every shard, since each shard runs on its own machine.
+    const everywhere = win.steps.filter((s) => (s.run ?? '').includes('npm run build:electron') || (s.run ?? '').includes('playwright test'));
+    expect(everywhere.length).toBeGreaterThanOrEqual(2);
+    for (const s of everywhere) expect(s.if).toBeUndefined();
+  });
+
+  it('the simulator job runs one device per matrix leg and passes it to the script; artifacts and failure context cannot collide', () => {
+    expect(sim.strategy?.matrix?.device).toEqual(['iphone', 'ipad']);
+    const smoke = sim.steps.find((s) => (s.run ?? '').includes('ios-simulator-smoke.sh'));
+    expect(smoke?.env?.SMOKE_DEVICES).toBe('${{ matrix.device }}');
+    const upload = sim.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(String(upload?.with?.name)).toContain('${{ matrix.device }}');
+    const failureUpload = win.steps.find((s) => s.if === 'failure()');
+    expect(String(failureUpload?.with?.name)).toContain('${{ matrix.shard }}');
+  });
+
+  it('the Swift package cache is keyed on what decides the packages and is pinned to a full SHA', () => {
+    const cache = sim.steps.find((s) => s.uses?.startsWith('actions/cache@'));
+    expect(cache?.uses).toMatch(/@[0-9a-f]{40}\b/);
+    expect(String(cache?.with?.key)).toContain("hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json')");
+    const cacheAt = sim.steps.indexOf(cache as Step);
+    const buildAt = sim.steps.findIndex((s) => (s.run ?? '').includes('iphonesimulator'));
+    expect(cacheAt).toBeGreaterThanOrEqual(0);
+    expect(cacheAt).toBeLessThan(buildAt);
+  });
+});
