@@ -1478,6 +1478,19 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run)).toContain('--port 8791');
   });
 
+  it('both emulator scripts count only a crash of the APP process, not a FATAL EXCEPTION logged by the test tooling', () => {
+    // CI run 41321526977 went red on a FATAL EXCEPTION whose process was UiAutomation (the accessibility channel behind
+    // uiautomator dump) while the app sat on its first screen. A crash of the app names the package on its Process: line.
+    const smoke = readFileSync(join(ROOT, 'scripts', 'android-emulator-smoke.sh'), 'utf8');
+    for (const [name, text] of [['smoke', smoke], ['golden', golden]] as const) {
+      expect(text, name).toContain('grep -A3 "FATAL EXCEPTION" "$OUT/logcat.txt" | grep -q "Process: $APP_ID"');
+      // Not the old, wider check that any FATAL EXCEPTION fails the run.
+      expect(text, name).not.toMatch(/^if grep -q "FATAL EXCEPTION" "\$OUT\/logcat\.txt"; then$/m);
+      // A crash of another process is still visible in the log output.
+      expect(text, name).toContain('a FATAL EXCEPTION of another process is in logcat.txt');
+    }
+  });
+
   it('the golden script starts the app from a cleared state with pm clear and am start, then runs the G2 flow with the engine address', () => {
     expect(golden.startsWith('#!/usr/bin/env bash')).toBe(true);
     for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'logcat', 'uiautomator dump', 'maestro/golden/g2-controlled-sign-in.yaml', '-e "SERVER_URL=$ENGINE_ORIGIN"']) expect(golden, needle).toContain(needle);

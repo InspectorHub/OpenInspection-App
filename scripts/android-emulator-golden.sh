@@ -65,9 +65,11 @@ echo "ok: G2 passed (controlled sign-in, work list, Online, nothing waiting to u
 
 adb exec-out screencap -p > "$OUT/screen-after-g2.png" || true
 adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
-if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then
+# Only a crash of the APP's own process counts (see android-emulator-smoke.sh): the test tooling can log its own FATAL EXCEPTION.
+if grep -A3 "FATAL EXCEPTION" "$OUT/logcat.txt" | grep -q "Process: $APP_ID"; then
   grep -A8 "FATAL EXCEPTION" "$OUT/logcat.txt" | head -20
-  fail "the app crashed during G2 (FATAL EXCEPTION in logcat)"
+  fail "the app crashed during G2 (FATAL EXCEPTION in the app process, see logcat.txt)"
 fi
+if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then echo "note: a FATAL EXCEPTION of another process is in logcat.txt (not the app); ignored"; fi
 echo "ok: no crash in logcat"
 echo "android-emulator-golden: G2 passed; evidence is in $OUT"

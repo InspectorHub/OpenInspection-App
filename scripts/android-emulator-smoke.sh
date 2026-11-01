@@ -66,9 +66,12 @@ grep -q "Choose your server" "$OUT/ui.xml" || fail "the first screen \"Choose yo
 echo "ok: the first screen is \"Choose your server\""
 
 adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
-if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then
+# Only a crash of the APP's own process counts (its "Process:" line names the package). The emulator's test tooling can log a
+# FATAL EXCEPTION of its own (UiAutomation, the accessibility channel behind uiautomator dump) with nothing wrong in the app.
+if grep -A3 "FATAL EXCEPTION" "$OUT/logcat.txt" | grep -q "Process: $APP_ID"; then
   grep -A8 "FATAL EXCEPTION" "$OUT/logcat.txt" | head -20
-  fail "the app crashed (FATAL EXCEPTION in logcat)"
+  fail "the app crashed (FATAL EXCEPTION in the app process, see logcat.txt)"
 fi
+if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then echo "note: a FATAL EXCEPTION of another process is in logcat.txt (not the app); ignored"; fi
 echo "ok: no crash in logcat"
 echo "android-emulator-smoke: all checks passed; evidence is in $OUT"
