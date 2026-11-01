@@ -259,6 +259,16 @@ describe('photo cache', () => {
     expect(await r.db.query('SELECT size FROM photo_cache')).toEqual([{ size: 'original' }]);
   });
 
+  it('a local copy that cannot be read (the file is already gone) does not stop the download: the photo is fetched from the server instead', async () => {
+    // Seen on a real iPhone: an uploaded photo's local file is removed, then the cache asks for it; the read threw
+    // ("file does not exist"), the task ended before the download, and the tile stayed a grey placeholder.
+    const r = await rig({ localCopy: () => Promise.reject(new Error('file does not exist')) });
+    const url = await fetchOnce(r, 'p1', 'thumb');
+    expect(url).not.toBeNull();
+    expect(r.calls.length).toBeGreaterThan(0);
+    // Control: when the local copy CAN be read it is still used and nothing is requested (the test above this one).
+  });
+
   it('purgeInspection removes that inspection only', async () => {
     const r = await rig();
     await fetchOnce(r, 'p1');

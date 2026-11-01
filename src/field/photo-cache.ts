@@ -263,7 +263,9 @@ export function createPhotoCache(deps: PhotoCacheDeps): PhotoCache {
     const hash = await sha256Hex(`${account}|${inspectionId}|${key}|${size}`);
     const stored = await deps.db.query<Row>('SELECT hash, inspection_id, key, size, path, bytes FROM photo_cache WHERE hash = ? AND account_key = ?', [hash, account]);
     if (stored[0] !== undefined && (await adopt(stored[0], true))) return notify();
-    const local = await deps.localCopy?.(inspectionId, key);
+    // A local copy that cannot be read (its file is already gone, as after an upload) is no local copy: go on to the download,
+    // never end the task here. On a real iPhone this throw left the photo's tile a grey placeholder for good.
+    const local = await deps.localCopy?.(inspectionId, key).catch(() => null);
     if (local !== undefined && local !== null) {
       const kind = sniff(local.bytes);
       if (kind !== null && local.bytes.byteLength <= limits.maxFileBytes) return store(inspectionId, key, 'original', kind, local.bytes);
