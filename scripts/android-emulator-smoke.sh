@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Launch smoke for the Android debug APK on an already-running emulator (CI starts it with android-emulator-runner).
+# Usage: scripts/android-emulator-smoke.sh <path to app-debug.apk> [output directory]
+#
+# It does these things and nothing else: install the APK, start the app, require the process to stay alive, require the first
+# screen ("Choose your server") in the UI tree, require that no crash was logged, and keep a screenshot, the UI tree and the
+# logcat as evidence. It signs in to nothing and contacts no server. "The process is alive" is not "the app works", which is
+# why the screen is checked: the iOS simulator job once stayed green while the app sat on its could-not-open screen.
+set -Eeuo pipefail
+
+APP_ID="io.inspectorhub.app"
+APK="${1:?usage: android-emulator-smoke.sh <path to app-debug.apk> [output directory]}"
+OUT="${2:-${SMOKE_OUT:-$PWD/android-smoke-out}}"
+SETTLE_SECONDS="${SMOKE_SETTLE_SECONDS:-15}"
+mkdir -p "$OUT"
+
+fail() { echo "::error::$*"; return 1; }
+on_error() {
+  local status=$?
+  echo "::error::android-emulator-smoke failed (exit $status)"
+  adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
+  adb exec-out screencap -p > "$OUT/screen-at-failure.png" 2>/dev/null || true
+  echo "--- last logcat lines ---"
+  tail -40 "$OUT/logcat.txt" 2>/dev/null || true
+  exit "$status"
+}
+trap on_error ERR
+
+[ -f "$APK" ] || fail "no APK at $APK"
+
+adb wait-for-device
+waited=0
+until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ] || [ "$waited" -ge 180 ]; do sleep 2; waited=$((waited + 2)); done
+[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ] || fail "the emulator did not finish booting in 180 s"
+echo "ok: the emulator finished booting ($(adb shell getprop ro.build.version.release | tr -d '\r'), api $(adb shell getprop ro.build.version.sdk | tr -d '\r'))"
+
+adb install -r "$APK"
+adb logcat -c
+adb shell am start -n "$APP_ID/.MainActivity"
+
+waited=0
+until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
+[ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app process did not start within 60 s"
+sleep "$SETTLE_SECONDS"
+[ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app process is gone $SETTLE_SECONDS seconds after launch"
+echo "ok: the app is running"
+
+adb exec-out screencap -p > "$OUT/screen.png"
+[ -s "$OUT/screen.png" ] || fail "the screenshot is empty"
+
+adb shell uiautomator dump /sdcard/ui.xml > /dev/null
+adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null
+# Control first: a UI tree that does not even name the app's package proves nothing about what is on screen.
+grep -q "package=\"$APP_ID\"" "$OUT/ui.xml" || fail "the UI tree does not belong to $APP_ID (is another window in front?)"
+if grep -q "could not open" "$OUT/ui.xml"; then fail "the app is on its could-not-open screen"; fi
+grep -q "Choose your server" "$OUT/ui.xml" || fail "the first screen \"Choose your server\" is not in the UI tree (see ui.xml and screen.png)"
+echo "ok: the first screen is \"Choose your server\""
+
+adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
+if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then
+  grep -A8 "FATAL EXCEPTION" "$OUT/logcat.txt" | head -20
+  fail "the app crashed (FATAL EXCEPTION in logcat)"
+fi
+echo "ok: no crash in logcat"
+echo "android-emulator-smoke: all checks passed; evidence is in $OUT"
