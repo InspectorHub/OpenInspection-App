@@ -2,8 +2,9 @@ name: Release iOS
 
 # Written to the release plan and NOT yet run: it needs an Apple developer account, an App Store Connect app record and the
 # secrets listed in docs/release.md. A pushed tag vX.Y.Z (equal to package.json's version) builds, signs and uploads a build to
-# TestFlight. A manual run is refused unless it is started on a tag ref, so TestFlight only ever receives tagged builds. Nothing
-# here submits for review or releases to the App Store.
+# TestFlight, after scripts/ios-release-preflight.mjs has checked that the Apple secrets and variables are present. The build is
+# xcodebuild archive and -exportArchive (argument spelling not yet verified on a runner). A manual run is refused unless it is
+# started on a tag ref, so TestFlight only ever receives tagged builds. Nothing here submits for review or releases to the App Store.
 on:
   push:
     tags: ['v*']
@@ -66,6 +67,15 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+      - name: Check the Apple credentials are present
+        env:
+          IOS_DISTRIBUTION_CERT_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERT_P12_BASE64 }}
+          IOS_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          APPSTORE_ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+          APPSTORE_API_KEY_ID: ${{ vars.APPSTORE_API_KEY_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: node scripts/ios-release-preflight.mjs
       - run: npm ci
       - run: npm run build
       - name: Set the iOS version from package.json and the build number from the run
@@ -76,6 +86,15 @@ jobs:
           node scripts/sync-ios-version.mjs --build-number "$((RUN_NUMBER * 100 + RUN_ATTEMPT))"
           node scripts/sync-ios-version.mjs --check
       - run: npx cap sync ios
+      - name: Require Xcode 26 or newer
+        run: |
+          set -eu
+          xcodebuild -version
+          major="$(xcodebuild -version | sed -n 's/^Xcode \([0-9][0-9]*\).*/\1/p')"
+          if [ -z "$major" ] || [ "$major" -lt 26 ]; then
+            echo "::error::Xcode 26 or newer is required (found major version: ${major:-none})."
+            exit 1
+          fi
       - name: Warn when the encryption compliance code is not recorded
         run: |
           if ! grep -q 'ITSEncryptionExportComplianceCode' ios/App/App/Info.plist; then
@@ -95,24 +114,74 @@ jobs:
           issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
           api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
-      - name: Archive and export the IPA
+      - name: Fill in ExportOptions.plist
         env:
           PROFILES: ${{ steps.profiles.outputs.profiles }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           set -eu
           profile="$(node -p "JSON.parse(process.env.PROFILES)[0].name")"
-          npx cap build ios \
-            --scheme App \
-            --xcode-team-id "$APPLE_TEAM_ID" \
-            --xcode-export-method app-store-connect \
-            --xcode-signing-style manual \
-            --xcode-signing-certificate "Apple Distribution" \
-            --xcode-provisioning-profile "$profile"
+          mapping="$(PROFILE="$profile" node -p "JSON.stringify({ [process.env.BUNDLE_ID]: process.env.PROFILE })")"
+          plutil -convert xml1 -o "$RUNNER_TEMP/ExportOptions.plist" ios/ExportOptions.plist
+          plutil -replace teamID -string "$APPLE_TEAM_ID" "$RUNNER_TEMP/ExportOptions.plist"
+          plutil -replace provisioningProfiles -json "$mapping" "$RUNNER_TEMP/ExportOptions.plist"
+          plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
+      - name: Archive the app
+        env:
+          PROFILES: ${{ steps.profiles.outputs.profiles }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+          profile="$(node -p "JSON.parse(process.env.PROFILES)[0].name")"
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$profile"
+      - name: Export the IPA
+        run: |
+          set -eu
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+      - name: Check the IPA before upload
+        run: |
+          set -eu
+          if ! test -f "$RUNNER_TEMP/export/App.ipa"; then
+            echo "::error::The export did not produce $RUNNER_TEMP/export/App.ipa. Files in the export directory:"
+            ls -la "$RUNNER_TEMP/export" || true
+            exit 1
+          fi
+          listing="$(unzip -l "$RUNNER_TEMP/export/App.ipa")"
+          case "$listing" in
+            *Payload/App.app/PrivacyInfo.xcprivacy*) ;;
+            *) echo "::error::The IPA does not contain Payload/App.app/PrivacyInfo.xcprivacy."; exit 1 ;;
+          esac
+          rm -rf "$RUNNER_TEMP/ipa-check"
+          mkdir -p "$RUNNER_TEMP/ipa-check"
+          unzip -q "$RUNNER_TEMP/export/App.ipa" -d "$RUNNER_TEMP/ipa-check"
+          app="$RUNNER_TEMP/ipa-check/Payload/App.app"
+          codesign -dvv "$app" 2> "$RUNNER_TEMP/ipa-check/codesign.txt"
+          if ! grep -q 'Authority=Apple Distribution' "$RUNNER_TEMP/ipa-check/codesign.txt"; then
+            echo "::error::The app in the IPA is not signed by an Apple Distribution certificate."
+            exit 1
+          fi
+          encryption="$(plutil -extract ITSAppUsesNonExemptEncryption raw -o - "$app/Info.plist")"
+          if [ "$encryption" != "true" ]; then
+            echo "::error::ITSAppUsesNonExemptEncryption in the IPA is not true (found: $encryption)."
+            exit 1
+          fi
+          echo "ok: the IPA exists, contains the privacy manifest, is signed by Apple Distribution and declares its encryption use"
       - name: Upload to TestFlight
         uses: apple-actions/upload-testflight-build@acf1166e95edc302069b74b258a788004fe39a08 # v5.7.0
         with:
-          app-path: ios/App/output/App.ipa
+          app-path: ${{ runner.temp }}/export/App.ipa
           app-type: ios
           issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
           api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}

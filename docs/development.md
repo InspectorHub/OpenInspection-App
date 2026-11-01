@@ -1,6 +1,6 @@
 # Development
 
-This page covers the local setup for Android and Windows (Electron). iOS is documented separately.
+This page covers the local setup for Android and Windows (Electron), and what is known about building and checking the iOS app (see "iOS" below; it builds on macOS only).
 
 ## Prerequisites
 
@@ -224,6 +224,94 @@ node scripts/build-icons.mjs
 ```
 
 It rasterises the SVG with Playwright's Chromium and writes `electron/builder/icon.png`, `icon.ico`, the Android `mipmap-*` launcher set, and the iOS 1024 icon (on white, no alpha). The output is deterministic for a given Chromium build (a different Chromium may rasterise slightly differently); each file's SHA-256 is printed. If Playwright's own Chromium is not downloaded, the script falls back to the newest Chromium in the Playwright cache (or `OI_ICON_CHROMIUM=<chrome.exe>`). See `branding/README.md`.
+
+## iOS
+
+The iOS project is `ios/App/App.xcodeproj` (scheme `App`, a local Swift package at `ios/App/CapApp-SPM`). Facts read from the project: bundle id
+`io.inspectorhub.app`, deployment target iOS 15.0, iPhone and iPad (`TARGETED_DEVICE_FAMILY = "1,2"`), `MARKETING_VERSION` written by
+`scripts/sync-ios-version.mjs`.
+
+### Where it builds
+
+iOS needs Xcode, which runs on macOS only. A Windows development machine can edit and unit-test the TypeScript but cannot build or run the iOS app.
+The macOS builds in this repository run on the `macos-26` GitHub runner, and both the CI simulator job and the release job fail unless
+`xcodebuild -version` reports a major version of 26 or higher. (Capacitor 8 requires Xcode 26 or newer according to
+<https://capacitorjs.com/docs/ios>; that page was not re-read for this document.)
+
+| Job | Where | What it does |
+|---|---|---|
+| `ios-sync` | `.github/workflows/ci.yml` | `npm ci`, `npm run build`, `npx cap sync ios`. It does not compile. |
+| `ios-simulator` | `.github/workflows/ci.yml` | Compiles the Debug configuration for the simulator with `CODE_SIGNING_ALLOWED=NO`, then runs `scripts/ios-simulator-smoke.sh` and keeps its screenshots for 7 days. It uses no secret. |
+| `testflight` | `.github/workflows/release-ios.yml` | The signed release build. See `docs/release.md`. |
+
+**Status.** `ios-simulator` and the smoke script are written and have static tests (`src/release-workflows.test.ts`), but this page records no
+successful run of them. Until a run has passed, read the next list as what the script is meant to check, not as a result.
+
+The smoke script (`scripts/ios-simulator-smoke.sh`) is meant to check, on one iPhone and one iPad simulator: that `Info.plist` and
+`PrivacyInfo.xcprivacy` pass `plutil -lint` and the manifest is inside the built app; that the app installs, launches and is still running
+after a settle time; that opening the sign-in callback URL (`io.inspectorhub.app:/oauth/callback?...`) with `xcrun simctl openurl` does not
+end the process; that every directory listed in `BackupExclusion.relativeDirectories` carries the `com.apple.MobileBackup` attribute (with an
+untouched directory as a control that must not carry it); and it saves one screenshot per device. It signs in to nothing and contacts no server.
+
+### Running it on a Mac
+
+These are the Capacitor and Xcode commands the repository's own jobs use or rely on. `npx cap run ios` is the Capacitor CLI's run command and
+has not been run for this page.
+
+```
+npm ci
+npm run build          # the web bundle that cap sync copies into the iOS project
+npx cap sync ios       # copies the bundle and syncs the plugins' Swift packages
+npx cap run ios        # pick a simulator or a connected device
+```
+
+The command the CI job runs for a simulator build is in `.github/workflows/ci.yml` (`xcodebuild -project ios/App/App.xcodeproj -scheme App
+-configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ... CODE_SIGNING_ALLOWED=NO build`). A server on the same
+Mac is reachable from the simulator as `http://localhost:<port>` (see "Standalone fake engine"). Running on a physical device needs signing
+with a team of your own; this repository does not document that path.
+
+### Inspecting the web view
+
+`ios/debug.xcconfig` sets `CAPACITOR_DEBUG = true`, and `Info.plist` passes it on as the `CAPACITOR_DEBUG` key. In `project.pbxproj` only the
+Debug configurations use that file; Release has no base configuration, and its Swift conditions do not define `DEBUG`. Capacitor's iOS source
+(`node_modules/@capacitor/ios/Capacitor/Capacitor/CapacitorBridge.swift`) makes the web view inspectable when it is built with `DEBUG` or when that
+key is `"true"`. So a Debug build is inspectable and a Release build is not. Attaching Safari's Web Inspector to a simulator or a device is
+standard Safari behaviour and was not tried for this page.
+
+### Test-build expiry
+
+To see the warning for an old TestFlight build, build with `APP_BUILT_AT` set; the exact command is in the table under "Trying the version
+states on a device" above.
+
+### Local data and backups
+
+`ios/App/App/BackupExclusion.swift` runs at launch (`AppDelegate.swift` calls it; a failure is logged, not fatal). It creates and then marks
+excluded from iCloud and device backups two directories under `Library`: `CapacitorDatabase` (the value of `iosDatabaseLocation` in
+`capacitor.config.ts`) and `NoCloud` (where `Directory.LibraryNoCloud` is expected to point; the code comment states this and
+`src/ios-config.test.ts` checks the names against the configuration, and the simulator job lists `Library` so the real layout is visible in its log).
+
+The trade-off: the database key is stored in the iOS keychain by the SQLite plugin (`isSecretStored` and `setEncryptionSecret` in
+`src/platform/db-capacitor.ts`), and the comment in `BackupExclusion.swift` states that this key does not travel with a backup. That was not
+checked on a device here. If it holds, a restored copy of the database file could never be opened, so the files are left out of backups: a new or
+restored device starts clean (install, sign in, let the work list load again), and anything captured offline and not yet uploaded does not move to
+the new device. If the database file exists but its key does not, the app refuses to open it, changes and deletes nothing, and shows "This device
+cannot read its saved data" (`DbKeyLostError` in `src/platform/db-capacitor.ts`, `DbKeyLost` in `src/ui/Blocking.tsx`); that screen has no
+clear-data button.
+
+### Privacy manifest
+
+`ios/App/App/PrivacyInfo.xcprivacy` declares no tracking and no tracking domains, an empty `NSPrivacyCollectedDataTypes`, and the
+required-reason categories `NSPrivacyAccessedAPICategoryFileTimestamp` (reason `C617.1`) and `NSPrivacyAccessedAPICategoryUserDefaults` (reason
+`CA92.1`). `src/ios-privacy-manifest.test.ts` scans the app's Swift sources and the plugins' iOS sources under `node_modules` and fails when a used
+category has no declared reason, or a declared one is not used. The category and reason tables in `src/ios-test-support/required-reason-scan.ts`
+say they were fetched from Apple's documentation on 2026-10-31; they were not re-checked for this page. `NSPrivacyCollectedDataTypes` is empty
+because the App Store Connect privacy answers have not been entered into the repository; it is not a statement that the app collects nothing.
+
+### Background uploads: not measured
+
+What happens to an upload when the app is suspended, killed or the screen is locked has not been measured on a device, and nothing in this repository
+records it. This section will carry the result, with the date and the device, once the device test has been done. Until then do not assume more
+than the plugin's own documentation promises.
 
 ## Memory
 

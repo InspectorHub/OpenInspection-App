@@ -221,7 +221,9 @@ These belong to the Apple developer account holder. The workflow cannot create a
   an encryption implementation. Upload the classification documents in App Store Connect, wait for Apple to issue the compliance
   code, then record it as `ITSEncryptionExportComplianceCode` in `ios/App/App/Info.plist` and commit it. The workflow prints a
   warning when the key is missing; App Store Connect then asks for the answer on every build. The owner is the account holder; verify
-  every regulation you cite against its primary text.
+  every regulation you cite against its primary text. The code is not a secret, but it belongs only in `Info.plist`. Once it is
+  committed the warning step stays in the workflow, so removing the key later is noticed. Whether App Store Connect then stops asking for the
+  answer on a build is to be confirmed by the owner after the first successful upload.
 - [ ] Beta App Review material for external testing: review notes and a demo account. App Store Connect's TestFlight "Test
   Information" (description, feedback email, locale) must also be filled in, because the upload step checks it before uploading.
 
@@ -229,17 +231,79 @@ Review notes can say how to check the native abilities by hand: switch on airpla
 and reopen to see the data is still there, then reconnect and watch it sync; the encrypted local storage, background upload and the
 system share sheet.
 
+### Making the certificate request and the .p12 without a Mac
+
+**Unverified.** These `openssl` steps are community practice. They were not checked against Apple's documentation and have not been run for
+this project; the owner confirms or corrects them after the first successful signed upload. Keep the private key and the `.p12` in two
+offline backups, in separate places, as for the Android keystore, and never commit them or paste them into an issue, a pull request or a chat.
+
+```bash
+# 1. A private key and a certificate signing request. Keep the .key file; Apple only ever sees the .csr.
+openssl genrsa -out ios_distribution.key 2048
+openssl req -new -key ios_distribution.key -out ios_distribution.csr -subj "/emailAddress=<your email>/CN=<your name>/C=<country code>"
+
+# 2. In the Apple developer portal (Certificates, Identifiers & Profiles) create an Apple Distribution certificate from the .csr and
+#    download the .cer file. The portal's wording was not checked here.
+
+# 3. Combine the certificate and the key into a .p12. The password comes from the environment so it is not left in the shell history.
+openssl x509 -inform DER -in distribution.cer -out distribution.pem
+P12_PASSWORD='<choose one>' openssl pkcs12 -export -inkey ios_distribution.key -in distribution.pem -out distribution.p12 -passout env:P12_PASSWORD
+
+# 4. Encode it as one line of base64 for the IOS_DISTRIBUTION_CERT_P12_BASE64 secret (GNU coreutils; on macOS use: base64 -i distribution.p12).
+base64 -w0 distribution.p12
+```
+
+The preflight below checks that the encoded value is a single line of base64 whose first decoded byte is `0x30`. It cannot tell whether the
+certificate is the right one. Reports from others say that a `.p12` written by OpenSSL 3 with its default encryption can fail to import on a Mac
+and needs the `-legacy` option; that is also unverified here.
+
 ### TestFlight cadence
 
 A TestFlight build expires **90 days** after upload. The release rule is to ship a new build at least every **60 days** while testers
 depend on it, which leaves a month of slack; a new tag is all it takes. External testing also needs the first build of each version to pass Beta App Review.
 
+### What the `testflight` job does, in order
+
+The job runs only for a tag, in the `ios-release` environment, on `macos-26`.
+
+1. **Preflight.** `scripts/ios-release-preflight.mjs` runs first, before `npm ci` and before any certificate is imported. It reads the six
+   names in the table above and fails the job, with one `::error::` line per problem, when any is unset or empty, has leading or trailing
+   whitespace, or has the wrong shape: the certificate must be a single line of base64 whose first decoded byte is `0x30`, and the API key
+   must contain a `BEGIN PRIVATE KEY` line (a final line break is allowed on the key, because a pasted `.p8` file ends with one). Each message
+   names the variable and the reason and never contains the value. It checks the shape only: it cannot tell whether a value is correct, and
+   it knows no Apple rule. The values reach the step only through `env:`; no `run:` block in the workflow mentions a secret, and
+   `src/release-workflows.test.ts` checks both.
+2. `npm ci`, `npm run build`, the version and build number (see "The version"), `npx cap sync ios`.
+3. **Xcode.** The job prints `xcodebuild -version` and fails unless the major version is 26 or higher.
+4. The encryption compliance warning, then the certificate import and the provisioning profile download.
+5. **ExportOptions.plist.** `ios/ExportOptions.plist` is a template that names the export method (`app-store-connect`), manual signing and
+   the bundle id, with placeholders for the team id and the profile name. The job copies it to the runner's temporary directory and fills the
+   team id (the `APPLE_TEAM_ID` variable) and the profile name (from the download step) in with `plutil`, so neither is stored in the
+   repository.
+6. **Build.** `xcodebuild archive` (Release, `generic/platform=iOS`, manual signing, the `Apple Distribution` identity and the profile name as
+   build settings), then `xcodebuild -exportArchive` with that options file. No secret is passed on either command line: the certificate is already
+   in the keychain.
+7. **IPA check.** The job requires `App.ipa` to exist in the export directory and then checks that it contains
+   `Payload/App.app/PrivacyInfo.xcprivacy`, that `codesign -dvv` reports an `Authority` of `Apple Distribution`, and that
+   `ITSAppUsesNonExemptEncryption` in its `Info.plist` is `true`. The upload step reads the same file.
+8. **Upload** to TestFlight with `apple-actions/upload-testflight-build`.
+
 ### What was assumed and is unverified
 
-`release-ios.yml` follows the plan text and the action documentation, but no run has happened. In particular the following are
-untested: manual signing with the profile name returned by the download step, the `Apple Distribution` certificate selector, the
-export path `ios/App/output/App.ipa` that Capacitor's build writes, and the upload step's wait for TestFlight processing. Fix what
-the first run shows, and tighten this page.
+The workflow cannot sign yet: it needs the Apple account items above, and no run has passed the preflight. `release-ios.yml` follows the plan
+text and the action documentation, but nothing in it has run on a runner. The following are specifically untested; fix what the first run shows
+and tighten this page:
+
+- The spelling and effect of the `xcodebuild archive` and `-exportArchive` arguments, and that the `App` scheme archives with the settings
+  given on the command line.
+- That the first entry of the download step's `profiles` output carries the profile's name in a field called `name`, and that this name (not an
+  id) is what `PROVISIONING_PROFILE_SPECIFIER` and the options file expect.
+- That `plutil -replace provisioningProfiles -json ...` and `plutil -extract ITSAppUsesNonExemptEncryption raw` behave as the job assumes.
+- That the export writes `App.ipa` into the export directory (the check and the upload both read that exact name).
+- That the `codesign -dvv` output contains an `Authority=Apple Distribution` line for an App Store export.
+- The upload step's wait for TestFlight processing.
+- The CI simulator job and `scripts/ios-simulator-smoke.sh` (see `docs/development.md`): described there, with no passing run recorded.
+- The `openssl` steps for the certificate (above).
 
 ## If a release is wrong
 

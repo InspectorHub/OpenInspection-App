@@ -90,8 +90,11 @@ const ANDROID_SECRET_STEP_LINES: Record<string, string[]> = {
     'unsigned/app-release-unsigned.apk',
   ],
 };
-/** iOS hands every secret to an action through `with`; no script step may hold one. */
-const IOS_SECRET_STEP_LINES: Record<string, string[]> = {};
+/** iOS hands the certificate, its password and the API key to actions through `with`. The one script step that may hold them in its env is the preflight, whose script is a single command that reads them and never prints a value. */
+const IOS_PREFLIGHT_STEP = 'Check the Apple credentials are present';
+const IOS_SECRET_STEP_LINES: Record<string, string[]> = {
+  [IOS_PREFLIGHT_STEP]: ['node scripts/ios-release-preflight.mjs'],
+};
 const WINDOWS_SECRET_STEP_LINES: Record<string, string[]> = {
   'Sign the HEIC helper with Azure Artifact Signing': [
     "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser",
@@ -287,14 +290,19 @@ const EXPECTED_STEPS = {
   iosTestflight: [
     'actions/checkout',
     'actions/setup-node',
+    'Check the Apple credentials are present',
     'run: npm ci',
     'run: npm run build',
     'Set the iOS version from package.json and the build number from the run',
     'run: npx cap sync ios',
+    'Require Xcode 26 or newer',
     'Warn when the encryption compliance code is not recorded',
     'Import the distribution certificate | apple-actions/import-codesign-certs',
     'Download the App Store provisioning profile | apple-actions/download-provisioning-profiles',
-    'Archive and export the IPA',
+    'Fill in ExportOptions.plist',
+    'Archive the app',
+    'Export the IPA',
+    'Check the IPA before upload',
     'Upload to TestFlight | apple-actions/upload-testflight-build',
   ],
   windowsSign: [
@@ -647,12 +655,16 @@ describe('release-ios specifics', () => {
     expect(iosGating(wf)).toEqual([]);
   });
 
-  it('is written to the plan: macos-26, an environment, the App Store Connect export method, encryption declared', () => {
+  it('is written to the plan: macos-26, an environment, xcodebuild archive and export, the App Store Connect export method, encryption declared', () => {
     expect(testflight['runs-on']).toBe('macos-26');
     expect(testflight.needs).toBe('verify');
-    const build = step(testflight, 'Archive and export the IPA').run ?? '';
-    expect(build).toContain('npx cap build ios');
-    expect(build).toContain('--xcode-export-method app-store-connect');
+    // Archive and export are xcodebuild calls (Capacitor's build command is no longer used); the export method lives in the options template.
+    const archive = step(testflight, 'Archive the app').run ?? '';
+    expect(archive).toContain('xcodebuild archive');
+    const exported = step(testflight, 'Export the IPA').run ?? '';
+    expect(exported).toContain('xcodebuild -exportArchive');
+    expect(testflight.steps.some((s) => (s.run ?? '').includes('cap build ios'))).toBe(false);
+    expect(readFileSync(join(ROOT, 'ios', 'ExportOptions.plist'), 'utf8')).toMatch(/<key>method<\/key>\s*<string>app-store-connect<\/string>/);
     const upload = testflight.steps.find((s) => s.uses?.startsWith('apple-actions/upload-testflight-build@'));
     expect(upload?.with?.['uses-non-exempt-encryption']).toBe('true');
     expect(testflight.steps.some((s) => s.uses?.startsWith('apple-actions/import-codesign-certs@'))).toBe(true);
@@ -665,7 +677,184 @@ describe('release-ios specifics', () => {
     expect(sync.run).toContain('node scripts/sync-ios-version.mjs --build-number "$((RUN_NUMBER * 100 + RUN_ATTEMPT))"');
     expect(sync.run).toContain('node scripts/sync-ios-version.mjs --check');
     const at = (name: string) => testflight.steps.findIndex((s) => s.name === name);
-    expect(at(syncName)).toBeLessThan(at('Archive and export the IPA'));
+    expect(at(syncName)).toBeGreaterThanOrEqual(0);
+    expect(at(syncName)).toBeLessThan(at('Archive the app'));
+  });
+});
+
+// ---- the iOS preflight, the archive and the IPA checks: each checker returns violations so a mutated copy can be shown to be rejected ----
+
+const IOS_PREFLIGHT_NAMES = ['IOS_DISTRIBUTION_CERT_P12_BASE64', 'IOS_DISTRIBUTION_CERT_PASSWORD', 'APPSTORE_API_PRIVATE_KEY', 'APPSTORE_ISSUER_ID', 'APPSTORE_API_KEY_ID', 'APPLE_TEAM_ID'];
+const IOS_SECRET_ENV_NAMES = ['IOS_DISTRIBUTION_CERT_P12_BASE64', 'IOS_DISTRIBUTION_CERT_PASSWORD', 'APPSTORE_API_PRIVATE_KEY'];
+const stepIndex = (j: Job, name: string): number => j.steps.findIndex((s) => s.name === name);
+
+/** The preflight runs the script with all six names, and runs before the certificate is imported. */
+function preflightBeforeImport(j: Job): string[] {
+  const out: string[] = [];
+  const at = stepIndex(j, IOS_PREFLIGHT_STEP);
+  const imported = j.steps.findIndex((s) => s.uses?.startsWith('apple-actions/import-codesign-certs@') === true);
+  if (at < 0) return ['no preflight step'];
+  if (imported < 0) out.push('no certificate import step');
+  if (imported >= 0 && at >= imported) out.push('the preflight does not run before the certificate import');
+  const s = j.steps[at];
+  if (s?.run?.trim() !== 'node scripts/ios-release-preflight.mjs') out.push('the preflight does not run the script');
+  for (const name of IOS_PREFLIGHT_NAMES) if (!/^\$\{\{ (secrets|vars)\.[A-Z0-9_]+ \}\}$/.test(s?.env?.[name] ?? '')) out.push(`the preflight does not receive ${name}`);
+  return out;
+}
+
+/** No script mentions the secrets context at all (an expression in a script is shell text), and no script reads a secret by its environment name. */
+function runsHoldNoSecret(j: Job, exceptSteps: string[] = []): string[] {
+  const out: string[] = [];
+  for (const s of j.steps) {
+    if (exceptSteps.includes(s.name ?? '')) continue;
+    const run = s.run ?? '';
+    if (/\bsecrets\b/.test(run)) out.push(`${s.name ?? run}: mentions secrets`);
+    if (run.includes('${{')) out.push(`${s.name ?? run}: expression in run`);
+  }
+  return out;
+}
+
+/** Every `uses:` in the text is owner/repo@<40 hex>, whatever the loader makes of it. */
+function unpinnedUses(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => /^\s*-?\s*uses:/.test(line))
+    .filter((line) => !/uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40}(\s+#.*)?$/.test(line));
+}
+
+/** A step that archives or exports must hold no secret in its env and must not name one on its command line. */
+function archiveLeaks(j: Job): string[] {
+  const out: string[] = [];
+  for (const name of ['Archive the app', 'Export the IPA']) {
+    const s = j.steps.find((x) => x.name === name);
+    if (s === undefined) {
+      out.push(`${name}: missing`);
+      continue;
+    }
+    if (secretsIn(s).length > 0 || JSON.stringify(s.env ?? {}).includes('secrets')) out.push(`${name}: holds a secret`);
+    for (const secret of IOS_SECRET_ENV_NAMES) if ((s.run ?? '').includes(secret)) out.push(`${name}: names ${secret}`);
+    if (/\bsecrets\b/.test(s.run ?? '')) out.push(`${name}: mentions secrets`);
+    if (!(s.run ?? '').includes('xcodebuild')) out.push(`${name}: runs no xcodebuild`);
+  }
+  return out;
+}
+
+const IPA_PATH = '$RUNNER_TEMP/export/App.ipa';
+/** The IPA is checked before the upload, the check fails on a missing file, and the upload reads the file the check read. */
+function ipaAsserted(j: Job): string[] {
+  const out: string[] = [];
+  const check = j.steps.find((s) => s.name === 'Check the IPA before upload');
+  const upload = j.steps.findIndex((s) => s.uses?.startsWith('apple-actions/upload-testflight-build@') === true);
+  const at = stepIndex(j, 'Check the IPA before upload');
+  if (check === undefined || at < 0) return ['no IPA check step'];
+  if (upload < 0 || at >= upload) out.push('the IPA is not checked before the upload');
+  if (!(check.run ?? '').includes(`test -f "${IPA_PATH}"`)) out.push('the check does not require the file to exist');
+  if (j.steps[upload]?.with?.['app-path'] !== '${{ runner.temp }}/export/App.ipa') out.push('the upload reads another path');
+  return out;
+}
+
+describe('release-ios: preflight, archive and IPA checks', () => {
+  const testflight = job(ios.wf, 'testflight');
+
+  it('runs the preflight before the certificate is imported (control: a copy with the order swapped, and one without it, are rejected)', () => {
+    expect(preflightBeforeImport(testflight)).toEqual([]);
+    const swapped = mutate(ios.wf, (c) => {
+      const steps = job(c, 'testflight').steps;
+      const a = steps.findIndex((s) => s.name === IOS_PREFLIGHT_STEP);
+      const b = steps.findIndex((s) => s.uses?.startsWith('apple-actions/import-codesign-certs@') === true);
+      const first = steps[a] as Step;
+      steps[a] = steps[b] as Step;
+      steps[b] = first;
+    });
+    expect(preflightBeforeImport(job(swapped, 'testflight'))).toContain('the preflight does not run before the certificate import');
+    const removed = mutate(ios.wf, (c) => void (job(c, 'testflight').steps = job(c, 'testflight').steps.filter((s) => s.name !== IOS_PREFLIGHT_STEP)));
+    expect(preflightBeforeImport(job(removed, 'testflight'))).toEqual(['no preflight step']);
+    const missingName = mutate(ios.wf, (c) => void delete step(job(c, 'testflight'), IOS_PREFLIGHT_STEP).env?.APPLE_TEAM_ID);
+    expect(preflightBeforeImport(job(missingName, 'testflight'))).toContain('the preflight does not receive APPLE_TEAM_ID');
+  });
+
+  it('hands the six names to the preflight through env only, and the preflight script names all six', () => {
+    const env = step(testflight, IOS_PREFLIGHT_STEP).env ?? {};
+    expect(Object.keys(env).sort()).toEqual([...IOS_PREFLIGHT_NAMES].sort());
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-release-preflight.mjs'), 'utf8');
+    for (const name of IOS_PREFLIGHT_NAMES) expect(script, name).toContain(name);
+  });
+
+  it('no run: block interpolates or mentions a secret (control: one that does is found)', () => {
+    expect(runsHoldNoSecret(testflight)).toEqual([]);
+    expect(testflight.steps.filter((s) => s.run !== undefined).length).toBeGreaterThan(5);
+    const leaky = mutate(ios.wf, (c) => void job(c, 'testflight').steps.push({ name: 'Added', run: 'echo ${{ secrets.APPSTORE_API_PRIVATE_KEY }}' }));
+    expect(runsHoldNoSecret(job(leaky, 'testflight')).length).toBeGreaterThan(0);
+    for (const j of Object.values(ios.wf.jobs)) expect(runsHoldNoSecret(j)).toEqual([]);
+  });
+
+  it('every uses: is pinned to a 40-hex commit (control: a tag and a short hash are found)', () => {
+    expect(unpinnedUses(ios.text)).toEqual([]);
+    expect(ios.text.split('\n').filter((l) => /^\s*-?\s*uses:/.test(l)).length).toBeGreaterThanOrEqual(6);
+    expect(unpinnedUses(`${ios.text}\n      - uses: actions/checkout@v4\n`)).toHaveLength(1);
+    expect(unpinnedUses(`${ios.text}\n      - uses: actions/checkout@3d3c42e\n`)).toHaveLength(1);
+  });
+
+  it('the archive and export steps pass no secret on the command line (control: a password flag is found)', () => {
+    expect(archiveLeaks(testflight)).toEqual([]);
+    const archive = step(testflight, 'Archive the app').run ?? '';
+    for (const needle of ['xcodebuild archive', '-scheme App', '-configuration Release', "-destination 'generic/platform=iOS'", 'CODE_SIGN_STYLE=Manual', 'CODE_SIGN_IDENTITY="Apple Distribution"', 'PROVISIONING_PROFILE_SPECIFIER=', 'DEVELOPMENT_TEAM="$APPLE_TEAM_ID"', '-archivePath']) {
+      expect(archive, needle).toContain(needle);
+    }
+    const exported = step(testflight, 'Export the IPA').run ?? '';
+    for (const needle of ['xcodebuild -exportArchive', '-archivePath', '-exportPath', '-exportOptionsPlist']) expect(exported, needle).toContain(needle);
+    const withPassword = mutate(ios.wf, (c) => {
+      const s = step(job(c, 'testflight'), 'Archive the app');
+      s.run = `${s.run ?? ''} -p12-password "$IOS_DISTRIBUTION_CERT_PASSWORD"`;
+    });
+    expect(archiveLeaks(job(withPassword, 'testflight'))).toContain('Archive the app: names IOS_DISTRIBUTION_CERT_PASSWORD');
+    const withEnv = mutate(ios.wf, (c) => void (step(job(c, 'testflight'), 'Export the IPA').env = { KEY: '${{ secrets.APPSTORE_API_PRIVATE_KEY }}' }));
+    expect(archiveLeaks(job(withEnv, 'testflight'))).toContain('Export the IPA: holds a secret');
+  });
+
+  it('asserts the Xcode major version before it archives', () => {
+    const at = stepIndex(testflight, 'Require Xcode 26 or newer');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(stepIndex(testflight, 'Archive the app'));
+    const run = testflight.steps[at]?.run ?? '';
+    expect(run).toContain('xcodebuild -version');
+    expect(run).toMatch(/-lt 26|-ge 26/);
+    expect(run).toContain('exit 1');
+  });
+
+  it('fills the options template at run time with plutil, from the profile the download step returned, without storing a team id or a profile name', () => {
+    const fill = step(testflight, 'Fill in ExportOptions.plist');
+    expect(fill.env).toEqual({ PROFILES: '${{ steps.profiles.outputs.profiles }}', APPLE_TEAM_ID: '${{ vars.APPLE_TEAM_ID }}' });
+    const run = fill.run ?? '';
+    expect(run).toContain('ios/ExportOptions.plist');
+    expect(run).toContain('$RUNNER_TEMP/ExportOptions.plist');
+    expect(run).toContain('plutil -replace teamID');
+    // A key path would split the bundle id at its dots, so the whole mapping is replaced as JSON.
+    expect(run).toContain('plutil -replace provisioningProfiles -json');
+    expect(step(testflight, 'Export the IPA').run).toContain('-exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"');
+    const template = readFileSync(join(ROOT, 'ios', 'ExportOptions.plist'), 'utf8');
+    expect(template).toMatch(/<key>method<\/key>\s*<string>app-store-connect<\/string>/);
+    expect(template).toMatch(/<key>signingStyle<\/key>\s*<string>manual<\/string>/);
+    expect(template).toMatch(/<key>teamID<\/key>\s*<string>[^<]*<\/string>/);
+    expect(template).toMatch(new RegExp(String.raw`<key>provisioningProfiles</key>\s*<dict>\s*<key>${ios.wf.env?.BUNDLE_ID?.replace(/\./g, String.raw`\.`) ?? 'unset'}</key>\s*<string>[^<]*</string>`));
+    // control: the template holds placeholders, not a real team id (ten characters of capitals and digits)
+    expect(template).not.toMatch(/<string>[A-Z0-9]{10}<\/string>/);
+  });
+
+  it('checks the IPA contents, and asserts the file exists before the upload (control: a copy without the check, and one that reads another path, are rejected)', () => {
+    expect(ipaAsserted(testflight)).toEqual([]);
+    const run = step(testflight, 'Check the IPA before upload').run ?? '';
+    for (const needle of ['Payload/App.app/PrivacyInfo.xcprivacy', 'Authority=Apple Distribution', 'ITSAppUsesNonExemptEncryption']) expect(run, needle).toContain(needle);
+    const removed = mutate(ios.wf, (c) => void (job(c, 'testflight').steps = job(c, 'testflight').steps.filter((s) => s.name !== 'Check the IPA before upload')));
+    expect(ipaAsserted(job(removed, 'testflight'))).toEqual(['no IPA check step']);
+    const elsewhere = mutate(ios.wf, (c) => {
+      const upload = job(c, 'testflight').steps.find((s) => s.uses?.startsWith('apple-actions/upload-testflight-build@') === true);
+      if (upload?.with !== undefined) upload.with['app-path'] = 'ios/App/output/App.ipa';
+    });
+    expect(ipaAsserted(job(elsewhere, 'testflight'))).toContain('the upload reads another path');
+    const noTest = mutate(ios.wf, (c) => void (step(job(c, 'testflight'), 'Check the IPA before upload').run = 'echo checked'));
+    expect(ipaAsserted(job(noTest, 'testflight'))).toContain('the check does not require the file to exist');
   });
 });
 
