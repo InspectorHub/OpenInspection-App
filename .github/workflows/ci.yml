@@ -77,7 +77,7 @@ jobs:
         run: >-
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
           -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath "$RUNNER_TEMP/ios-build" CODE_SIGNING_ALLOWED=NO build
+          -derivedDataPath "$RUNNER_TEMP/ios-build" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build
       - name: Smoke-test launch, callback routing, privacy manifest and backup exclusion
         env:
           SMOKE_DEVICES: ${{ matrix.device }}

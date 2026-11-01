@@ -1044,7 +1044,10 @@ describe('CI iOS simulator job', () => {
     expect(sim?.['runs-on']).toBe('macos-26');
     const build = runs.find((r) => r.includes('xcodebuild') && r.includes('iphonesimulator') && !r.includes('-version'));
     expect(build).toBeDefined();
-    expect(build).toContain('CODE_SIGNING_ALLOWED=NO');
+    // Ad-hoc ("-") signing, never a real identity: an UNSIGNED simulator app has no entitlements, so the Keychain refuses
+    // the database key (run 41268952771: KeychainWrapperError, the app sat on its could-not-open screen).
+    expect(build).toContain('CODE_SIGN_IDENTITY=-');
+    expect(build).not.toMatch(/CODE_SIGNING_ALLOWED=NO|PROVISIONING_PROFILE|DEVELOPMENT_TEAM=\S/);
     // control: the sync-only job does not compile
     expect(job(ci.wf, 'ios-sync').steps.some((s) => (s.run ?? '').includes('xcodebuild'))).toBe(false);
   });

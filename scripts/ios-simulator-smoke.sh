@@ -113,6 +113,10 @@ smoke_device() {
   # app never started), so it runs under script(1), whose -F flushes the capture after every write instead of at exit.
   script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty "$udid" "$APP_ID" > /dev/null 2>&1 &
   LAUNCH_PID=$!
+  # The iPad simulator can take well over 12 s to start the app (run 41268952771: not running after a fixed 12 s), so wait
+  # for the process, then give the web app SETTLE_SECONDS to start and try to open its storage.
+  local waited=0
+  until app_is_running "$udid" || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
   sleep "$SETTLE_SECONDS"
   tr -d '\r\004' < "$OUT/${label}.typescript" 2>/dev/null | sed 's/^\^D//' > "$OUT/${label}.console" || true
   if ! app_is_running "$udid"; then
