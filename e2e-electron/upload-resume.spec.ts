@@ -23,7 +23,18 @@ test('force-stopping during a 50-photo upload resumes without duplicate keys or 
   await mkdir(TASK16_SCREENSHOT_ROOT, { recursive: true });
   await desktop.page.screenshot({ path: join(TASK16_SCREENSHOT_ROOT, 'upload-in-progress.png'), animations: 'disabled' });
   await desktop.page.context().setOffline(true);
-  await expect.poll(() => desktop.engine.activeUploadCount, { timeout: 10_000 }).toBe(0);
+  // activeUploadCount is the number of responses the server is holding right now (each one is delayed on purpose). It is
+  // also 0 for a moment BETWEEN two batches of three, before the client has sent the next batch: on a slow runner that gap
+  // is wide, and a single reading of 0 let three more uploads start (15 became 18, and 30 became 33 on an earlier run).
+  // Quiet means no active upload AND an unchanged received count for several consecutive samples, longer than that gap.
+  let quietSamples = 0;
+  let lastReceived = -1;
+  await expect.poll(() => {
+    const received = desktop.engine.uploadCounts.size;
+    quietSamples = desktop.engine.activeUploadCount === 0 && received === lastReceived ? quietSamples + 1 : 0;
+    lastReceived = received;
+    return quietSamples;
+  }, { timeout: 15_000, intervals: [100] }).toBeGreaterThanOrEqual(10);
   const receivedBeforeRestart = desktop.engine.uploadCounts.size;
   await desktop.page.waitForTimeout(300);
   expect(desktop.engine.uploadCounts.size).toBe(receivedBeforeRestart);
