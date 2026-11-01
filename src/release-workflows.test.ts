@@ -1354,3 +1354,36 @@ describe('native logging stays off outside the simulator job', () => {
     expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
   });
 });
+
+describe('Android emulator smoke workflow', () => {
+  const emu = load('android-emulator');
+  const emuJob = job(emu.wf, 'android-emulator');
+  const script = readFileSync(join(ROOT, 'scripts', 'android-emulator-smoke.sh'), 'utf8');
+
+  it('uses no secret, builds only the debug APK, and pins every action to a full commit SHA', () => {
+    expect(secretsIn(emu.wf)).toEqual([]);
+    expect(emuJob.steps.some((s) => (s.run ?? '').includes('assembleDebug'))).toBe(true);
+    expect(emuJob.steps.some((s) => (s.run ?? '').includes('assembleRelease'))).toBe(false);
+    for (const s of emuJob.steps) if (s.uses !== undefined) expect(s.uses, s.uses).toMatch(/@[0-9a-f]{40}\b/);
+    // Control: the workflow really holds third-party actions, so the pin check had something to fail on.
+    expect(emuJob.steps.some((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'))).toBe(true);
+  });
+
+  it('runs the smoke script on the debug APK it just built, and keeps the evidence for 7 days even when it fails', () => {
+    const runner = emuJob.steps.find((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'));
+    expect(String(runner?.with?.script)).toContain('bash scripts/android-emulator-smoke.sh');
+    expect(String(runner?.with?.script)).toContain('android/app/build/outputs/apk/debug/app-debug.apk');
+    const upload = emuJob.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(upload?.if).toBe('always()');
+    expect(upload?.with?.['retention-days']).toBe(7);
+  });
+
+  it('the script checks what it claims: the process, the first screen, no could-not-open screen, no crash, and keeps evidence', () => {
+    for (const needle of ['set -Eeuo pipefail', 'pidof', 'uiautomator dump', 'Choose your server', 'could not open', 'FATAL EXCEPTION', 'screencap', 'logcat']) {
+      expect(script, needle).toContain(needle);
+    }
+    // A UI tree of some other window would make the screen check meaningless, so the script checks the package first.
+    expect(script).toContain('package=\\"$APP_ID\\"');
+    expect(script.startsWith('#!/usr/bin/env bash')).toBe(true);
+  });
+});
