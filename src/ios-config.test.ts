@@ -87,6 +87,22 @@ describe('readPlist', () => {
   });
 });
 
+const backupSource = read('ios', 'App', 'App', 'BackupExclusion.swift');
+const appDelegate = read('ios', 'App', 'App', 'AppDelegate.swift');
+
+/** The strings in `static let relativeDirectories: [String] = [...]`; empty when the declaration is missing. */
+function backupDirectories(swift: string): string[] {
+  const body = /static let relativeDirectories:\s*\[String\]\s*=\s*\[([^\]]*)\]/.exec(swift)?.[1] ?? '';
+  return [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? '');
+}
+
+/** Where the app keeps data that must stay out of backups, taken from the code that decides it, not from a copy. */
+function dataDirectoriesUnderLibrary(): string[] {
+  const database = /iosDatabaseLocation:\s*'Library\/([^']+)'/.exec(read('capacitor.config.ts'))?.[1];
+  const usesNoCloud = read('src', 'platform', 'files-capacitor.ts').includes('Directory.LibraryNoCloud');
+  return [...(database === undefined ? [] : [database]), ...(usesNoCloud ? ['NoCloud'] : [])];
+}
+
 describe('iOS project configuration', () => {
   it('capacitor.config.ts has an appId (the comparison below is not against undefined)', () => {
     expect(appId).toBe('io.inspectorhub.app');
@@ -158,5 +174,28 @@ describe('iOS project configuration', () => {
     const targets = settings(project, 'IPHONEOS_DEPLOYMENT_TARGET');
     expect(targets.length).toBeGreaterThanOrEqual(2);
     for (const t of targets) expect(Number.parseFloat(t)).toBeGreaterThanOrEqual(15);
+  });
+});
+
+describe('iOS backup exclusion', () => {
+  it('AppDelegate calls BackupExclusion.apply once at launch', () => {
+    expect(appDelegate).toMatch(/BackupExclusion\.apply\(/);
+    // control: the stock delegate does not
+    expect(appDelegate.replace(/BackupExclusion\.apply\(/g, 'Other.apply(')).not.toMatch(/BackupExclusion\.apply\(/);
+  });
+
+  it('relativeDirectories covers every directory the app keeps data in, read from the config and the file adapter', () => {
+    const expected = dataDirectoriesUnderLibrary();
+    expect(expected).toContain('CapacitorDatabase'); // positive control: the lookup found something
+    expect(expected).toContain('NoCloud');
+    expect(backupDirectories(backupSource)).toEqual(expect.arrayContaining(expected));
+    // control: a list that forgets the database directory is caught
+    expect(backupDirectories(backupSource.replace('"CapacitorDatabase", ', ''))).not.toEqual(expect.arrayContaining(expected));
+    expect(backupDirectories('enum X {}')).toEqual([]);
+  });
+
+  it('the Swift file is compiled into the app target', () => {
+    expect(project).toMatch(/BackupExclusion\.swift in Sources/);
+    expect(project.replaceAll('BackupExclusion.swift in Sources', 'x')).not.toMatch(/BackupExclusion\.swift in Sources/); // control
   });
 });

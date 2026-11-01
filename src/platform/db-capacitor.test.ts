@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EXPECTED_COLUMNS, SCHEMA_DRIFT_MESSAGE, SchemaDriftError, SchemaTooNewError } from './schema';
+import { DbKeyLostError, EXPECTED_COLUMNS, SCHEMA_DRIFT_MESSAGE, SchemaDriftError, SchemaTooNewError } from './schema';
 import {
   type DbChanges,
   decodeRow,
@@ -66,12 +66,18 @@ class FakeSqlite implements SqliteConnectionLike {
   calls: string[] = [];
   secretStored = false;
   hasConnection = false;
+  /** Whether the database file is already on disk (what the plugin's `isDatabase` answers). */
+  hasDatabaseFile = false;
   secret: string | null = null;
   conn = new FakeConn();
 
   isSecretStored() {
     this.calls.push('isSecretStored');
     return Promise.resolve({ result: this.secretStored });
+  }
+  isDatabase(name: string) {
+    this.calls.push(`isDatabase:${name}`);
+    return Promise.resolve({ result: this.hasDatabaseFile });
   }
   setEncryptionSecret(s: string) {
     this.calls.push('setEncryptionSecret');
@@ -122,6 +128,7 @@ describe('openCapacitorDb', () => {
     expect(sqlite.secret).toBe('sekret');
     expect(sqlite.calls).toEqual([
       'isSecretStored',
+      'isDatabase:oi',
       'setEncryptionSecret',
       'checkConnectionsConsistency',
       'addUpgradeStatement:oi',
@@ -129,6 +136,35 @@ describe('openCapacitorDb', () => {
       'createConnection:oi:true:secret:2:false',
     ]);
     expect(sqlite.conn.calls).toEqual(['open', 'query:PRAGMA user_version:undefined']);
+  });
+
+  it('refuses to open, and touches nothing, when the database file exists but its secret is gone', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.secretStored = false;
+    sqlite.hasDatabaseFile = true;
+    await expect(openCapacitorDb(sqlite, { ...opts, generateSecret: () => 'sekret' })).rejects.toBeInstanceOf(DbKeyLostError);
+    // A new secret would make the old file unreadable for good, and the file itself is the only copy of unsent work.
+    expect(sqlite.calls).toEqual(['isSecretStored', 'isDatabase:oi']);
+    expect(sqlite.secret).toBeNull();
+    expect(sqlite.conn.calls).toEqual([]);
+  });
+
+  it('control: no database file and no secret is a first launch and provisions the secret once', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.hasDatabaseFile = false;
+    await openCapacitorDb(sqlite, { ...opts, generateSecret: () => 'first' });
+    expect(sqlite.calls.filter((c) => c === 'setEncryptionSecret')).toHaveLength(1);
+    expect(sqlite.secret).toBe('first');
+  });
+
+  it('control: a database file with its secret present opens, and never asks for a new secret', async () => {
+    const sqlite = new FakeSqlite();
+    sqlite.secretStored = true;
+    sqlite.hasDatabaseFile = true;
+    sqlite.hasConnection = true;
+    await expect(openCapacitorDb(sqlite, opts)).resolves.toBeDefined();
+    expect(sqlite.calls).not.toContain('setEncryptionSecret');
+    expect(sqlite.calls).not.toContain('isDatabase:oi');
   });
 
   it('opens when the stored version equals the code version (positive control)', async () => {

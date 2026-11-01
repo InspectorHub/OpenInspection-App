@@ -163,6 +163,18 @@ export function toUpgradeStatements(migrations: readonly Migration[] = MIGRATION
  * turns this into a "this app is older than your data" screen that blocks
  * editing but still allows exporting what is on the device.
  */
+/**
+ * The database file is on this device but the key that opens it is not (the keychain or keystore entry was lost, for
+ * example after a restore onto another device). A fresh key would never open the old file, so the open stops here
+ * and changes nothing: the file may hold the only copy of work that was never uploaded.
+ */
+export class DbKeyLostError extends Error {
+  constructor() {
+    super('The local database exists but its encryption key is gone');
+    this.name = 'DbKeyLostError';
+  }
+}
+
 export class SchemaTooNewError extends Error {
   constructor(
     readonly dbVersion: number,

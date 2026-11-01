@@ -35,6 +35,19 @@ export function SchemaDrift() {
   );
 }
 
+/**
+ * The database file is still here but the key that unlocks it is not (typically a restore onto a different device).
+ * No control: there is no in-app clear-data flow, and deleting the file would destroy work that was never uploaded.
+ */
+export function DbKeyLost() {
+  return (
+    <Screen>
+      <Heading>This device cannot read its saved data</Heading>
+      <Body>The data saved on this device is locked with a key that is no longer here, so InspectorHub cannot open it. Nothing has been changed or deleted. Do not remove the app yet: ask InspectorHub support how to recover it.</Body>
+    </Screen>
+  );
+}
+
 /** Android and iOS have no desktop bridge: they keep the plain message, and no control that only works on a desktop. */
 export function OpenFailed({ reason }: { reason?: OpenReason }) {
   // Read the preload's bridge directly: its version was checked when the desktop entry started, and importing the checker

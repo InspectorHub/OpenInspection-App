@@ -13,7 +13,7 @@ import type { DesktopSettingsPort } from './desktop/updater-port';
 import type { DiagDeps } from './dev/checks/types';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
-import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
+import { Booting, DbKeyLost, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
 import { ExportFlow } from './ui/ExportFlow';
 import { Locked } from './ui/Locked';
 import { ServerSetup } from './ui/ServerSetup';
@@ -167,6 +167,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
     if (screen.kind === 'schema_drift') return <SchemaDrift />;
+    if (screen.kind === 'db_key_lost') return <DbKeyLost />;
     if (screen.kind === 'open_failed') return <OpenFailed reason={screen.reason} />;
     return <Booting />;
   }

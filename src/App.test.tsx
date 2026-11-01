@@ -6,7 +6,7 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { createHeldAuthSession, createSignedInWorld, createWorld, restartOffline, rowCounts, seedLocalData, type HeldAuthSession } from './app/test-support/world';
-import { SCHEMA_DRIFT_MESSAGE, SchemaDriftError, SchemaTooNewError } from './platform/schema';
+import { DbKeyLostError, SCHEMA_DRIFT_MESSAGE, SchemaDriftError, SchemaTooNewError } from './platform/schema';
 import { refreshTokenKey } from './auth/server-config';
 
 afterEach(cleanup);
@@ -42,6 +42,15 @@ describe('App first screen', () => {
     expect(screen.getByText('This development build has an outdated local database: clear the app data')).toBeInTheDocument();
     expect(screen.queryByText(/next_at|outbox|no such column/i)).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByText('This app is older than your data')).toBeNull();
+  });
+
+  it('a database whose key is gone says so, offers no control, and does not tell the person to delete anything', async () => {
+    render(<App open={() => Promise.reject(new DbKeyLostError())} allowInsecureHttp={false} />);
+    expect(await screen.findByRole('heading', { name: 'This device cannot read its saved data' })).toBeInTheDocument();
+    expect(screen.getByText(/Nothing has been changed or deleted/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByText(/clear|delete the app|reinstall/i)).toBeNull();
     expect(screen.queryByText('This app is older than your data')).toBeNull();
   });
 

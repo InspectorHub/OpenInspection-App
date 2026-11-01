@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
 import { DesktopOpenError } from '../desktop/db-ipc';
 import { refreshTokenKey } from '../auth/server-config';
-import { SchemaDriftError, SchemaTooNewError } from '../platform/schema';
+import { DbKeyLostError, SchemaDriftError, SchemaTooNewError } from '../platform/schema';
 import { boot, decideScreen } from './boot';
 import { connectToServer } from './connect';
 import { createSignedInWorld as signedInWorld, createWorld, restartOffline } from './test-support/world';
@@ -83,6 +83,13 @@ describe('opening the app', () => {
   it('a database from before the in-place schema edit: its own blocking screen, not the newer-data one and not a crash', async () => {
     const result = await boot(() => Promise.reject(new SchemaDriftError('outbox.next_at')), SECURE);
     expect(result).toEqual({ services: null, screen: { kind: 'schema_drift' } });
+  });
+
+  it('a database whose key is gone: its own blocking screen, no services, not the generic open failure', async () => {
+    const result = await boot(() => Promise.reject(new DbKeyLostError()), SECURE);
+    expect(result).toEqual({ services: null, screen: { kind: 'db_key_lost' } });
+    // Control: any other error still lands on the generic screen.
+    expect(await boot(() => Promise.reject(new Error('boom')), SECURE)).toEqual({ services: null, screen: { kind: 'open_failed' } });
   });
 
   it('control: an ordinary open reaches the decision', async () => {

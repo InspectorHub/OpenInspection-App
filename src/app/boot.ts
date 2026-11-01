@@ -1,7 +1,7 @@
 import { loadIdentity, parseServerUrl, type StoredIdentity } from '../auth/server-config';
 import type { LockReason } from '../offline/lock';
 import { evaluateAndPersist } from '../offline/lock-state';
-import { SchemaDriftError, SchemaTooNewError } from '../platform/schema';
+import { DbKeyLostError, SchemaDriftError, SchemaTooNewError } from '../platform/schema';
 import { DesktopOpenError } from '../desktop/db-ipc';
 import type { OpenReason } from '../../electron/shared/ipc-contract.ts';
 import type { CompatNotice } from './compat-notice';
@@ -17,6 +17,8 @@ export type Screen =
   | { kind: 'schema_too_new' }
   /** A development device still carries the first draft of the local database. */
   | { kind: 'schema_drift' }
+  /** The local database is on the device but the key that opens it is gone. Nothing is opened, changed or deleted. */
+  | { kind: 'db_key_lost' }
   | { kind: 'open_failed'; reason?: OpenReason };
 
 export interface BootResult {
@@ -65,6 +67,7 @@ export async function boot(open: () => Promise<AppServices>, options: { allowIns
   } catch (err) {
     if (err instanceof SchemaTooNewError) return { services: null, screen: { kind: 'schema_too_new' } };
     if (err instanceof SchemaDriftError) return { services: null, screen: { kind: 'schema_drift' } };
+    if (err instanceof DbKeyLostError) return { services: null, screen: { kind: 'db_key_lost' } };
     if (err instanceof DesktopOpenError) return { services: null, screen: { kind: 'open_failed', reason: err.reason } };
     return { services: null, screen: { kind: 'open_failed' } };
   }
