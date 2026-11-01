@@ -79,6 +79,11 @@ export interface UploaderDeps {
   onDiagnostic?(code: PhotoDiagnostic): void;
   /** Whether the OS reports a network link; only added to the diagnostic code. */
   isOnline?(): boolean;
+  /**
+   * Called once for a photo whose row this call has just created, before the upload starts: where a copy for the person's gallery
+   * is made when they asked for one. It decides for itself whether to copy, must never throw, and changes nothing about the answer.
+   */
+  copyToGallery?(rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<void>;
 }
 
 /**
@@ -236,6 +241,14 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       // The id belongs to another record (or to a photo of the other sort): nothing here may be sent or removed under it.
       lost('row_mismatch', 'NONE');
       return fail(MESSAGES.photoNotPrepared);
+    }
+    if (created) {
+      try {
+        await deps.copyToGallery?.(rec);
+      } catch (error) {
+        // A copy for the gallery is a convenience: whatever goes wrong with it, the photo is uploaded as usual.
+        deps.onError?.(error);
+      }
     }
     // Write-ahead: the entry goes into the document before the upload starts (see the head of this file). A row that was
     // already queued has its entry from the editor; a defect photo has none by design. When the entry cannot be written

@@ -102,3 +102,23 @@ describe('what is wired to what', () => {
     expect(w.api.calls).toHaveLength(0);
   });
 });
+
+describe('the copy for the gallery', () => {
+  it('is handed to the uploader the editor uploads a photo through, and is asked once for a photo taken in the app', async () => {
+    const asked: string[] = [];
+    const w = await world({
+      copyToGallery: (rec) => {
+        asked.push(rec.pendingId);
+        return Promise.resolve();
+      },
+    });
+    const result = await w.source.media.uploader(INSPECTION, new Y.Doc()).upload(photoRecord('p1'));
+    expect(result.ok).toBe(true);
+    expect(asked).toEqual(['p1']);
+  });
+
+  it('control: a source built without one uploads as before', async () => {
+    const w = await world();
+    expect((await w.source.media.uploader(INSPECTION, new Y.Doc()).upload(photoRecord('p1'))).ok).toBe(true);
+  });
+});

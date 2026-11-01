@@ -12,6 +12,8 @@ import type { SecureStore } from '../platform/secure-store';
 import { recordRefreshed, recordVerified, setRevoked } from '../offline/lock-state';
 import type { Sharer } from '../export/share-package';
 import type { NotificationPermissionPort } from '../platform/notifications';
+import { unavailableGallery, type PhotoGallery } from '../platform/photo-gallery';
+import { createGallerySetting, type GallerySetting } from '../field/gallery-copy';
 import type { DecodeImage } from '@inspectorhub/field-ui';
 import { createClientState, type ClientStateController } from './client-state';
 import { createNotificationAsk, type NotificationAsk } from './notification-ask';
@@ -44,6 +46,10 @@ export interface AppServices {
   notifications: NotificationPermissionPort;
   /** When to explain the notification permission and the memory of the answer. */
   notificationAsk: NotificationAsk;
+  /** Where a copy of a photo taken in the app can be put (the phone's gallery, a pictures folder). `available()` is false where this build cannot. */
+  photoGallery: PhotoGallery;
+  /** The device setting "Save photos I take to my gallery" (off until turned on). */
+  gallerySetting: GallerySetting;
   /** Hands a finished export file to the system. Rejects when it cannot be opened or was dismissed. */
   sharer: Sharer;
   /** Hands an https address to the system browser. Callers check the address first (`httpsHref`); rejects when it cannot be opened. */
@@ -72,6 +78,8 @@ export interface ComposeParts {
   kv?: KeyValue;
   /** The notification permission. Defaults to one that reports `unsupported`. */
   notifications?: NotificationPermissionPort;
+  /** The gallery a copy of a photo can be saved to. Defaults to one that is not available, so nothing offers to save. */
+  photoGallery?: PhotoGallery;
   builtAt?: string;
   openExternal?: (url: string) => Promise<void>;
   /** Defaults to one that always rejects, for a build that cannot share. */
@@ -150,6 +158,8 @@ export function composeWith(parts: ComposeParts): AppServices {
     kv,
     notifications,
     notificationAsk: createNotificationAsk({ kv, permission: notifications }),
+    photoGallery: parts.photoGallery ?? unavailableGallery,
+    gallerySetting: createGallerySetting(kv),
     refreshCompat,
     openExternal: parts.openExternal ?? (() => Promise.reject(new Error('This build cannot open links'))),
     ...(parts.decodeImage === undefined ? {} : { decodeImage: parts.decodeImage }),

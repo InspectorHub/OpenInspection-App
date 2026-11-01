@@ -17,6 +17,7 @@ import { createPhotoCache, type PhotoCache } from '../field/photo-cache';
 import { createUploadedCopyReader } from '../field/photo-urls';
 import { loadSessionInfo } from '../field/session-info';
 import type { Network } from '../platform/network';
+import { createGalleryCopier } from '../field/gallery-copy';
 import { useToasts } from './EditorToasts';
 import { editorObserver } from './editor-observer';
 import { Body, Button, Heading, Notice, Screen } from './kit';
@@ -154,6 +155,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           origin,
           canEdit: ports.canEdit,
           onDiagnostic: appDiagnostics.push,
+          copyToGallery: createGalleryCopier({ setting: services.gallerySetting, gallery: services.photoGallery }),
           platform: services.platform,
           signedAtMs: () => services.clock.now(),
           clock: services.clock,

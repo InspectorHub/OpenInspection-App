@@ -22,4 +22,10 @@ describe('composition', () => {
       expect(request.headers['x-client-version']).toBe('2.3.4');
     }
   });
+
+  it('has no gallery to save to by default, so nothing offers to, and the choice to save is off', async () => {
+    const world = await createWorld();
+    expect(world.services.photoGallery.available()).toBe(false);
+    expect(await world.services.gallerySetting.get()).toBe(false);
+  });
 });

@@ -10,6 +10,7 @@ import { Button, Screen } from './kit';
 import { AboutSection } from './settings/AboutSection';
 import { DeviceSection } from './settings/DeviceSection';
 import { ExternalLink } from './settings/ExternalLink';
+import { GallerySection } from './settings/GallerySection';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
 import { UnreferencedPhotosSection } from './settings/UnreferencedPhotosSection';
@@ -91,6 +92,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
       <SyncSection services={services} stack={stack} canSync={policy.canSync} />
       <DeviceSection services={services} origin={origin} waiting={waiting} locale={language} />
       <NotificationsSection services={services} />
+      <GallerySection services={services} />
       {stack !== null && <UnreferencedPhotosSection store={stack.store} reconciler={stack.mediaReconciler} />}
       <Section title="Your data">
         <Button variant="secondary" onClick={onExport}>

@@ -30,7 +30,7 @@ import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
 import { createKeptNotice } from './kept-notice';
 import { takeRejected } from './item-tags-notice';
-import { createStoredBlobReader, createUploaderFactory } from './uploader';
+import { createStoredBlobReader, createUploaderFactory, type UploaderDeps } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
 import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
 
@@ -119,6 +119,8 @@ export interface LocalDataSourceDeps {
   onError?(error: unknown): void;
   /** Receives the fixed code of a photo that was answered as a plain failure and not kept (`uploader.ts`). Codes only. */
   onDiagnostic?(code: PhotoDiagnostic): void;
+  /** Makes a copy of a photo just taken for the person's gallery when they asked for one (`uploader.ts`). Never throws. */
+  copyToGallery?: UploaderDeps['copyToGallery'];
   /** The stack's document step for clips: bound to the real one here. */
   resolveVideo?: DeferredResolveVideo;
   /** Optional host decoder for image formats the browser cannot decode. */
@@ -201,6 +203,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     onError: report,
     isOnline: () => deps.network.isOnline(),
     ...(deps.onDiagnostic === undefined ? {} : { onDiagnostic: deps.onDiagnostic }),
+    ...(deps.copyToGallery === undefined ? {} : { copyToGallery: deps.copyToGallery }),
     onKept: createKeptNotice({ timers: deps.timers, say: (message) => say(message, 'info') }),
   });
 
