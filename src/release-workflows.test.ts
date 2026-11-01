@@ -1378,6 +1378,14 @@ describe('Android emulator smoke workflow', () => {
     expect(upload?.with?.['retention-days']).toBe(7);
   });
 
+  it('reads the UI tree more than once: the first dump can hold only the native shell (run 41295240990: 7 nodes and no text, while the screenshot showed the screen)', () => {
+    const loop = /until \[ "\$attempts" -ge (\d+) \]/.exec(script);
+    expect(Number(loop?.[1])).toBeGreaterThanOrEqual(10);
+    // The retry sits around the dump itself, and the checks on its result come after it.
+    expect(script.indexOf('until [ "$attempts"')).toBeLessThan(script.indexOf('uiautomator dump'));
+    expect(script.indexOf('uiautomator dump')).toBeLessThan(script.indexOf('after $attempts attempts'));
+  });
+
   it('the script checks what it claims: the process, the first screen, no could-not-open screen, no crash, and keeps evidence', () => {
     for (const needle of ['set -Eeuo pipefail', 'pidof', 'uiautomator dump', 'Choose your server', 'could not open', 'FATAL EXCEPTION', 'screencap', 'logcat']) {
       expect(script, needle).toContain(needle);

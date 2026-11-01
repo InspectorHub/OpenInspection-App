@@ -48,12 +48,21 @@ echo "ok: the app is running"
 adb exec-out screencap -p > "$OUT/screen.png"
 [ -s "$OUT/screen.png" ] || fail "the screenshot is empty"
 
-adb shell uiautomator dump /sdcard/ui.xml > /dev/null
-adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null
+# The WebView's accessibility tree is built the first time something asks for it, so the first dump can hold only the native shell
+# (run 41295240990: 7 nodes, no text, while the screenshot taken just before showed the screen). Ask again until the text is there.
+attempts=0
+until [ "$attempts" -ge 15 ]; do
+  attempts=$((attempts + 1))
+  adb shell uiautomator dump /sdcard/ui.xml > /dev/null || true
+  adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null
+  if grep -q "Choose your server" "$OUT/ui.xml"; then break; fi
+  sleep 2
+done
+echo "UI tree read in $attempts attempt(s)"
 # Control first: a UI tree that does not even name the app's package proves nothing about what is on screen.
 grep -q "package=\"$APP_ID\"" "$OUT/ui.xml" || fail "the UI tree does not belong to $APP_ID (is another window in front?)"
 if grep -q "could not open" "$OUT/ui.xml"; then fail "the app is on its could-not-open screen"; fi
-grep -q "Choose your server" "$OUT/ui.xml" || fail "the first screen \"Choose your server\" is not in the UI tree (see ui.xml and screen.png)"
+grep -q "Choose your server" "$OUT/ui.xml" || fail "the first screen \"Choose your server\" is not in the UI tree after $attempts attempts (see ui.xml and screen.png)"
 echo "ok: the first screen is \"Choose your server\""
 
 adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
