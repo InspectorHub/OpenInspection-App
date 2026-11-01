@@ -65,6 +65,17 @@ try {
     assert.equal(await page.getByRole('button').count(), 0, 'the key-lost screen offers no control');
     await page.screenshot({ path: `${output}db-key-lost-${theme}.png`, fullPage: true });
   }
+  for (const state of ['idle', 'downloading', 'summary']) {
+    for (const theme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.setViewportSize({ width: 390, height: 500 });
+      await page.goto(`${origin}e2e-electron/fixtures/work-list-header.html?state=${state}`);
+      await page.getByRole('button', { name: "Download today's work" }).waitFor();
+      if (state === 'downloading') await page.getByTestId('download-progress').waitFor();
+      await page.screenshot({ path: `${output}work-list-header-${state}-${theme}.png`, fullPage: true });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   console.log(`Inspected screenshot set written to ${output}`);
 } finally {
   await browser.close();

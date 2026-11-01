@@ -47,10 +47,11 @@ describe('an empty live region takes no room in the layout', () => {
     expect(region.className).not.toMatch(/min-h-/);
   });
 
-  it('while downloading it shows its line', () => {
+  it('while downloading it is announced but takes no room: the activity bar in the button shows the state, and a visible line here pushed the list down and back up', () => {
     header(null, true);
     expect(screen.getByTestId('refresh-summary')).toHaveTextContent('Downloading…');
-    expect(screen.getByTestId('refresh-summary').className).not.toContain('sr-only');
+    expect(screen.getByTestId('refresh-summary')).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByTestId('refresh-summary').className).toContain('sr-only');
   });
 
   it('the server-check note: empty is out of the flow and has no reserved height', () => {

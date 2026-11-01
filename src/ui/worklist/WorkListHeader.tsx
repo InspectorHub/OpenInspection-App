@@ -79,15 +79,23 @@ export function WorkListHeader({ updatedAt, now, locale, chip, downloading, summ
           )}
         </div>
       </div>
-      <Button busy={downloading} onClick={onDownload}>
-        Download today&apos;s work
-      </Button>
+      {/* The progress is drawn inside the button, so downloading adds no line of text and the list below does not move. */}
+      <div className="relative">
+        <Button busy={downloading} onClick={onDownload}>
+          Download today&apos;s work
+        </Button>
+        {downloading && (
+          <span data-testid="download-progress" aria-hidden="true" className="pointer-events-none absolute inset-x-4 bottom-1.5 h-1 overflow-hidden rounded-full bg-ih-primary-fg/30">
+            <span className="block h-full w-2/5 rounded-full bg-ih-primary-fg motion-safe:animate-pulse" />
+          </span>
+        )}
+      </div>
       {onExport !== undefined && (
         <Button variant="quiet" onClick={onExport}>
           Export unsent data
         </Button>
       )}
-      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} />
+      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} visuallyHidden={downloading} />
     </header>
   );
 }
