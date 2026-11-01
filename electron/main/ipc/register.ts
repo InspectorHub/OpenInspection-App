@@ -1,5 +1,5 @@
 import { IpcError, isIpcErrorCode, type ChannelName, type IpcEnvelope } from '../../shared/ipc-contract.ts';
-import type { LogEvent } from '../logger.ts';
+import type { InternalDetail, LogEvent } from '../logger.ts';
 import { isAppOrigin } from '../app-origin.ts';
 import { InvalidArgumentError } from './validate.ts';
 
@@ -54,6 +54,14 @@ export function registerHandler<A extends unknown[], R>(
   });
 }
 
+/** The closed detail for an `internal` failure: only a SQLite result code maps to one; anything else logs no detail at all. */
+function internalDetail(error: unknown): InternalDetail | undefined {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  if (typeof code !== 'string' || !/^SQLITE_[A-Z_]{2,40}$/.test(code)) return undefined;
+  const klass = /^SQLITE_(BUSY|LOCKED|CORRUPT|READONLY|IOERR|FULL|CANTOPEN|CONSTRAINT)/.exec(code)?.[1];
+  return klass === undefined ? 'sqlite-other' : (`sqlite-${klass.toLowerCase()}` as InternalDetail);
+}
+
 async function answer<A extends unknown[], R>(
   deps: RegisterDeps,
   channel: ChannelName,
@@ -78,7 +86,8 @@ async function answer<A extends unknown[], R>(
     return { ok: true, value: await handler(...args) };
   } catch (error) {
     const code = error instanceof IpcError && isIpcErrorCode(error.code) ? error.code : 'internal';
-    deps.log(`${channel} ${code}`);
+    const detail = code === 'internal' ? internalDetail(error) : undefined;
+    deps.log(detail === undefined ? `${channel} ${code}` : `${channel} internal ${detail}`);
     return { ok: false, code };
   }
 }

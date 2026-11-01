@@ -127,6 +127,27 @@ describe('registerHandler', () => {
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/bob|EPERM|Users/);
   });
 
+  it('logs the SQLite result class of an internal failure from a closed list, so a CI failure can be explained, and still nothing else', async () => {
+    const { deps, invoke, log } = harness();
+    registerHandler(deps, 'db:open', oneString, async (_value) => {
+      throw Object.assign(new Error('database is locked: C:\Users\bob\AppData\app.db'), { name: 'SqliteError', code: 'SQLITE_BUSY' });
+    });
+    const reply = await invoke(TRUSTED, 'a');
+    expect(reply).toEqual({ ok: false, code: 'internal' });
+    expect(log).toHaveBeenCalledWith('db:open internal sqlite-busy');
+    expect(JSON.stringify(reply)).not.toMatch(/bob|locked|BUSY/);
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/bob|Users|locked:/);
+    // Control: a code that is not a SQLite result code is never logged (an fs error code can sit next to a path).
+    log.mockClear();
+    registerHandler(deps, 'db:open', oneString, async (_value) => {
+      throw Object.assign(new Error('x'), { code: 'EPERM' });
+    });
+    await invoke(TRUSTED, 'a');
+    expect(log).toHaveBeenCalled();
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/EPERM/);
+    expect(log).toHaveBeenLastCalledWith('db:open internal');
+  });
+
   it('an IpcError built from a code outside the closed set is reported as internal', async () => {
     const { deps, invoke } = harness();
     registerHandler(deps, 'db:open', oneString, async (_value) => {

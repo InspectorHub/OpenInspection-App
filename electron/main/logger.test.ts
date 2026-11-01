@@ -80,3 +80,21 @@ it('lets the IPC registry and updater codes through, and nothing outside their c
     expect(written).toEqual(accepted);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+it('accepts an internal failure only with a detail from the closed SQLite list, and drops anything else', () => {
+  const root = mkdtempSync(join(tmpdir(), 'oi-log-'));
+  try {
+    const log = createLogger(root);
+    log('db:run internal sqlite-busy');
+    log('db:run internal');
+    // Not in the vocabulary: a made-up detail, a path-bearing one, a code that is not SQLite's, a different code with a detail.
+    log('db:run internal sqlite-nonsense' as never);
+    log('db:run internal EPERM' as never);
+    log('db:run internal C:\Users\bob\app.db' as never);
+    log('db:run disk-full sqlite-busy' as never);
+    const lines = readFileSync(join(root, 'logs', 'main.log'), 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { event: string }).event);
+    expect(lines).toEqual(['db:run internal sqlite-busy', 'db:run internal']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
