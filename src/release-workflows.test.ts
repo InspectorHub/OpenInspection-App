@@ -1369,10 +1369,16 @@ describe('Android emulator smoke workflow', () => {
     expect(emuJob.steps.some((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'))).toBe(true);
   });
 
-  it('runs the smoke script on the debug APK it just built, and keeps the evidence for 7 days even when it fails', () => {
+  it('runs the smoke script on the BUNDLED debug APK it built first, and keeps the evidence for 7 days even when it fails', () => {
     const runner = emuJob.steps.find((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'));
-    expect(String(runner?.with?.script)).toContain('bash scripts/android-emulator-smoke.sh');
-    expect(String(runner?.with?.script)).toContain('android/app/build/outputs/apk/debug/app-debug.apk');
+    expect(String(runner?.with?.script)).toContain('bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/apk/app-debug-bundled.apk"');
+    // The bundled copy is taken straight after the first Gradle build, before anything is synced for the dev server.
+    const names = emuJob.steps.map((s) => s.name ?? '');
+    const firstBuild = names.indexOf('Build the debug APK (bundled assets)');
+    const keep = names.indexOf('Keep the bundled APK for the launch smoke');
+    expect(firstBuild).toBeGreaterThanOrEqual(0);
+    expect(keep).toBe(firstBuild + 1);
+    expect(emuJob.steps[keep]?.run).toContain('cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/app-debug-bundled.apk"');
     const upload = emuJob.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
     expect(upload?.if).toBe('always()');
     expect(upload?.with?.['retention-days']).toBe(7);
@@ -1393,5 +1399,103 @@ describe('Android emulator smoke workflow', () => {
     // A UI tree of some other window would make the screen check meaningless, so the script checks the package first.
     expect(script).toContain('package=\\"$APP_ID\\"');
     expect(script.startsWith('#!/usr/bin/env bash')).toBe(true);
+  });
+
+  it('the launch smoke stands alone: its script knows nothing of the dev server, Maestro or the fake engine', () => {
+    for (const needle of ['devserver', 'maestro', 'fake-engine', '10.0.2.2', 'OI_EMULATOR_DEV_SERVER']) expect(script.toLowerCase(), needle).not.toContain(needle.toLowerCase());
+  });
+});
+
+describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestro)', () => {
+  const emu = load('android-emulator');
+  const emuJob = job(emu.wf, 'android-emulator');
+  const golden = readFileSync(join(ROOT, 'scripts', 'android-emulator-golden.sh'), 'utf8');
+  const DEV_SERVER = 'http://localhost:5173'; // the emulator's own loopback via adb reverse: a secure context, which crypto.randomUUID needs
+  const indexOfStep = (name: string): number => {
+    const at = emuJob.steps.findIndex((s) => s.name === name);
+    if (at < 0) throw new Error(`no step named ${name}`);
+    return at;
+  };
+  const runnerAt = emuJob.steps.findIndex((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'));
+
+  it('only this workflow can point the WebView at a dev server, and only on the second sync; no CI or release workflow mentions the switch', () => {
+    const sets = (text: string): boolean => text.includes('OI_EMULATOR_DEV_SERVER');
+    for (const [name, workflow] of [['ci', ci], ['android', android], ['ios', ios], ['windows', windows]] as const) expect(sets(workflow.text), name).toBe(false);
+    // Control: this workflow does set it, so the check above could have failed.
+    expect(sets(emu.text)).toBe(true);
+    const setting = emuJob.steps.filter((s) => s.env?.OI_EMULATOR_DEV_SERVER !== undefined);
+    expect(setting).toHaveLength(1);
+    expect(setting[0]?.env?.OI_EMULATOR_DEV_SERVER).toBe(DEV_SERVER);
+    expect(setting[0]?.run).toBe('npx cap sync android');
+    expect(Object.keys(emu.wf.env ?? {})).not.toContain('OI_EMULATOR_DEV_SERVER');
+    expect(Object.keys(emuJob.env ?? {})).not.toContain('OI_EMULATOR_DEV_SERVER');
+    // Order: bundled build and its copy, then the switched sync, then the second build and its copy.
+    const order = ['Build the debug APK (bundled assets)', 'Keep the bundled APK for the launch smoke', 'Sync again for the dev-server build (golden flows)', 'Build the debug APK (WebView loads the Vite dev server)', 'Keep the dev-server APK for the golden flows'].map(indexOfStep);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(emuJob.steps[order[2] ?? 0]).toBe(setting[0]);
+    // The plain sync before it carries no env at all.
+    const plainSync = emuJob.steps.find((s) => s.run === 'npx cap sync android');
+    expect(plainSync?.env).toBeUndefined();
+    expect(emuJob.steps.indexOf(plainSync as Step)).toBeLessThan(order[0] ?? 0);
+    expect(emuJob.steps.some((s) => (s.run ?? '').includes('assembleRelease'))).toBe(false);
+  });
+
+  it('starts the fake engine and Vite on loopback before the emulator, allows exactly the dev-server origin, and waits for both', () => {
+    const start = emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')];
+    const run = start?.run ?? '';
+    expect(run).toContain(`node e2e/fake-engine/serve.mjs --host 127.0.0.1 --port 8791 --allow-origin ${DEV_SERVER}`);
+    expect(run).toContain('npx vite --host 127.0.0.1 --port 5173 --strictPort');
+    expect(run).not.toContain('0.0.0.0');
+    expect(run).toContain('curl -fsS http://127.0.0.1:8791/api/client/compat');
+    expect(run).toContain('curl -fsS http://127.0.0.1:5173/src/main.tsx');
+    expect(run).toContain('exit 1');
+    expect(indexOfStep('Start the fake engine and the Vite dev server on the runner')).toBeLessThan(runnerAt);
+    // The port in the allow-list and the one Vite serves are the one the config switch names.
+    expect(new URL(DEV_SERVER).port).toBe('5173');
+  });
+
+  it('installs Maestro from a pinned release and refuses it when the checksum does not match, before unpacking', () => {
+    expect(emuJob.env?.MAESTRO_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(emuJob.env?.MAESTRO_SHA256).toMatch(/^[0-9a-f]{64}$/);
+    const run = emuJob.steps[indexOfStep('Install Maestro (pinned release, checksum verified)')]?.run ?? '';
+    expect(run).toContain('set -eu');
+    expect(run).toContain('releases/download/cli-${MAESTRO_VERSION}/maestro.zip');
+    expect(run).toContain('--retry 3 --retry-all-errors'); // a 350 MB download over a flaky link
+    expect(run).toContain('sha256sum -c -');
+    expect(run.indexOf('sha256sum -c -')).toBeLessThan(run.indexOf('unzip'));
+    expect(run).not.toMatch(/\|\s*(ba)?sh\b/); // never a downloaded script piped into a shell
+    expect(indexOfStep('Install Maestro (pinned release, checksum verified)')).toBeLessThan(runnerAt);
+  });
+
+  it('runs G2 on the dev-server APK after the launch smoke, in the same emulator session, with no guard that could skip it', () => {
+    const lines = String(emuJob.steps[runnerAt]?.with?.script).split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('scripts/android-emulator-smoke.sh');
+    expect(lines[1]).toBe('bash scripts/android-emulator-golden.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8791 "$RUNNER_TEMP/android-smoke/g2"');
+    // A missing APK must fail the job, never skip the flow.
+    expect(lines[1]).not.toMatch(/\[ !? -f|\|\||if /);
+    // The fake engine is reached at the emulator's localhost (adb reverse in the golden script), on the port the workflow started it on.
+    expect(String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run)).toContain('--port 8791');
+  });
+
+  it('the golden script starts the app from a cleared state with pm clear and am start, then runs the G2 flow with the engine address', () => {
+    expect(golden.startsWith('#!/usr/bin/env bash')).toBe(true);
+    for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'logcat', 'uiautomator dump', 'maestro/golden/g2-controlled-sign-in.yaml', '-e "SERVER_URL=$ENGINE_ORIGIN"']) expect(golden, needle).toContain(needle);
+    // The emulator's localhost is made to reach the runner: without these two the WebView and the app would find nothing on it.
+    const reverseVite = golden.indexOf('adb reverse tcp:5173 tcp:5173');
+    const reverseEngine = golden.indexOf('adb reverse tcp:8791 tcp:8791');
+    expect(reverseVite).toBeGreaterThan(0);
+    expect(reverseEngine).toBeGreaterThan(0);
+    expect(golden).not.toContain('10.0.2.2');
+    const clear = golden.indexOf('adb shell pm clear "$APP_ID"');
+    const start = golden.indexOf('adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"');
+    const flow = golden.indexOf('maestro --device "$serial" test');
+    expect(clear).toBeGreaterThan(Math.max(reverseVite, reverseEngine));
+    expect(start).toBeGreaterThan(clear);
+    expect(flow).toBeGreaterThan(start);
+    // Maestro never launches the app itself: the flow file names the app id but has no launchApp step.
+    expect(readFileSync(join(ROOT, 'maestro', 'golden', 'g2-controlled-sign-in.yaml'), 'utf8')).not.toContain('launchApp');
+    // No credential, token or account is typed or passed by the script.
+    expect(golden).not.toMatch(/PASSWORD|E2E_EMAIL|secrets\./);
   });
 });

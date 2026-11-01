@@ -175,6 +175,23 @@ describe('standalone fake engine', () => {
     expect(foreign.headers.get('vary')).toBe('Origin');
   });
 
+  it('--allow-origin adds exactly the named origins to the CORS list (a WebView loads a dev bundle from http://localhost:5173), and refuses a wildcard or a path', async () => {
+    const acao = async (origin: string, from: string) => (await fetch(`${origin}/api/client/compat`, { headers: { origin: from } })).headers.get('access-control-allow-origin');
+    const withExtra = (await start(['--allow-origin', 'http://localhost:5173', '--allow-origin', 'http://localhost:5174'])).origin;
+    expect(await acao(withExtra, 'http://localhost:5173')).toBe('http://localhost:5173');
+    expect(await acao(withExtra, 'http://localhost:5174')).toBe('http://localhost:5174');
+    expect(await acao(withExtra, 'https://localhost')).toBe('https://localhost'); // the built-in list stays
+    expect(await acao(withExtra, 'http://localhost:9999')).toBeNull();
+    await stop();
+    // Control: without the flag the same origin gets nothing.
+    expect(await acao((await start()).origin, 'http://localhost:5173')).toBeNull();
+    await stop();
+    for (const bad of ['*', 'http://localhost:5173/path', 'not a url', 'ftp://localhost:5173']) {
+      await expect(start(['--allow-origin', bad]), bad).rejects.toThrow(/allow-origin/);
+      await stop();
+    }
+  });
+
   it('upload path: 411 without length, 400 without a file part, 201 with one, delay applies, completedCounts counts it', async () => {
     const { origin, control } = await start();
     const response = await post(`${origin}/api/inspections/insp-7/media/upload-url`, { pendingId: 'p1', contentType: 'image/jpeg' });

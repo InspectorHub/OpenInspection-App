@@ -35,6 +35,8 @@ export interface RendererEngineOptions {
   host?: string;
   /** Port to bind. 0 (default) picks a free one. */
   port?: number;
+  /** Further origins echoed in CORS, on top of ALLOWED_ORIGINS (a dev bundle served from the host, for example). */
+  extraAllowedOrigins?: string[];
 }
 
 /** Origins the clients send: Electron and Android Capacitor (https://localhost), iOS Capacitor (capacitor://localhost), a plain-http dev shell. Anything else gets no ACAO header. */
@@ -109,9 +111,10 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const activeUploadResponses = new Set<import('node:http').ServerResponse>();
   const uploadTokens = new Map<string, string>();
   const compatibility = { minSupported: null as string | null, recommended: null as string | null, downloadUrl: null as string | null };
+  const allowedOrigins = [...ALLOWED_ORIGINS, ...(options.extraAllowedOrigins ?? [])];
   const server: Server = createServer((request, response) => {
     const requestOrigin = request.headers.origin;
-    if (typeof requestOrigin === 'string' && ALLOWED_ORIGINS.includes(requestOrigin)) response.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    if (typeof requestOrigin === 'string' && allowedOrigins.includes(requestOrigin)) response.setHeader('Access-Control-Allow-Origin', requestOrigin);
     response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-client-platform,x-client-version');
     response.setHeader('Access-Control-Expose-Headers', 'date,x-client-upgrade');
     response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS,PUT,DELETE');

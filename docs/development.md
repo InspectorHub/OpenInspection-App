@@ -211,6 +211,7 @@ node e2e/fake-engine/serve.mjs --port 0 --host 127.0.0.1 [--scenario default|ins
 It prints one JSON line when ready, for example `{"origin":"http://127.0.0.1:51234","control":"http://127.0.0.1:51235"}`, and exits cleanly on SIGINT/SIGTERM on POSIX (on Windows a signal terminates the process without the handler).
 
 - Android emulator: start with `--host 0.0.0.0` and point the app at `http://10.0.2.2:<port>`. iOS simulator: `http://localhost:<port>`.
+- `--allow-origin <origin>` (repeatable) adds a bare http(s) origin to the CORS list, on top of the built-in ones. The Android emulator job uses it for `http://localhost:5173`, the origin of a WebView that loads the Vite dev bundle through `adb reverse`. A wildcard or an origin with a path is refused at start.
 - The `control` origin is a second, loopback-only listener. Fault injection lives there, under `/__test__/` only: `GET /state`, `POST /unavailable {"value":true|false}`, `POST /upload-delay {"ms":n}`, `POST /compatibility {...}`. The engine port itself serves no test routes. `--host 0.0.0.0` exposes an unauthenticated server (fixed bearer token) to the whole LAN: use it on a trusted network only (the CLI prints a warning to stderr).
 - `GET /oauth/authorize` redirects straight back to the app (`io.inspectorhub.app:/oauth/callback` or an `http(s)://127.0.0.1|localhost` address) with a fixed code and the state echoed, so a real device's Custom Tab sign-in completes without interaction; any other `redirect_uri` is refused with 400.
 - The sign-in the engine offers (`/oauth/register`, `/oauth/token` hand out a fixed test token with no user interaction) exists only in this fake server. The client only knows a server address, and the release bundle contains none of the fake engine or its `/__test__/` prefix (`npm run check:bundle` and a grep of `dist` and `dist-electron` confirm it).
@@ -406,7 +407,48 @@ Notes from running them on the emulator: the runner pins adb and Maestro to the 
 
 The flows wait for elements to appear (`extendedWaitUntil`, `scrollUntilVisible`); none sleeps. A full run takes a few minutes once the emulator is up. Maestro needs JDK 21 (set by `dev-env.ps1`).
 
-These flows are not run in CI: the CI jobs have no emulator. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.
+The ordered flows above are not run in CI (they need an account on a real engine); the golden flow G2 is, see "Android emulator in CI" below. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.
+
+## Android emulator in CI (G1 and G2)
+
+`.github/workflows/android-emulator.yml` starts one emulator and runs two things in it:
+
+- **G1, the launch smoke** (`scripts/android-emulator-smoke.sh`): installs the debug APK with its assets bundled inside, as shipped, starts it, and requires the first screen ("Choose your server"), a live process and no crash.
+- **G2, controlled sign-in** (`scripts/android-emulator-golden.sh` and `maestro/golden/g2-controlled-sign-in.yaml`): the work list with nothing waiting to upload and the status dot Online, reached through the fake engine's sign-in, which completes the browser step by itself.
+
+Why two APKs: plain http is accepted only by a development bundle served by Vite (`import.meta.env.DEV`), never by a built bundle, and the fake engine is plain http. So the workflow builds the debug APK twice. The second time `cap sync android` runs with `OI_EMULATOR_DEV_SERVER=http://localhost:5173`, and `capacitor.config.ts` then sets `server: { url, cleartext: true }` so the WebView loads the Vite server running on the runner. The emulator reaches it through `adb reverse tcp:5173 tcp:5173` (and `tcp:8791` for the fake engine), which the golden script runs. The address is deliberately `localhost`, not the emulator's host alias `10.0.2.2`: only localhost is a secure context in the WebView, and the app calls `crypto.randomUUID` and `crypto.subtle` (device id, outbox, lease, photo cache), which do not exist on a plain-http origin that is not localhost. `localhost` is also a loopback host, so the app accepts the engine address `http://localhost:8791`. The config honours exactly that one value and nothing else; only this workflow sets it, and `src/release-workflows.test.ts` fails if any CI or release workflow mentions it. The release build, its manifest (no cleartext) and `capacitor.config.ts` without the variable are unchanged. The launch smoke installs the bundled APK and does not depend on any of the dev-server steps.
+
+On the runner, before the emulator starts: the fake engine on `127.0.0.1:8791` with `--allow-origin http://localhost:5173`, and `vite --host 127.0.0.1 --port 5173`. G2 is not guarded: if the dev-server APK is missing, the job fails rather than skipping the flow. Maestro 2.12.0 comes from its release page (downloaded with retries), checked against a pinned SHA-256 before it is unpacked (to move the version, change `MAESTRO_VERSION` and `MAESTRO_SHA256` together).
+
+G2 starts the app with `adb shell pm clear` and `am start`, because Maestro's own launch does not bring the app to the front on some phones; the flow has no `launchApp`. Evidence (Maestro report, logcat, screenshots, engine and Vite logs) is uploaded as `android-emulator-evidence`.
+
+**What a green run does not prove yet.** None of the G2 steps had run in CI when this was written; the first run is the real test. Two things in it are a best effort and may need a second attempt: asking Chrome to skip its first-run screen on the emulator image (`chrome-command-line`), and the Maestro flags `--format junit --output ... --debug-output`. If the sign-in hangs in front of Chrome's first-run page, that is the cause.
+
+### How G3 and G4 would be added (not built)
+
+Both reuse the same two builds, the same engine and Vite, and one more rule: the engine is started with `--scenario inspection` so insp-7 is on the work list, and every step that talks to the engine's control origin (`http://127.0.0.1:<control port>/__test__/...`, printed by the engine at start) lives in the shell script around Maestro, because a Maestro flow cannot make an http call.
+
+- **G3, offline fill and photo, restart, upload.** The script pushes a JPEG to `/sdcard/Pictures` and starts a media scan, then runs flow part A: sign in (G2's steps), download today's work, open the item, add the photo from the library through the system picker. Before the photo is added the script switches the engine off with `POST /__test__/unavailable {"value":true}`. After part A it kills the process (`adb shell am force-stop`), starts it again and runs part B: the entry and the photo are still there. Then it turns the engine back on and polls `GET /__test__/state` until `completedCounts` shows one completed upload for the photo's key. This needs one flow file per part and a stable accessibility label on the picker's confirm button.
+- **G4, the thumbnail is a picture, also offline after a restart.** Maestro cannot judge image content. The state endpoint already lists the authorized photo requests, so the script asserts through it that the app asked for the photo with its session. It then takes `adb exec-out screencap -p` after a restart with the engine switched off and runs a small Node check on the thumbnail's rectangle (not one flat grey, not the placeholder colour). The rectangle comes from the UI tree dump (`uiautomator dump`), not from fixed pixel coordinates.
+
+Both would go into the same `scripts/android-emulator-golden.sh` run, after G2, in the same emulator session; the job's 60-minute limit needs a second look once they are in.
+
+## Visual layout baselines
+
+`e2e-electron/layout.visual.spec.ts` takes Playwright `toHaveScreenshot` shots of five screens: the work list, the editor, Settings, the export dialog and the blocking pages (database locked, encryption unavailable, unreadable, key lost). Each is taken in light and dark, at 1280 wide and at 480 wide. **It checks layout only**: a block that moved, overflowed or lost its theme. It does not say a screen is right, and it does not replace looking at the app. The app screens run in the real Electron window against the fake engine (the same harness as the other specs); the blocking pages are rendered from `e2e-electron/fixtures/blocking.html` through a Vite dev server in a Chromium page. Three texts that change between runs (the engine's random port, today's date under "Last verified", "Checked ... ago") are rewritten to fixed text before each shot.
+
+The `visual` project in `e2e-electron/playwright.config.ts` runs it; the sharded `ci` project ignores it. Baselines live in `e2e-electron/visual-baselines/<screen>-<theme>-<width>-win32.png`. **They are made on the Windows CI runner and never on a developer machine**, because font rendering differs between machines and a baseline from another machine would fail every run. Do not commit images produced locally.
+
+One-time procedure to create them:
+
+1. Run the "Visual layout baselines" workflow by hand (Actions, Run workflow) on the branch. With no baselines committed, a manual run generates them, passes with a warning and uploads the `visual-baselines-win32` artifact. Only a manual run may do this: a pull request with no committed baselines **fails** with an explanation, so a pull request can never go green without having been compared with anything.
+2. Download the artifact and look at every image once. This is the only human review of the baselines; a wrong layout accepted here stays accepted.
+3. Put the PNGs in `e2e-electron/visual-baselines/` and commit them.
+4. From then on the workflow compares on every pull request that touches `src/`, `electron/`, `e2e-electron/` or the renderer build files, and fails on any difference or missing image, uploading the expected, actual and diff images as `visual-diff-context`.
+
+The job runs on `windows-2025`, not `windows-latest`, so a runner image change cannot shift the fonts unannounced. Moving to a newer image means regenerating every baseline by the procedure above, and reviewing them again.
+
+To accept a deliberate layout change, delete the affected PNGs, run the workflow by hand to regenerate, review the new images, and commit them in the same change as the layout. Locally, `npx playwright test -c e2e-electron/playwright.config.ts --project=visual` shows whether the spec executes (run `node scripts/build-electron.mjs` first), but it writes images under `e2e-electron/visual-baselines/` that must not be committed: delete that folder afterwards. If your Playwright has no matching Chromium, set `OI_VISUAL_CHROMIUM` to an older Chromium executable for the blocking pages.
 
 ## Pre-push: tests related to your change
 
