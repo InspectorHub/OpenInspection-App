@@ -1074,7 +1074,7 @@ describe('CI iOS simulator job', () => {
   });
 
   it('the smoke script checks what the plan promises: manifest, an iPhone and an iPad, URL routing, backup attribute, screenshots', () => {
-    for (const needle of ['plutil -lint', 'PrivacyInfo.xcprivacy', 'iPad', 'simctl openurl', 'com_apple_backup_excludeItem', 'storage open failed', 'simctl io', 'screenshot', 'get_app_container']) {
+    for (const needle of ['plutil -lint', 'PrivacyInfo.xcprivacy', 'iPad', 'simctl openurl', 'com_apple_backup_excludeItem', 'storage open failed', '--stdout=', 'nothing was captured', 'simctl io', 'screenshot', 'get_app_container']) {
       expect(smokeScript, needle).toContain(needle);
     }
     // The directories it checks come from the Swift source, not from a second copy.

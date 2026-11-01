@@ -82,9 +82,15 @@ save_app_log() {
   echo "--- $label: app log lines about errors, storage, keychain or backup exclusion (full log: ${label}.log) ---"
   grep -iE 'error|fail|sqlite|keychain|secret|BackupExclusion|entitlement' "$OUT/${label}.log" | tail -60 || echo "(none)"
   if grep -q 'BackupExclusion failed' "$OUT/${label}.log"; then fail "$label: BackupExclusion.apply reported a failure (see the log above)"; fi
+  # Control first: a capture that saw nothing proves nothing. Capacitor prints lines of its own while it loads, so an empty
+  # capture means the capture is blind (or logging is off in this build) and a green result would be meaningless.
+  cat "$OUT/${label}.stdout" "$OUT/${label}.stderr" > "$OUT/${label}.console" 2>/dev/null || true
+  echo "--- $label: what the app printed to stdout/stderr ($(wc -l < "$OUT/${label}.console" | tr -d ' ') lines; full: ${label}.console) ---"
+  head -40 "$OUT/${label}.console" || true
+  [ -s "$OUT/${label}.console" ] || fail "$label: nothing was captured from the app's stdout/stderr, so this check cannot see its errors"
   # "The process is alive" is not "the app works": the app prints this line when it lands on its could-not-open screen.
-  if grep -q '\[boot\] storage open failed' "$OUT/${label}.log"; then
-    grep '\[boot\] storage open failed' "$OUT/${label}.log" | head -3
+  if grep -q 'storage open failed' "$OUT/${label}.console" "$OUT/${label}.log"; then
+    grep -h 'storage open failed' "$OUT/${label}.console" "$OUT/${label}.log" | head -3
     fail "$label: the app could not open its storage (see the line above)"
   fi
 }
@@ -96,7 +102,9 @@ smoke_device() {
   xcrun simctl boot "$udid" 2>/dev/null || true
   xcrun simctl bootstatus "$udid" -b
   xcrun simctl install "$udid" "$APP_PATH"
-  xcrun simctl launch "$udid" "$APP_ID"
+  # The app's JavaScript console reaches the native side as plain stdout/stderr, not the unified log that `log show`
+  # reads (run 41266196908 was green while the app sat on its could-not-open screen and the log had no [boot] line).
+  xcrun simctl launch --stdout="$OUT/${label}.stdout" --stderr="$OUT/${label}.stderr" "$udid" "$APP_ID"
   sleep "$SETTLE_SECONDS"
   app_is_running "$udid" || fail "$label: the app is not running $SETTLE_SECONDS seconds after launch"
   echo "ok: $label: the app is still running after launch"
