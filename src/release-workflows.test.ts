@@ -1138,3 +1138,27 @@ describe('CI parallelism keeps full coverage', () => {
     expect(cacheAt).toBeLessThan(buildAt);
   });
 });
+
+describe('native logging stays off outside the simulator job', () => {
+  const setsLogging = (text: string): boolean => text.includes('OI_NATIVE_LOGGING');
+
+  it('no release workflow can turn Capacitor logging on (it prints plugin calls: secure-store keys and values, callback URLs)', () => {
+    for (const [name, workflow] of [['android', android], ['ios', ios], ['windows', windows]] as const) expect(setsLogging(workflow.text), name).toBe(false);
+    // Control: the CI file does mention it, so the check can fail.
+    expect(setsLogging(ci.text)).toBe(true);
+  });
+
+  it('in CI only the simulator job sets it, on the sync step, and the smoke script requires proof that the console is visible', () => {
+    for (const [id, j] of Object.entries(ci.wf.jobs)) {
+      const setting = j.steps.filter((s) => s.env?.OI_NATIVE_LOGGING !== undefined);
+      if (id === 'ios-simulator') {
+        expect(setting).toHaveLength(1);
+        expect(setting[0]?.run).toBe('npx cap sync ios');
+        expect(setting[0]?.env?.OI_NATIVE_LOGGING).toBe('debug');
+      } else {
+        expect(setting, id).toHaveLength(0);
+      }
+    }
+    expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
+  });
+});

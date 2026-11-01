@@ -88,6 +88,10 @@ save_app_log() {
   echo "--- $label: what the app printed to stdout/stderr ($(wc -l < "$OUT/${label}.console" | tr -d ' ') lines; full: ${label}.console) ---"
   head -40 "$OUT/${label}.console" || true
   [ -s "$OUT/${label}.console" ] || fail "$label: nothing was captured from the app's stdout/stderr, so this check cannot see its errors"
+  # Native lines alone are not enough: the JavaScript console and the plugin bridge only print when Capacitor logging is on
+  # (the CI job syncs with OI_NATIVE_LOGGING=debug; capacitor.config.ts is otherwise silent on purpose). Capacitor prints
+  # "To Native" for every plugin call, and the app makes several while it starts, so its absence means the capture is blind.
+  grep -q 'To Native' "$OUT/${label}.console" || fail "$label: no plugin-call lines in the capture, so JavaScript errors would be invisible (was the app synced with OI_NATIVE_LOGGING=debug?)"
   # "The process is alive" is not "the app works": the app prints this line when it lands on its could-not-open screen.
   if grep -q 'storage open failed' "$OUT/${label}.console" "$OUT/${label}.log"; then
     grep -h 'storage open failed' "$OUT/${label}.console" "$OUT/${label}.log" | head -3

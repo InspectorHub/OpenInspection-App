@@ -58,7 +58,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx cap sync ios
+      - name: Sync iOS with Capacitor logging on (this simulator job only)
+        env:
+          OI_NATIVE_LOGGING: debug
+        run: npx cap sync ios
       - name: Xcode is version 26 or newer
         run: |
           xcodebuild -version
