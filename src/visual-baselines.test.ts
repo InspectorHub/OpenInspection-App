@@ -43,7 +43,7 @@ describe('the visual-baselines workflow', () => {
     expect(compare.if).toBe("steps.baselines.outputs.present == 'true'");
     expect(compare.run).toBe('npx playwright test -c e2e-electron/playwright.config.ts --project=visual');
     const create = step('Create the baselines (none are committed yet)');
-    const generate = "steps.baselines.outputs.present == 'false' && github.event_name == 'workflow_dispatch'";
+    const generate = "steps.baselines.outputs.present == 'false'";
     expect(create.if).toBe(generate);
     expect(create.run).toBe('npx playwright test -c e2e-electron/playwright.config.ts --project=visual --update-snapshots=all');
     // No other step touches snapshots, and nothing else runs the visual project.
@@ -53,7 +53,7 @@ describe('the visual-baselines workflow', () => {
 
   it('hands the generated baselines over as an artifact, and keeps the diff images when a comparison fails', () => {
     const upload = steps.find((s) => s.uses?.startsWith('actions/upload-artifact@') && s.with?.name === 'visual-baselines-win32');
-    expect(upload?.if).toBe("steps.baselines.outputs.present == 'false' && github.event_name == 'workflow_dispatch'");
+    expect(upload?.if).toBe("steps.baselines.outputs.present == 'false'");
     expect(upload?.with?.path).toBe('e2e-electron/visual-baselines');
     expect(upload?.with?.['if-no-files-found']).toBe('error');
     const diff = steps.find((s) => s.uses?.startsWith('actions/upload-artifact@') && s.with?.name === 'visual-diff-context');
@@ -66,12 +66,16 @@ describe('the visual-baselines workflow', () => {
     expect(step('Say what to do with the new baselines').if).toBe("steps.baselines.outputs.present == 'false' && github.event_name == 'workflow_dispatch'");
   });
 
-  it('a pull request with no baselines FAILS; only a manual run may generate them', () => {
+  it('a pull request with no baselines still produces them as an artifact, and only then FAILS', () => {
     const refuse = step('Refuse a pull request that has no committed baselines');
     expect(refuse.if).toBe("steps.baselines.outputs.present == 'false' && github.event_name == 'pull_request'");
     expect(refuse.run).toContain('::error::');
     expect(refuse.run).toContain('exit 1');
-    expect(refuse.run).toContain('Run workflow');
+    expect(refuse.run).toContain('visual-baselines-win32');
+    // The artifact must already be uploaded when the job fails, or the failing run would have nothing to hand over.
+    const order = steps.map((s) => s.name ?? s.with?.name ?? '');
+    expect(order.indexOf('visual-baselines-win32')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('visual-baselines-win32')).toBeLessThan(order.indexOf(refuse.name ?? ''));
   });
 
   it('builds the Electron main process and installs Chromium before it runs the spec', () => {

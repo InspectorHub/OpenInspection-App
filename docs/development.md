@@ -441,14 +441,14 @@ The `visual` project in `e2e-electron/playwright.config.ts` runs it; the sharded
 
 One-time procedure to create them:
 
-1. Run the "Visual layout baselines" workflow by hand (Actions, Run workflow) on the branch. With no baselines committed, a manual run generates them, passes with a warning and uploads the `visual-baselines-win32` artifact. Only a manual run may do this: a pull request with no committed baselines **fails** with an explanation, so a pull request can never go green without having been compared with anything.
+1. Let the "Visual layout baselines" workflow run with no baselines committed. It generates a set on the runner and uploads it as the `visual-baselines-win32` artifact. A manual run (Actions, Run workflow, which needs this workflow file on the default branch) then passes with a warning; a pull request run **fails** with an explanation, after the upload, so a pull request can never go green without having been compared with anything. On the first pull request the failing run is therefore where the artifact comes from.
 2. Download the artifact and look at every image once. This is the only human review of the baselines; a wrong layout accepted here stays accepted.
 3. Put the PNGs in `e2e-electron/visual-baselines/` and commit them.
 4. From then on the workflow compares on every pull request that touches `src/`, `electron/`, `e2e-electron/` or the renderer build files, and fails on any difference or missing image, uploading the expected, actual and diff images as `visual-diff-context`.
 
 The job runs on `windows-2025`, not `windows-latest`, so a runner image change cannot shift the fonts unannounced. Moving to a newer image means regenerating every baseline by the procedure above, and reviewing them again.
 
-To accept a deliberate layout change, delete the affected PNGs, run the workflow by hand to regenerate, review the new images, and commit them in the same change as the layout. Locally, `npx playwright test -c e2e-electron/playwright.config.ts --project=visual` shows whether the spec executes (run `node scripts/build-electron.mjs` first), but it writes images under `e2e-electron/visual-baselines/` that must not be committed: delete that folder afterwards. If your Playwright has no matching Chromium, set `OI_VISUAL_CHROMIUM` to an older Chromium executable for the blocking pages.
+To accept a deliberate layout change, delete the affected PNGs and push: with some baselines missing the comparison fails on the missing images and uploads what it found as `visual-diff-context`; to regenerate the whole set, delete every PNG so the workflow takes the no-baselines path above. Review the new images and commit them in the same change as the layout. Locally, `npx playwright test -c e2e-electron/playwright.config.ts --project=visual` shows whether the spec executes (run `node scripts/build-electron.mjs` first), but it writes images under `e2e-electron/visual-baselines/` that must not be committed: delete that folder afterwards. If your Playwright has no matching Chromium, set `OI_VISUAL_CHROMIUM` to an older Chromium executable for the blocking pages.
 
 ## Pre-push: tests related to your change
 

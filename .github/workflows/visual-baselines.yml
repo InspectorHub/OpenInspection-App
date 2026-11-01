@@ -5,8 +5,10 @@ name: Visual layout baselines
 # person accepted. The baselines are generated here, on a windows-latest runner, and never on a developer machine: font rendering differs,
 # so only one runner may produce and compare them. See "Visual layout baselines" in docs/development.md for the one-time procedure.
 #
-#   no baselines committed -> a MANUAL run creates them and uploads them as the visual-baselines-win32 artifact (with a warning);
-#                             a pull request run FAILS, so a pull request can never go green without a comparison;
+#   no baselines committed -> ANY run creates them and uploads them as the visual-baselines-win32 artifact; a manual run then ends
+#                             with a warning, a pull request run ends with a FAILURE, so a pull request can never go green without a
+#                             comparison. (A manual run needs this file on the default branch, so the first set of baselines comes
+#                             from the failing pull request run itself: download its artifact, review it, commit it.)
 #   baselines committed    -> the job compares, and fails on any difference or any missing screenshot (the diff images are uploaded).
 on:
   workflow_dispatch:
@@ -50,25 +52,25 @@ jobs:
         if: steps.baselines.outputs.present == 'true'
         run: npx playwright test -c e2e-electron/playwright.config.ts --project=visual
       - name: Create the baselines (none are committed yet)
-        if: steps.baselines.outputs.present == 'false' && github.event_name == 'workflow_dispatch'
+        if: steps.baselines.outputs.present == 'false'
         run: npx playwright test -c e2e-electron/playwright.config.ts --project=visual --update-snapshots=all
-      - name: Refuse a pull request that has no committed baselines
-        if: steps.baselines.outputs.present == 'false' && github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          echo "::error::No visual baselines are committed under e2e-electron/visual-baselines/, so this pull request was not compared against anything. Run the Visual layout baselines workflow by hand (Run workflow) to generate them, review the images, commit them, then push again."
-          exit 1
       - name: Say what to do with the new baselines
         if: steps.baselines.outputs.present == 'false' && github.event_name == 'workflow_dispatch'
         shell: bash
         run: echo "::warning::No visual baselines are committed. This run created them; download the visual-baselines-win32 artifact, look at every image once, and commit them under e2e-electron/visual-baselines/. Until then this job proves nothing."
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.baselines.outputs.present == 'false' && github.event_name == 'workflow_dispatch'
+        if: steps.baselines.outputs.present == 'false'
         with:
           name: visual-baselines-win32
           path: e2e-electron/visual-baselines
           if-no-files-found: error
           retention-days: 14
+      - name: Refuse a pull request that has no committed baselines
+        if: steps.baselines.outputs.present == 'false' && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          echo "::error::No visual baselines are committed under e2e-electron/visual-baselines/, so this pull request was not compared against anything. This run created a set and uploaded it as the visual-baselines-win32 artifact: download it, look at every image once, commit the images under e2e-electron/visual-baselines/, then push again."
+          exit 1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
