@@ -15,6 +15,9 @@ const FLOW_DIR = join(ROOT, 'maestro');
 /** Strings of the engine's own sign-in and authorize pages. They live in the engine repository, not in this one. */
 const ENGINE_OWNED = new Set(['Email address', 'Password', 'Log In', 'Allow']);
 
+/** Strings the app builds at run time from a number and a noun, so the whole string is never in the source. */
+const COMPUTED = new Set(['0 items']);
+
 const COMMANDS = new Set([
   'launchApp',
   'stopApp',
@@ -112,7 +115,7 @@ function missingFromApp(flow: string, source: string): string[] {
   if (parsed === null) return ['(flow does not parse)'];
   const missing: string[] = [];
   for (const selector of selectors(parsed.body)) {
-    if (ENGINE_OWNED.has(selector)) continue;
+    if (ENGINE_OWNED.has(selector) || COMPUTED.has(selector)) continue;
     const pieces = fragments(selector);
     if (pieces.length === 0) missing.push(`${selector} (no literal text to check)`);
     for (const piece of pieces) if (!source.includes(piece)) missing.push(`${selector} -> ${piece}`);
@@ -179,5 +182,39 @@ describe('the Maestro flows', () => {
     expect(named).toEqual(files);
     expect(runner).toContain('$env:OI_E2E_PASSWORD');
     expect(runner).not.toMatch(/OI_E2E_(PASSWORD|EMAIL)\s*=\s*['"][^'"<$]/);
+  });
+});
+
+/**
+ * `maestro/golden/` holds the golden flows of the regression strategy (G1 to G8). They are NOT part of the ordered emulator run
+ * above: each starts from a clean, running app and signs in through the fake engine, so it needs a development bundle. They are
+ * held to the same rules: the shape Maestro expects, the real app id, texts that exist in the app, and no credential.
+ */
+describe('the golden Maestro flows', () => {
+  const goldenDir = join(FLOW_DIR, 'golden');
+  const names = readdirSync(goldenDir).filter((name) => name.endsWith('.yaml')).sort();
+  const flows = new Map(names.map((name) => [name, readFileSync(join(goldenDir, name), 'utf8')]));
+  const source = appSource();
+
+  it('finds the golden flows, and the ordered emulator run does not include them', () => {
+    expect(names).toEqual(['g2-controlled-sign-in.yaml']);
+    const runner = readFileSync(join(FLOW_DIR, 'run-emulator.ps1'), 'utf8');
+    for (const name of names) expect(runner).not.toContain(name);
+  });
+
+  it('every golden flow has the shape Maestro expects and targets the shipped app id', () => {
+    for (const [name, text] of flows) {
+      const { parsed, problems } = inspect(text);
+      expect({ name, problems }).toEqual({ name, problems: [] });
+      expect(parsed?.appId, name).toBe('io.inspectorhub.app');
+    }
+  });
+
+  it('every text a golden flow taps or waits for exists in the app source', () => {
+    for (const [name, text] of flows) expect({ name, missing: missingFromApp(text, source) }).toEqual({ name, missing: [] });
+  });
+
+  it('no golden flow holds a credential: typed text is an environment reference only', () => {
+    for (const [name, text] of flows) expect({ name, problems: credentialProblems(text) }).toEqual({ name, problems: [] });
   });
 });
