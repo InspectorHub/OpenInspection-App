@@ -1034,3 +1034,52 @@ describe('the signing jobs run exactly the steps that are listed', () => {
     });
   });
 });
+
+describe('CI iOS simulator job', () => {
+  const sim = ci.wf.jobs['ios-simulator'];
+  const runs = (sim?.steps ?? []).map((s) => s.run ?? '');
+  const smokeScript = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+
+  it('compiles the iOS project for the simulator on macOS 26 without code signing', () => {
+    expect(sim?.['runs-on']).toBe('macos-26');
+    const build = runs.find((r) => r.includes('xcodebuild') && r.includes('iphonesimulator') && !r.includes('-version'));
+    expect(build).toBeDefined();
+    expect(build).toContain('CODE_SIGNING_ALLOWED=NO');
+    // control: the sync-only job does not compile
+    expect(job(ci.wf, 'ios-sync').steps.some((s) => (s.run ?? '').includes('xcodebuild'))).toBe(false);
+  });
+
+  it('references no secret, while the release workflow does (so the assertion can fail)', () => {
+    expect(sim).toBeDefined();
+    expect(secretsIn(sim)).toEqual([]);
+    expect(secretsIn(job(ios.wf, 'testflight')).length).toBeGreaterThan(0);
+  });
+
+  it('asserts the Xcode major version before it builds', () => {
+    const versionAt = runs.findIndex((r) => r.includes('xcodebuild -version') && /-ge 26|>= ?26/.test(r));
+    const buildAt = runs.findIndex((r) => r.includes('iphonesimulator'));
+    expect(versionAt).toBeGreaterThanOrEqual(0);
+    expect(versionAt).toBeLessThan(buildAt);
+  });
+
+  it('runs the smoke script on the built app after the build, and keeps its screenshots for 7 days even when it fails', () => {
+    const smokeAt = runs.findIndex((r) => r.includes('scripts/ios-simulator-smoke.sh'));
+    expect(smokeAt).toBeGreaterThan(runs.findIndex((r) => r.includes('iphonesimulator')));
+    const upload = (sim?.steps ?? []).find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(upload?.if).toBe('always()');
+    expect(upload?.with?.['retention-days']).toBe(7);
+    expect(upload?.uses).toMatch(/@[0-9a-f]{40}\b/);
+  });
+
+  it('the smoke script checks what the plan promises: manifest, an iPhone and an iPad, URL routing, backup attribute, screenshots', () => {
+    for (const needle of ['plutil -lint', 'PrivacyInfo.xcprivacy', 'iPad', 'simctl openurl', 'com.apple.MobileBackup', 'simctl io', 'screenshot', 'get_app_container']) {
+      expect(smokeScript, needle).toContain(needle);
+    }
+    // The directories it checks come from the Swift source, not from a second copy.
+    expect(smokeScript).toContain('BackupExclusion.swift');
+    // A check that cannot fail proves nothing: it must also prove the attribute is absent on an untouched directory.
+    expect(smokeScript).toMatch(/control/i);
+    expect(smokeScript.startsWith('#!/usr/bin/env bash')).toBe(true);
+    expect(smokeScript).toContain('set -euo pipefail');
+  });
+});
