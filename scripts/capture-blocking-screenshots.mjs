@@ -58,6 +58,13 @@ try {
       }
     }
   }
+  for (const theme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.goto(`${origin}e2e-electron/fixtures/blocking.html?screen=db-key-lost`);
+    await page.getByRole('heading', { level: 1, name: 'This device cannot read its saved data' }).waitFor();
+    assert.equal(await page.getByRole('button').count(), 0, 'the key-lost screen offers no control');
+    await page.screenshot({ path: `${output}db-key-lost-${theme}.png`, fullPage: true });
+  }
   console.log(`Inspected screenshot set written to ${output}`);
 } finally {
   await browser.close();
