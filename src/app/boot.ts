@@ -69,6 +69,8 @@ export async function boot(open: () => Promise<AppServices>, options: { allowIns
     if (err instanceof SchemaDriftError) return { services: null, screen: { kind: 'schema_drift' } };
     if (err instanceof DbKeyLostError) return { services: null, screen: { kind: 'db_key_lost' } };
     if (err instanceof DesktopOpenError) return { services: null, screen: { kind: 'open_failed', reason: err.reason } };
+    // The screen says only "could not open"; this line (name and message, nothing else) is what explains a device screenshot.
+    console.error(`[boot] storage open failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
     return { services: null, screen: { kind: 'open_failed' } };
   }
   try {

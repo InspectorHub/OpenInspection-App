@@ -63,10 +63,10 @@ app_is_running() {
   [ -n "$line" ] && ! printf '%s' "$line" | awk '{print $1}' | grep -qx -- '-'
 }
 
-# Which extended attribute marks "excluded from backup" is NOT assumed: the legacy key is com.apple.MobileBackup, and
-# URLResourceValues.isExcludedFromBackup is documented to write its own metadata attribute. The first CI run found the
-# legacy one missing, so both are accepted and every attribute is printed; narrow this once a run shows which one is real.
-BACKUP_ATTRIBUTES=("com.apple.MobileBackup" "com.apple.metadata:com_apple_backup_excludeItem")
+# What URLResourceValues.isExcludedFromBackup really writes, observed in CI run 41263679703 on the simulator: an attribute
+# NAMED com.apple.metadata:com_apple_backup_excludeItem whose VALUE is com.apple.MobileBackup. (The first version of this
+# check looked for an attribute named com.apple.MobileBackup and failed on a directory that was correctly excluded.)
+BACKUP_ATTRIBUTES=("com.apple.metadata:com_apple_backup_excludeItem")
 has_backup_attribute() {
   local attribute
   for attribute in "${BACKUP_ATTRIBUTES[@]}"; do
@@ -82,6 +82,11 @@ save_app_log() {
   echo "--- $label: app log lines about errors, storage, keychain or backup exclusion (full log: ${label}.log) ---"
   grep -iE 'error|fail|sqlite|keychain|secret|BackupExclusion|entitlement' "$OUT/${label}.log" | tail -60 || echo "(none)"
   if grep -q 'BackupExclusion failed' "$OUT/${label}.log"; then fail "$label: BackupExclusion.apply reported a failure (see the log above)"; fi
+  # "The process is alive" is not "the app works": the app prints this line when it lands on its could-not-open screen.
+  if grep -q '\[boot\] storage open failed' "$OUT/${label}.log"; then
+    grep '\[boot\] storage open failed' "$OUT/${label}.log" | head -3
+    fail "$label: the app could not open its storage (see the line above)"
+  fi
 }
 
 smoke_device() {

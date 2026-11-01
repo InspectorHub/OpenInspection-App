@@ -92,6 +92,22 @@ describe('opening the app', () => {
     expect(await boot(() => Promise.reject(new Error('boom')), SECURE)).toEqual({ services: null, screen: { kind: 'open_failed' } });
   });
 
+  it('an unexpected open failure is logged with its name and message, so a device screenshot can be explained', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await boot(() => Promise.reject(new Error('disk is on fire')), SECURE);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(String(spy.mock.calls[0]?.[0])).toBe('[boot] storage open failed: Error: disk is on fire');
+      // Control: the failures that have their own screen are expected states, not logged as errors.
+      spy.mockClear();
+      await boot(() => Promise.reject(new SchemaTooNewError(9, 1)), SECURE);
+      await boot(() => Promise.reject(new DbKeyLostError()), SECURE);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('control: an ordinary open reaches the decision', async () => {
     const world = await createWorld();
     const result = await boot(() => Promise.resolve(world.services), SECURE);
