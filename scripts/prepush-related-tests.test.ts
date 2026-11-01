@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CONTRACT_TEST, baseFor, changedFiles, classify, parseNameStatus, parsePushLines, relatedCandidates, runGuard, summariseReport,
-  treeProblems, vitestArgs,
+  prepushWorkers, treeProblems, vitestArgs,
 } from './prepush-related-tests.mjs';
 
 const ZERO = '0'.repeat(40);
@@ -23,13 +23,45 @@ describe('relatedCandidates', () => {
 });
 
 describe('vitestArgs', () => {
-  it('runs related files once, serially, with a json report, and no -- separator', () => {
-    const args = vitestArgs(['src/a.ts', 'src/b.tsx'], '/tmp/r.json');
+  it('with one worker runs related files once, serially, with a json report, and no -- separator', () => {
+    const args = vitestArgs(['src/a.ts', 'src/b.tsx'], '/tmp/r.json', 1);
     expect(args.slice(0, 4)).toEqual(['related', '--run', '--passWithNoTests', '--no-file-parallelism']);
     expect(args).toContain('--maxWorkers=1');
     expect(args).toContain('--outputFile.json=/tmp/r.json');
     expect(args).not.toContain('--');
     expect(args.slice(-2)).toEqual(['src/a.ts', 'src/b.tsx']);
+  });
+
+  it('with several workers runs files in parallel, each file still isolated (no --no-isolate: it let tests pollute each other, 40 failures measured)', () => {
+    const args = vitestArgs(['src/a.ts'], '/tmp/r.json', 5);
+    expect(args).toContain('--maxWorkers=5');
+    expect(args).not.toContain('--no-file-parallelism');
+    expect(args).not.toContain('--no-isolate');
+    expect(args).not.toContain('--isolate=false');
+    expect(args).toContain('--outputFile.json=/tmp/r.json');
+    expect(args.slice(-1)).toEqual(['src/a.ts']);
+  });
+});
+
+describe('prepushWorkers', () => {
+  // Measured on 8 logical CPUs, 238 related files: 1 worker 404 s, 3 workers 211 s, 5 workers 166 s (about 2.1 GB peak), 7 workers 153 s.
+  it('defaults to five workers on an eight-CPU machine, and leaves two CPUs free on a smaller one', () => {
+    expect(prepushWorkers({}, 8)).toBe(5);
+    expect(prepushWorkers({}, 16)).toBe(5);
+    expect(prepushWorkers({}, 4)).toBe(2);
+    expect(prepushWorkers({}, 2)).toBe(1);
+    expect(prepushWorkers({}, 1)).toBe(1);
+  });
+
+  it('takes OI_PREPUSH_WORKERS when it is a whole number from 1 to 16, so 1 restores the old serial run', () => {
+    expect(prepushWorkers({ OI_PREPUSH_WORKERS: '1' }, 8)).toBe(1);
+    expect(prepushWorkers({ OI_PREPUSH_WORKERS: '3' }, 8)).toBe(3);
+    expect(prepushWorkers({ OI_PREPUSH_WORKERS: '16' }, 8)).toBe(16);
+  });
+
+  it('ignores anything else and falls back to the default (control: the valid cases above are not just the default)', () => {
+    for (const bad of ['', '0', '-2', '2.5', '17', '999', 'abc', ' 3', '3 ', '1e1']) expect(prepushWorkers({ OI_PREPUSH_WORKERS: bad }, 8), JSON.stringify(bad)).toBe(5);
+    expect(prepushWorkers({ OI_PREPUSH_WORKERS: '3' }, 8)).not.toBe(5);
   });
 });
 
@@ -145,16 +177,27 @@ describe('runGuard', () => {
   const harness = (over: Partial<Parameters<typeof runGuard>[0]> = {}) => {
     const out: string[] = [];
     const err: string[] = [];
-    const vitest = vi.fn((_files: string[]) => ({ status: 0, report: okReport as object | null }));
-    const deps = { argv: [] as string[], stdin, env: {} as Record<string, string | undefined>, git: baseGit(), vitest, listDir: (): string[] => [], log: (m: string) => out.push(m), err: (m: string) => err.push(m), ...over };
+    const vitest = vi.fn((_files: string[], _workers: number) => ({ status: 0, report: okReport as object | null }));
+    const deps = { argv: [] as string[], stdin, env: {} as Record<string, string | undefined>, cpuCount: 8, git: baseGit(), vitest, listDir: (): string[] => [], log: (m: string) => out.push(m), err: (m: string) => err.push(m), ...over };
     return { deps, out, err, vitest };
   };
 
   it('runs related tests and prints files, passed/total and skipped', () => {
     const h = harness();
     expect(runGuard(h.deps)).toBe(0);
-    expect(h.vitest).toHaveBeenCalledWith(['src/export/copy.ts']);
+    expect(h.vitest).toHaveBeenCalledWith(['src/export/copy.ts'], 5);
     expect(h.out.join('\n')).toMatch(/1 test file\(s\) run, 1\/2 tests passed, 0 failed, 1 skipped/);
+  });
+  it('OI_PREPUSH_WORKERS=1 runs serially and says so; the default says how many workers it uses', () => {
+    const serial = harness();
+    serial.deps.env = { OI_PREPUSH_WORKERS: '1' };
+    expect(runGuard(serial.deps)).toBe(0);
+    expect(serial.vitest).toHaveBeenCalledWith(['src/export/copy.ts'], 1);
+    expect(serial.out.join('\n')).toMatch(/with 1 worker\(s\) \(serially\)/);
+    const def = harness();
+    expect(runGuard(def.deps)).toBe(0);
+    expect(def.out.join('\n')).toMatch(/with 5 worker\(s\)\./);
+    expect(def.out.join('\n')).not.toMatch(/serially/);
   });
   it('fails the push on a red test', () => {
     const h = harness();

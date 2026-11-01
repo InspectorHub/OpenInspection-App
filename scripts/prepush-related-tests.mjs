@@ -4,7 +4,7 @@
 // Usage: git hook pre-push (stdin = push lines), or `node scripts/prepush-related-tests.mjs <file>...` to try a change list.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpus, tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,8 +22,22 @@ export function relatedCandidates(files) {
   return files.map(norm).filter((f) => SOURCE.test(f));
 }
 
-export function vitestArgs(files, jsonFile) {
-  return ['related', '--run', '--passWithNoTests', '--no-file-parallelism', '--maxWorkers=1', '--reporter=default', '--reporter=json',
+/**
+ * How many test files run at once. Measured on 8 logical CPUs with 238 related files: 1 worker 404 s, 3 workers 211 s,
+ * 5 workers 166 s (about 2.1 GB at the peak), 7 workers 153 s, so five is the knee. Every file keeps its own isolated
+ * environment: --no-isolate was measured at 217 s but made 40 tests in 7 files fail by polluting each other.
+ * OI_PREPUSH_WORKERS=<1..16> overrides it (1 is the old serial run, for a machine that is busy with something heavy);
+ * anything else is ignored.
+ */
+export function prepushWorkers(env, cpuCount) {
+  const asked = env.OI_PREPUSH_WORKERS;
+  if (typeof asked === 'string' && /^(?:[1-9]|1[0-6])$/.test(asked)) return Number(asked);
+  return Math.min(5, Math.max(1, cpuCount - 2));
+}
+
+export function vitestArgs(files, jsonFile, workers) {
+  const parallelism = workers > 1 ? [`--maxWorkers=${workers}`] : ['--no-file-parallelism', '--maxWorkers=1'];
+  return ['related', '--run', '--passWithNoTests', ...parallelism, '--reporter=default', '--reporter=json',
     `--outputFile.json=${jsonFile}`, ...files];
 }
 
@@ -126,7 +140,7 @@ export function treeProblems(pushes, head, porcelain) {
 }
 
 /** The whole decision, with every effect injected: git, vitest, directory listing, env, output. Returns the exit code. */
-export function runGuard({ argv, stdin, env, git, vitest, listDir, log, err }) {
+export function runGuard({ argv, stdin, env, git, vitest, listDir, log, err, cpuCount = cpus().length }) {
   const manual = argv.length > 0;
   let pushes = [];
   let changed;
@@ -170,8 +184,9 @@ export function runGuard({ argv, stdin, env, git, vitest, listDir, log, err }) {
   if (plan.configChanged.length > 0) {
     log(`pre-push vitest: ${plan.configChanged.join(', ')} changed, so the field-ui contract test runs too (a dependency or config change can break tests no import reveals; run \`npm test\` for the full suite).`);
   }
-  log(`pre-push vitest: ${plan.files.length} file(s) to relate; running related tests serially.`);
-  const { status, report } = vitest(plan.files);
+  const workers = prepushWorkers(env, cpuCount);
+  log(`pre-push vitest: ${plan.files.length} file(s) to relate; running related tests with ${workers} worker(s)${workers === 1 ? ' (serially)' : ''}.`);
+  const { status, report } = vitest(plan.files, workers);
   if (!report) {
     if (status === 0) {
       err('pre-push vitest: 0 test files run. NO TEST FILE is related to the changed sources; nothing verified them.');
@@ -193,12 +208,12 @@ function realGit(args) {
   return args.includes('-z') ? r.stdout : r.stdout.trim();
 }
 
-function realVitest(files) {
+function realVitest(files, workers) {
   const dir = mkdtempSync(join(tmpdir(), 'oi-prepush-'));
   const jsonFile = join(dir, 'report.json');
   try {
     const vitest = fileURLToPath(new URL('../node_modules/vitest/vitest.mjs', import.meta.url));
-    const run = spawnSync(process.execPath, [vitest, ...vitestArgs(files, jsonFile)], { stdio: 'inherit' });
+    const run = spawnSync(process.execPath, [vitest, ...vitestArgs(files, jsonFile, workers)], { stdio: 'inherit' });
     let report = null;
     try { report = JSON.parse(readFileSync(jsonFile, 'utf8')); } catch { /* none written */ }
     return { status: run.status ?? 1, report };
