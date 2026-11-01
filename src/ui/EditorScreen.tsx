@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FieldDataSourceProvider, FieldEditor, escapeWillBeHandled, type EditorData, type FieldDataSource, type FieldHostSlots } from '@inspectorhub/field-ui';
 import { clientPolicy } from '../app/client-state';
 import type { AppServices } from '../app/compose';
@@ -20,6 +20,7 @@ import type { Network } from '../platform/network';
 import { createGalleryCopier } from '../field/gallery-copy';
 import { useToasts } from './EditorToasts';
 import { editorObserver } from './editor-observer';
+import { EditorStatus } from './EditorStatus';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
 
@@ -52,7 +53,6 @@ export interface EditorScreenProps {
  */
 export const READ_ONLY_NOTICE = 'Some actions are turned off until you update the app. You can still read this inspection.';
 
-const SLOTS: FieldHostSlots = { humanCheck: 'not-required' };
 
 /** Browser link state only; this does not check whether the server is reachable. */
 const browserNetwork: Network = {
@@ -96,6 +96,11 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
   notify.current = toasts.push;
   const restart = useRef(onRestart);
   restart.current = onRestart;
+  // One slot object per session, so the editor does not see a new one on every render. The status chip reads its own state.
+  const slots = useMemo<FieldHostSlots>(
+    () => ({ humanCheck: 'not-required', renderStatus: () => <EditorStatus db={stack.db} status={stack.status} network={network} timers={timers} /> }),
+    [stack, network, timers],
+  );
 
   // The back chain sends Escape first. If an editor layer will still answer one, the press is theirs and stays on this page;
   // otherwise it leaves. (A layer that is open but does not answer Escape does not trap the person.)
@@ -147,6 +152,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           stack,
           api,
           photoCache,
+          isClosed: () => !live,
           files: services.files,
           ...(services.decodeImage === undefined ? {} : { decodeImage: services.decodeImage }),
           network: flag,
@@ -223,7 +229,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           <Notice tone="watch">{READ_ONLY_NOTICE}</Notice>
         </div>
       )}
-      <FieldDataSourceProvider dataSource={phase.source} slots={SLOTS}>
+      <FieldDataSourceProvider dataSource={phase.source} slots={slots}>
         <FieldEditor data={phase.data} readOnly={!canEdit} />
       </FieldDataSourceProvider>
       {toasts.view}

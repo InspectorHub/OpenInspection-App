@@ -1,5 +1,5 @@
 import { FORMAT_LOCALE } from '../platform/format-locale';
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { setPinned } from '../offline/pins';
 import type { Network } from '../platform/network';
@@ -51,6 +51,10 @@ export interface WorkListProps {
   settingsRef?: Ref<HTMLButtonElement>;
   /** Shown right under the page heading, so that notices with their own headings come after the first-level one. */
   notices?: ReactNode;
+  /** Opens the sign-in screen when the session was lost. Without it the "Sign in again" notice is text only. */
+  onSignInAgain?: () => void;
+  /** Where the page was scrolled to when the list was last left. Applied once, after the first ready snapshot has rendered. */
+  restoreScrollY?: number;
 }
 
 function Skeleton() {
@@ -82,7 +86,7 @@ function Group({ group, rows, children }: { group: GroupKey; rows: readonly Work
  * The home of a signed-in device: today's work, what is on the device, and what has not reached the server. Everything
  * shown is read from the database through the stack; the screen remembers only what it is in the middle of doing.
  */
-export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices, onSettings, settingsRef }: WorkListProps) {
+export function WorkList({ stack, onOpenInspection, onExport, onExportAll, network, now = Date.now, locale, pollMs = DEFAULT_POLL_MS, timers = realTimers, notices, onSettings, settingsRef, onSignInAgain, restoreScrollY = 0 }: WorkListProps) {
   const language = locale ?? FORMAT_LOCALE;
   const model = useWorkListModel(stack, { now, pollMs });
   // The same poll Settings uses. The reconciler and the uploader publish no change signal, so when the device-wide waiting count
@@ -107,6 +111,16 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
   const trigger = useRef<Element | null>(null);
 
   const snapshot = model.state.snapshot;
+
+  // The skeleton is shorter than the list, so the position is applied only once real rows are in the page, and only once: the
+  // list is read again every few seconds and a person who has scrolled since must not be pulled back.
+  const restored = useRef(false);
+  const ready = model.state.phase === 'ready';
+  useLayoutEffect(() => {
+    if (!ready || restored.current) return;
+    restored.current = true;
+    if (restoreScrollY > 0) window.scrollTo(0, restoreScrollY);
+  }, [ready, restoreScrollY]);
 
   async function download(): Promise<void> {
     setDownloading(true);
@@ -171,7 +185,7 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
           settingsRef={settingsRef}
         />
         {notices}
-        <StatusStrip status={status} online={online} />
+        <StatusStrip status={status} online={online} onSignInAgain={onSignInAgain} />
         {snapshot !== null && (
           <ReconcileStatus
             outcome={snapshot.reconcile}

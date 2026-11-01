@@ -29,7 +29,7 @@ describe('Settings structure', () => {
   it('only renders the desktop settings panel when a desktop port is provided', async () => {
     const world = await createSignedInWorld();
     const renderSettings = (desktop?: { appVersion: string; updater: { kind: 'disabled'; reason: 'unsigned' }; checkForUpdates(): void; openLogs(): void; openDataFolder(): void }) => render(
-      <Settings services={world.services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} {...(desktop === undefined ? {} : { desktop })} />,
+      <Settings services={world.services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onImport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} {...(desktop === undefined ? {} : { desktop })} />,
     );
     const view = renderSettings();
     expect(screen.queryByText('Desktop app')).not.toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('Settings structure', () => {
 
   it('uses theme tokens only: no literal colour in any class', async () => {
     const world = await createSignedInWorld();
-    const view = render(<Settings services={world.services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
+    const view = render(<Settings services={world.services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onImport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
     const classes = [...view.container.querySelectorAll('[class]')].map((el) => el.getAttribute('class') ?? '').join(' ');
     expect(classes).not.toMatch(/#[0-9a-f]{3,6}\b|\b(?:bg|text|border)-(?:white|black|gray|slate|red|blue|green)\b/i);
   });
@@ -218,7 +218,7 @@ describe('Open source', () => {
   it('names the licence, the version and the build date', async () => {
     const world = await createSignedInWorld();
     const services = { ...world.services, builtAt: '2026-10-20T08:30:00.000Z', appVersion: '1.4.2', openExternal: vi.fn(() => Promise.resolve()) };
-    render(<Settings services={services} origin={world.server.origin} stack={null} locale="en-US" onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
+    render(<Settings services={services} origin={world.server.origin} stack={null} locale="en-US" onBack={vi.fn()} onExport={vi.fn()} onImport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
     const section = screen.getByRole('region', { name: 'Open source' });
     expect(section).toHaveTextContent('GNU Affero General Public License v3.0 (AGPL-3.0)');
     expect(screen.getByTestId('app-version')).toHaveTextContent('1.4.2');
@@ -228,7 +228,7 @@ describe('Open source', () => {
   it('shows an unknown build date as unknown, never as a made-up one', async () => {
     const world = await createSignedInWorld();
     const services = { ...world.services, builtAt: null };
-    render(<Settings services={services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
+    render(<Settings services={services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onImport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
     expect(screen.getByTestId('built-on')).toHaveTextContent('Unknown');
   });
 
@@ -247,7 +247,7 @@ describe('Open source', () => {
   it('a browser that cannot open the link gets a fixed sentence, not an error text', async () => {
     const world = await createSignedInWorld();
     const services = { ...world.services, openExternal: vi.fn(() => Promise.reject(new Error('intent://leak'))) };
-    render(<Settings services={services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
+    render(<Settings services={services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onImport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Source code, opens in your browser' }));
     expect(await screen.findByText(LINK_FAILED)).toBeInTheDocument();
     expect(screen.queryByText(/leak/)).toBeNull();

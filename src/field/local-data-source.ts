@@ -3,6 +3,7 @@ import type { PhotoDiagnostic } from '../app/diagnostics';
 import type { NativeUploader } from '../media/native-uploader';
 import type { MediaStore } from '../media/store';
 import { createBlockedGuard, type IsBlocked } from '../offline/blocked';
+import { readPackageRow } from '../offline/package-targets';
 import type { Account } from '../offline/outbox';
 import type { ClientPlatform } from '../app/compose';
 import type { ReconcilerHandle } from '../app/offline-stack';
@@ -78,7 +79,7 @@ export interface LocalDataSourceDeps {
   /** The Bearer client for the editor's online requests. */
   api: Api;
   files: Pick<Files, 'read'>;
-  network: Pick<NetworkFlag, 'isOnline' | 'onOnlineChange'>;
+  network: Pick<NetworkFlag, 'isOnline' | 'onOnlineChange'> & Partial<Pick<NetworkFlag, 'ready'>>;
   registry: EditorRegistry;
   /** The signed-in user's session snapshot (`loadSessionInfo`). */
   session: SessionInfo;
@@ -102,6 +103,12 @@ export interface LocalDataSourceDeps {
   openExternal(url: string): Promise<void>;
   /** Leaves the editor screen. */
   onExit(): void;
+  /**
+   * True once the editor that owns this data source has been left. A `load` still running by then (it can wait for the
+   * open-refresh) finishes without showing a notice, consuming the rejected-tags count or touching the photo cache.
+   * Omitted: never closed.
+   */
+  isClosed?(): boolean;
   /** Re-reads the editor data. */
   onReload(): void;
   /** Starts the editor over from a clean mount; leave out when the screen cannot. */
@@ -126,6 +133,11 @@ export interface LocalDataSourceDeps {
   /** Optional host decoder for image formats the browser cannot decode. */
   decodeImage?: FieldDataSource['media']['decodeImage'];
 }
+
+/** A cached inspection refreshed more recently than this is opened as it is. */
+export const OPEN_REFRESH_MIN_AGE_MS = 60_000;
+/** The longest the editor waits for the refresh that opening it asks for. */
+export const OPEN_REFRESH_MAX_WAIT_MS = 3000;
 
 /** A host that is not a real one: presence is off, so this address is never opened. */
 const PRESENCE_OFF_ORIGIN = 'wss://presence-off.invalid';
@@ -164,6 +176,32 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
+  // The editor opens from the cache, and a cached row can be older than a change made elsewhere (the inspection switched
+  // to per-unit on the web). So the first load of each open refreshes that one inspection when its copy is old and the
+  // device is online, waiting at most a few seconds: a refresh that has not come back by then finishes on its own and
+  // the next open reads it. Every outcome other than "refreshed" opens the cached copy, quietly; the refresher itself
+  // refuses while the app is locked, the account is not signed in, or the inspection is blocked.
+  const afterOpen = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers, timeoutMs: OPEN_REFRESH_MAX_WAIT_MS });
+  const askedOnOpen = new Set<string>();
+  const refreshOnOpen = async (inspectionId: string): Promise<void> => {
+    if (askedOnOpen.has(inspectionId)) return;
+    try {
+      // The connection flag reads "offline" until its first answer arrives (the plugin call is asynchronous, and the flag
+      // gives up on it after a few seconds), so wait for that answer; asking at once would skip the refresh on a slow answer.
+      await deps.network.ready;
+      if (!deps.network.isOnline() || (await isBlocked(inspectionId))) return;
+      const row = await readPackageRow(stack.db, inspectionId);
+      // A copy stamped in the future (the clock moved back) is not "fresh": only an age within [0, min) is.
+      const age = row === null ? 0 : deps.clock.now() - row.refreshed_at;
+      if (row === null || (age >= 0 && age < OPEN_REFRESH_MIN_AGE_MS)) return;
+      // Asked once per open: remembered only when a request is really made, so a skipped check can be made again.
+      if (askedOnOpen.has(inspectionId)) return;
+      askedOnOpen.add(inspectionId);
+      await afterOpen(inspectionId);
+    } catch (error) {
+      report(error);
+    }
+  };
   // `canEdit` guards commands, uploads and media saves. It is also the editor's read-only switch: with it false
   // EditorScreen passes `readOnly` to field-ui (no document writes, write controls hidden), and this guard stays as defence in depth.
   const canEdit = (): boolean => {
@@ -256,7 +294,10 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   return {
     load: async (inspectionId, scope) => {
+      if (scope === undefined) await refreshOnOpen(inspectionId);
       const data = await load(inspectionId, scope);
+      // Left while the refresh above was running: nothing below is wanted by anyone, and some of it cannot be undone.
+      if (scope === undefined && deps.isClosed?.() === true) return data;
       // Tag changes the server refused while no editor was open were undone on the device: say so once, then forget the count.
       if (scope === undefined) {
         try {

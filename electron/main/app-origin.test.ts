@@ -68,6 +68,32 @@ describe('local origin handler', () => {
     expect(fetch).toHaveBeenCalledExactlyOnceWith(request, { bypassCustomProtocolHandlers: true });
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([7]));
   });
+  it('forwards a byte upload to a remote server unchanged: same method, the exact bytes (0x80-0xFF), no Content-Length written by us', async () => {
+    const bytes = Uint8Array.from({ length: 128 }, (_, i) => 0x80 + i);
+    let seen: { method: string; body: Uint8Array; headers: Headers } | null = null;
+    const fetch = vi.fn(async (req: Request) => {
+      seen = { method: req.method, body: new Uint8Array(await req.arrayBuffer()), headers: req.headers };
+      return new Response('{}', { status: 200 });
+    });
+    const handler = createAppOriginHandler({ rendererRoot: root, packaged: true, readFile: vi.fn(), passthrough: createHttpsPassthrough({ fetch }) });
+    const response = await handler(new Request('https://oi.example.test/api/client/import', { method: 'POST', headers: { 'Content-Type': 'application/zip', Authorization: 'Bearer t' }, body: bytes }));
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.any(Request), { bypassCustomProtocolHandlers: true });
+    expect(seen).not.toBeNull();
+    const got = seen as unknown as { method: string; body: Uint8Array; headers: Headers };
+    expect(got.method).toBe('POST');
+    expect(got.body).toEqual(bytes);
+    expect(got.headers.get('content-type')).toBe('application/zip');
+    expect(got.headers.get('authorization')).toBe('Bearer t');
+    expect(got.headers.has('content-length')).toBe(false);
+  });
+  it('control: the same upload to the app origin itself is refused and never read', async () => {
+    const readFile = vi.fn();
+    const handler = createAppOriginHandler({ rendererRoot: root, packaged: true, readFile, passthrough: vi.fn() });
+    const response = await handler(new Request(APP_ORIGIN + '/api/client/import', { method: 'POST', body: Uint8Array.from([0x80, 0xff]) }));
+    expect(response.status).toBe(405);
+    expect(readFile).not.toHaveBeenCalled();
+  });
   it('contains a remote failure without leaking its error', async () => {
     const handler = createAppOriginHandler({ rendererRoot: root, packaged: false, readFile: vi.fn(), passthrough: async () => { throw new Error('SECRET'); } });
     const response = await handler(new Request('https://example.com'));

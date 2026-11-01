@@ -43,7 +43,7 @@ describe('downloading today\'s work', () => {
     const note = screen.getByTestId('refresh-summary');
     expect(note).toHaveAttribute('aria-live', 'polite');
     expect(note.textContent).toBe('Downloading…');
-    expect(note.className).toContain('sr-only');
+    expect(note.querySelector('span.sr-only')).toHaveTextContent('Downloading…');
   });
 
   it('control: a finished download shows its summary as an ordinary visible line, in the same live region', () => {

@@ -83,6 +83,8 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   // True while Settings removes this device's data: the verification marks go with it, so a lock check now would read "expired".
   const [wiping, setWiping] = useState(false);
   const started = useRef<Promise<BootResult> | null>(null);
+  // Where the work list was scrolled to; it lives here because signing in again unmounts the whole work screen.
+  const listScrollY = useRef(0);
   const unlocks = useMemo(() => createUnlockEmitter(), []);
   const insecure = import.meta.env.DEV && allowInsecureHttp;
   const stack = useOfflineStackLifecycle(services, offline, screen.kind === 'signed_in' ? { origin: screen.origin, identity: screen.identity } : null, insecure, unlocks.onUnlocked, appDiagnostics.push);
@@ -113,6 +115,12 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       if (active) void sweepStaleExports(services.files, services.clock.now(), SWEEP_AGE_MS);
     });
   }, [services, appState]);
+
+  // A sign-in that is not a return to this session (sign-out, or another server, which reaches the sign-in screen through setup) must not hand its scroll position to the next one.
+  const plainSignIn = screen.kind === 'sign_in' && !screen.backToLock;
+  useEffect(() => {
+    if (plainSignIn) listScrollY.current = 0;
+  }, [plainSignIn]);
 
   useEffect(() => {
     if (screen.kind !== 'locked') setLockedExport(false);
@@ -207,6 +215,11 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             identity={screen.identity}
             onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
             onWiping={setWiping}
+            scrollMemory={listScrollY}
+            onSignInAgain={() => {
+              listScrollY.current = window.scrollY;
+              setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: screen.identity });
+            }}
             desktopSettings={desktopSettings}
             diagnostics={diagnostics}
             {...(network === undefined ? {} : { network })}

@@ -3,6 +3,7 @@ import type { ClientPlatform } from '../app/compose';
 import type { DesktopSettingsPort } from '../desktop/updater-port';
 import { Body, Button, Panel, PanelHeading } from './kit';
 import { useUpdateLink } from './update-link';
+import { UPDATE_REQUIRED_TITLE } from './worklist/copy';
 import { useState } from 'react';
 
 export interface UpgradeRequiredProps {
@@ -36,7 +37,7 @@ export function UpgradeRequired({ platform, downloadUrl, openExternal, desktop }
   const updaterButton = canUseUpdater && (state.kind === 'available' || state.kind === 'ready' || state.kind === 'downloading' || state.kind === 'checking');
   return (
     <Panel tone="bad" role="alert" titleId={titleId}>
-      <PanelHeading id={titleId}>Update required</PanelHeading>
+      <PanelHeading id={titleId}>{UPDATE_REQUIRED_TITLE}</PanelHeading>
       <Body>This version of the app is no longer accepted by your server, so editing is turned off. Everything saved on this device stays here and keeps uploading.</Body>
       {updaterButton ? (
         <Button variant="primary" disabled={state.kind === 'downloading' || state.kind === 'checking'} onClick={state.kind === 'ready' ? () => { void restart(); } : () => desktop!.downloadUpdate!()}>

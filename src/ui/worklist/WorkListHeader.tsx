@@ -95,7 +95,7 @@ export function WorkListHeader({ updatedAt, now, locale, chip, downloading, summ
           Export unsent data
         </Button>
       )}
-      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} visuallyHidden={downloading} />
+      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} visuallyHidden={downloading} reserve />
     </header>
   );
 }

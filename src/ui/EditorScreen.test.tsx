@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,7 @@ import { backRegistry, pressBack } from './back-button';
 import { EditorScreen, READ_ONLY_NOTICE } from './EditorScreen';
 import { editorObserver, type EditorObservation, type EditorProbe } from './editor-observer';
 
-const layers = vi.hoisted(() => ({ open: false }));
+const layers = vi.hoisted(() => ({ open: false, showStatusSlot: false }));
 let renderedSource: FieldDataSource | null = null;
 
 // The real editor needs a canvas and a layout engine; what this screen owns is what surrounds it.
@@ -36,6 +36,7 @@ vi.mock('@inspectorhub/field-ui', async (importOriginal) => {
           <p data-testid="platform">{source.platform}</p>
           <p data-testid="read-only">{String(readOnly)}</p>
           <p data-testid="human-check">{slots.humanCheck ?? 'unset'}</p>
+          <div data-testid="status-slot">{layers.showStatusSlot ? slots.renderStatus?.() : null}</div>
           <button type="button" onClick={() => source.exit()}>
             leave
           </button>
@@ -59,6 +60,7 @@ let stack: OfflineStack;
 
 beforeEach(async () => {
   layers.open = false;
+  layers.showStatusSlot = false;
   renderedSource = null;
   stackWorld = await createStackWorld();
   world = await createSignedInWorld();
@@ -154,6 +156,24 @@ describe('the editor screen', () => {
     expect(await screen.findByTestId('address')).toHaveTextContent('1 Main St');
     expect(screen.getByTestId('platform')).toHaveTextContent('android');
     expect(screen.getByTestId('human-check')).toHaveTextContent('not-required');
+  });
+
+  it('passes a status slot to the editor: empty while all is well, Offline once the device loses its connection', async () => {
+    let setOnline: (online: boolean) => void = () => undefined;
+    const flipping: Network = {
+      online: () => Promise.resolve(true),
+      onChange: (cb) => {
+        setOnline = cb;
+        return () => undefined;
+      },
+    };
+    // Rendering the slot subscribes it to the link too, which the link-state tests below count; only this test turns it on.
+    layers.showStatusSlot = true;
+    render(mount({ network: flipping }));
+    const slot = await screen.findByTestId('status-slot');
+    await waitFor(() => expect(slot).toBeEmptyDOMElement());
+    act(() => setOnline(false));
+    expect(await within(slot).findByText('Offline')).toBeInTheDocument();
   });
 
   it('exit() returns to the work list, once', async () => {

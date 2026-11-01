@@ -85,6 +85,18 @@ export const SERVER_UNREACHABLE_TEXT = "The server can't be reached right now. Y
 /** The server answered but sync cannot go on, or this device's storage failed. Not a sign-in problem, and not an unreachable server. */
 export const SYNC_PAUSED_TEXT = 'Sync is paused. The app will try again shortly.';
 
+/** A document could not be stored on this device. Said in the work list and in the editor header. */
+export const EDITS_NOT_SAVED_TEXT = 'Some edits may not be saved on this device. Free up storage and restart the app.';
+
+/** The heading of the panel that says the server no longer accepts this app version; the editor header says the same two words. */
+export const UPDATE_REQUIRED_TITLE = 'Update required';
+
+/** The editor header's short form of `SERVER_UNREACHABLE_TEXT`: the device has a link but the server did not answer. */
+export const SERVER_UNREACHABLE_CHIP_TEXT = "Can't reach the server";
+
+/** The editor header's short form of the work list's collaboration line: live editing with others failed, the stored document is fine. */
+export const COLLAB_ISSUE_CHIP_TEXT = 'Live collaboration is having trouble';
+
 /** One sentence group for what a download run did. */
 export function refreshSummaryText(summary: RefreshSummary): string {
   if (summary.halted !== null) {

@@ -13,6 +13,8 @@ export interface HttpRequest {
   body?: string;
   /** An upload, sent instead of `body`. The platform sets the multipart content type, so a caller must not. */
   form?: FormData;
+  /** Raw bytes sent as they are, instead of `body`. The platform sets Content-Length: a caller must not. */
+  bodyBytes?: Uint8Array;
   timeoutMs?: number;
   maxBytes?: number;
   /** Read the answer as bytes (`bytes` on the response, `text` empty and `json` undefined). The size cap and every other check are unchanged. */
@@ -205,7 +207,7 @@ export function createHttp(deps: HttpDeps): Http {
           response = await deps.fetch(req.url, {
             method: req.method,
             headers: { ...deps.defaultHeaders, ...req.headers },
-            body: req.form ?? req.body,
+            body: req.form ?? (req.bodyBytes === undefined ? req.body : (req.bodyBytes as Uint8Array<ArrayBuffer>)),
             redirect: 'manual',
             credentials: 'omit',
             cache: 'no-store',

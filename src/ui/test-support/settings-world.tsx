@@ -19,7 +19,7 @@ export function stackWith(refresh = vi.fn(() => Promise.resolve(refreshSummary({
 
 export async function open(world: World, props: Partial<SettingsProps> = {}) {
   const services = { ...world.services, openExternal: vi.fn(() => Promise.resolve()) };
-  const handlers = { onBack: vi.fn(), onExport: vi.fn(), onSignedOut: vi.fn(), onCleared: vi.fn() };
+  const handlers = { onBack: vi.fn(), onExport: vi.fn(), onImport: vi.fn(), onSignedOut: vi.fn(), onCleared: vi.fn() };
   render(<Settings services={services} origin={world.server.origin} stack={null} locale="en-US" timers={createManualTimers()} {...handlers} {...props} />);
   return { services, ...handlers };
 }
