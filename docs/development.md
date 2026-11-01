@@ -241,17 +241,34 @@ The macOS builds in this repository run on the `macos-26` GitHub runner, and bot
 | Job | Where | What it does |
 |---|---|---|
 | `ios-sync` | `.github/workflows/ci.yml` | `npm ci`, `npm run build`, `npx cap sync ios`. It does not compile. |
-| `ios-simulator` | `.github/workflows/ci.yml` | Compiles the Debug configuration for the simulator with `CODE_SIGNING_ALLOWED=NO`, then runs `scripts/ios-simulator-smoke.sh` and keeps its screenshots for 7 days. It uses no secret. |
+| `ios-simulator` | `.github/workflows/ci.yml` | One job per device (iPhone, iPad). Compiles the Debug configuration for the simulator, signed ad hoc (`CODE_SIGN_IDENTITY=-`), then runs `scripts/ios-simulator-smoke.sh` and keeps its screenshots and console capture for 7 days. It uses no secret. |
 | `testflight` | `.github/workflows/release-ios.yml` | The signed release build. See `docs/release.md`. |
 
-**Status.** `ios-simulator` and the smoke script are written and have static tests (`src/release-workflows.test.ts`), but this page records no
-successful run of them. Until a run has passed, read the next list as what the script is meant to check, not as a result.
+**Status.** Both legs passed in CI run 41269612566 (iPhone 16e and an iPad, Xcode 26 on `macos-26`), and the evidence was read, not just the
+green mark: the app's console showed the database secret stored, the database created and migrated to schema version 3, and no error line;
+the screenshots show the "Choose your server" screen (the iPad one in the tablet layout); both data directories carried the backup
+attribute. That is a simulator result. It says nothing about a signed build on a physical device, TestFlight, or anything that needs a real
+server or account.
 
-The smoke script (`scripts/ios-simulator-smoke.sh`) is meant to check, on one iPhone and one iPad simulator: that `Info.plist` and
-`PrivacyInfo.xcprivacy` pass `plutil -lint` and the manifest is inside the built app; that the app installs, launches and is still running
-after a settle time; that opening the sign-in callback URL (`io.inspectorhub.app:/oauth/callback?...`) with `xcrun simctl openurl` does not
-end the process; that every directory listed in `BackupExclusion.relativeDirectories` carries the `com.apple.MobileBackup` attribute (with an
-untouched directory as a control that must not carry it); and it saves one screenshot per device. It signs in to nothing and contacts no server.
+The smoke script (`scripts/ios-simulator-smoke.sh`, `SMOKE_DEVICES=iphone|ipad|both`, default both) checks, per device: that `Info.plist` and
+`PrivacyInfo.xcprivacy` pass `plutil -lint` and the manifest is inside the built app; that the app installs, launches and is running; that
+opening the sign-in callback URL (`io.inspectorhub.app:/oauth/callback?...`) with `xcrun simctl openurl` does not end the process; that every
+directory listed in `BackupExclusion.relativeDirectories` carries the backup-exclusion attribute (an untouched directory is the control that
+must not carry it); that the app's console contains plugin-call lines (proof the capture can see the app) and no `storage open failed` line;
+and it saves one screenshot per device. It signs in to nothing and contacts no server.
+
+Four things this job taught, each of which looked like a green run while the app was broken or the check was blind:
+
+- **Sign the simulator build ad hoc.** Built with `CODE_SIGNING_ALLOWED=NO` the app has no entitlements and the Keychain refuses the database
+  key (`KeychainWrapperError`), so the app stops on its "could not open its storage" screen while the process stays alive. "The process is still
+  running" is not "the app works": read the screenshot.
+- **The backup attribute is named `com.apple.metadata:com_apple_backup_excludeItem`** and its value is `com.apple.MobileBackup`. Looking for
+  an attribute named `com.apple.MobileBackup` fails on a correctly excluded directory.
+- **Capacitor's console is silent on purpose** (`loggingBehavior: 'none'`: its debug output carries secure-store keys and values and the
+  callback URL). Only this job turns it on, with `OI_NATIVE_LOGGING=debug` on the sync step; tests keep every release workflow and every other
+  job from setting it.
+- **Capacitor logs through `print()` on stdout, which is block-buffered when redirected to a file**, so a `--stdout=<file>` capture stays
+  empty. The script runs `simctl launch --console-pty` under `script -q -F` (a terminal for simctl, and a flush after every write).
 
 ### Running it on a Mac
 
@@ -266,7 +283,7 @@ npx cap run ios        # pick a simulator or a connected device
 ```
 
 The command the CI job runs for a simulator build is in `.github/workflows/ci.yml` (`xcodebuild -project ios/App/App.xcodeproj -scheme App
--configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ... CODE_SIGNING_ALLOWED=NO build`). A server on the same
+-configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ... CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build`; ad hoc signing, not `CODE_SIGNING_ALLOWED=NO`, because an unsigned app cannot use the Keychain). A server on the same
 Mac is reachable from the simulator as `http://localhost:<port>` (see "Standalone fake engine"). Running on a physical device needs signing
 with a team of your own; this repository does not document that path.
 
@@ -288,7 +305,7 @@ states on a device" above.
 `ios/App/App/BackupExclusion.swift` runs at launch (`AppDelegate.swift` calls it; a failure is logged, not fatal). It creates and then marks
 excluded from iCloud and device backups two directories under `Library`: `CapacitorDatabase` (the value of `iosDatabaseLocation` in
 `capacitor.config.ts`) and `NoCloud` (where `Directory.LibraryNoCloud` is expected to point; the code comment states this and
-`src/ios-config.test.ts` checks the names against the configuration, and the simulator job lists `Library` so the real layout is visible in its log).
+`src/ios-config.test.ts` checks the names against the configuration, and the simulator job lists `Library` so the real layout is visible in its log). In CI run 41269612566 both directories existed after launch and carried the attribute on the iPhone and the iPad simulator.
 
 The trade-off: the database key is stored in the iOS keychain by the SQLite plugin (`isSecretStored` and `setEncryptionSecret` in
 `src/platform/db-capacitor.ts`), and the comment in `BackupExclusion.swift` states that this key does not travel with a backup. That was not

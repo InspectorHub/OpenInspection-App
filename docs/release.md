@@ -302,7 +302,7 @@ and tighten this page:
 - That the export writes `App.ipa` into the export directory (the check and the upload both read that exact name).
 - That the `codesign -dvv` output contains an `Authority=Apple Distribution` line for an App Store export.
 - The upload step's wait for TestFlight processing.
-- The CI simulator job and `scripts/ios-simulator-smoke.sh` (see `docs/development.md`): described there, with no passing run recorded.
+- The CI simulator job and `scripts/ios-simulator-smoke.sh` (see `docs/development.md`): passed on an iPhone and an iPad simulator in CI run 41269612566. That is a simulator result only; no signed build has run on a physical device through this repository's workflows.
 - The `openssl` steps for the certificate (above).
 
 ## If a release is wrong
