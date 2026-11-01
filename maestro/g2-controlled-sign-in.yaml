@@ -1,0 +1,46 @@
+# G2 (regression strategy, section 3): controlled sign-in, then the work list with nothing waiting to upload and the status dot Online.
+# "Controlled" means the fake engine (e2e/fake-engine, see docs/development.md) completes the browser step by itself, so no
+# account, password or code is involved. It needs a development bundle served by Vite, because only that build allows plain http.
+#
+#   maestro --device <serial> test -e SERVER_URL=http://localhost:8791 maestro/g2-controlled-sign-in.yaml
+#
+# Start from a clean, already-running app. The flow does not launch it: on some phones (verified on an Android 10 Honor) Maestro's own
+# launch leaves the launcher in front, while `am start` works. So the caller clears and starts it first:
+#   adb shell pm clear <APP_ID> && adb shell am start -n <APP_ID>/io.inspectorhub.app.MainActivity
+# APP_ID is the installed package (a side-by-side debug build may carry a suffix); the flow itself never names it.
+appId: io.inspectorhub.app
+---
+- extendedWaitUntil:
+    visible: "Choose your server"
+    timeout: 60000
+# Tap right of the pre-filled address so the cursor lands at its end; eraseText deletes backwards from the cursor.
+- tapOn:
+    point: "85%,26%"
+- eraseText: 80
+- inputText: "${SERVER_URL}"
+- hideKeyboard
+- tapOn: "Allow plain http (development only)"
+- tapOn: "Continue"
+- assertVisible: "Connect to this server?"
+- tapOn: "Connect"
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 30000
+- tapOn:
+    text: "Sign in"
+    index: 1
+# The fake engine answers the authorize request with the redirect straight back to the app.
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 90000
+- assertVisible: "Online"
+- assertVisible: "Download today's work"
+- assertNotVisible: "Waiting to upload.*"
+# The count itself lives in Settings > Device; nothing is waiting, so it must read 0.
+- tapOn: "Settings"
+# "This device" is below the sync options, off the first screen.
+- scrollUntilVisible:
+    element: "Waiting to upload"
+    timeout: 30000
+# The row reads "Waiting to upload   0 items"; the value sits beside the label, not below it.
+- assertVisible: "0 items"
