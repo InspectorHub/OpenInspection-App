@@ -2,7 +2,7 @@ import type * as Y from 'yjs';
 import type { MediaFileResult, MediaUploader, PendingMediaRecord } from '@inspectorhub/field-ui';
 import type { TimerPort } from '../collab/timers';
 import { defectTargetOf } from '../media/defect-target';
-import { isMediaError, MediaError } from '../media/errors';
+import { isMediaError } from '../media/errors';
 import { sniffMediaKind } from '../media/media-types';
 import type { NativeUploader, UploadFailureCode } from '../media/native-uploader';
 import type { WithDoc } from '../media/pending-doc';

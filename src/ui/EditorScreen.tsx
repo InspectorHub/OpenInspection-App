@@ -24,7 +24,7 @@ import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
 
 /** What the editor screen reads of the app's services. */
-export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState' | 'decodeImage'>;
+export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState' | 'decodeImage' | 'photoGallery' | 'gallerySetting'>;
 
 export interface EditorScreenProps {
   services: EditorServices;

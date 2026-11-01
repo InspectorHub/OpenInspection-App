@@ -9,8 +9,8 @@ type Photo = Extract<PendingMediaRecord, { kind: 'photo' }>;
 
 /** A photo as a later editor version hands it over: with the source it came from. */
 const withSource = (source: string | undefined, pendingId = 'p1'): Photo => {
-  const base = photoRecord(pendingId) as Photo;
-  return source === undefined ? base : ({ ...base, meta: { ...base.meta, source } } as Photo);
+  const base = photoRecord(pendingId) as unknown as Photo;
+  return source === undefined ? base : ({ ...base, meta: { ...base.meta, source } } as unknown as Photo);
 };
 
 async function rig(on: boolean, options: Parameters<typeof createMemoryGallery>[0] = {}) {
