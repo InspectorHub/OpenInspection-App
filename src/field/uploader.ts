@@ -1,17 +1,17 @@
 import type * as Y from 'yjs';
 import type { MediaFileResult, MediaUploader, PendingMediaRecord } from '@inspectorhub/field-ui';
-import { realTimers, type TimerPort } from '../collab/timers';
+import type { TimerPort } from '../collab/timers';
 import { defectTargetOf } from '../media/defect-target';
 import { isMediaError, MediaError } from '../media/errors';
 import { sniffMediaKind } from '../media/media-types';
 import type { NativeUploader, UploadFailureCode } from '../media/native-uploader';
-import { appendPendingInDoc, hasPendingEntryInDoc } from '../media/pending-doc-append';
 import type { WithDoc } from '../media/pending-doc';
 import type { MediaStore } from '../media/store';
 import type { IsBlocked } from '../offline/blocked';
 import type { Files } from '../platform/files';
 import type { PhotoDiagnostic } from '../app/diagnostics';
 import { MESSAGES } from './messages';
+import { createEntryOps } from './uploader-entries';
 import type { ForegroundUploads } from './uploader-foreground';
 
 /**
@@ -23,6 +23,14 @@ import type { ForegroundUploads } from './uploader-foreground';
  *    app's reconciler never send it twice);
  *  - a crop or an annotation must not reach the background uploader (it refuses those kinds for good and would mark the
  *    row failed): both are foreground Bearer requests (`uploader-foreground.ts`).
+ *
+ * The entry comes FIRST for a photo of an item: as soon as the row exists and before the upload starts, a pending entry is
+ * appended to the results document (the same entry the editor's own offline path writes). A process killed while the upload
+ * is out then leaves the three things that belong together: the row on the device, the entry in the document and, once the
+ * background upload finishes after the restart, the file on the server. The reconciler swaps the entry for the key and only
+ * then removes the file. Without the entry first, a kill left a row and a server file that nothing in the document named, and
+ * the app cannot tell that apart from a photo the person deleted on purpose. On success the entry is swapped for the key before
+ * the answer; the editor then attaches the same key, which the document merges by key instead of adding a second entry.
  *
  * What happens to the bytes when an online upload fails (photos):
  *  - the row this call created is KEPT. For an item photo a pending entry is appended to the results document (through
@@ -78,9 +86,6 @@ export interface UploaderDeps {
  * part of the editor package's type before 0.3.0, where an extra property on a failure is ignored.
  */
 type Result = { ok: true; key: string; result?: MediaFileResult } | { ok: false; error: string; kept?: true; permanent?: true };
-
-const ENTRY_TRIES = 3;
-const ENTRY_RETRY_MS = 500;
 
 const fail = (error: string): Result => ({ ok: false, error });
 
@@ -175,8 +180,7 @@ function isStoreTrouble(error: unknown): boolean {
 }
 
 export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string, doc: Y.Doc | null) => MediaUploader {
-  const timers = deps.timers ?? realTimers;
-  const pause = (ms: number): Promise<void> => new Promise((resolve) => timers.setTimeout(resolve, ms));
+  const entries = createEntryOps({ withDoc: deps.withDoc, timers: deps.timers, onError: deps.onError });
 
   /** Tells the diagnostic sink, once, that a photo was answered as a plain failure. Never throws. */
   function lost(site: LossSite, detail: string): void {
@@ -190,44 +194,6 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       deps.onDiagnostic?.(`photo_not_kept:${site}:${detail}:${online}`);
     } catch {
       // A failing reporter changes nothing about the answer.
-    }
-  }
-
-  /** Adds the pending entry of a kept photo. 'added' also covers an entry that was already there. */
-  async function addEntry(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<'added' | 'blocked' | { failed: string }> {
-    for (let attempt = 1; attempt <= ENTRY_TRIES; attempt += 1) {
-      try {
-        const answer = await deps.withDoc(inspectionId, (doc) => appendPendingInDoc(doc, rec.meta.findingKey, rec.meta.itemId, rec.pendingId));
-        if (answer === 'invalid_key') {
-          deps.onError?.(new MediaError('INVALID_RECORD'));
-          return { failed: 'INVALID_RECORD' };
-        }
-        return 'added';
-      } catch (error) {
-        if (isMediaError(error) && error.code === 'BLOCKED') return 'blocked';
-        if (isMediaError(error) && error.code === 'DOC_BUSY' && attempt < ENTRY_TRIES) {
-          await pause(ENTRY_RETRY_MS);
-          continue;
-        }
-        deps.onError?.(error);
-        return { failed: isMediaError(error) ? error.code : 'UNKNOWN' };
-      }
-    }
-    return { failed: 'DOC_BUSY' };
-  }
-
-  /**
-   * A read-only look for the entry of a row that was already queued. A document that cannot be read counts as no entry.
-   * A second call for a row whose first call is still on its way to writing the entry can answer a plain failure here,
-   * before that entry lands: it only ever under-claims (the person is told less than is true), it never claims `kept`
-   * falsely, and it never writes.
-   */
-  async function entryExists(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<boolean> {
-    try {
-      return await deps.withDoc(inspectionId, (doc) => hasPendingEntryInDoc(doc, rec.meta.findingKey, rec.meta.itemId, rec.pendingId));
-    } catch (error) {
-      if (!(isMediaError(error) && error.code === 'BLOCKED')) deps.onError?.(error);
-      return false;
     }
   }
 
@@ -271,6 +237,20 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       lost('row_mismatch', 'NONE');
       return fail(MESSAGES.photoNotPrepared);
     }
+    // Write-ahead: the entry goes into the document before the upload starts (see the head of this file). A row that was
+    // already queued has its entry from the editor; a defect photo has none by design. When the entry cannot be written
+    // the upload still goes on and the old path stands: the editor attaches the key when the upload answers.
+    let entryWritten = false;
+    let entryFailure: string | null = null;
+    if (created && !isDefect) {
+      const first = await entries.add(inspectionId, rec);
+      if (first === 'blocked') {
+        lost('entry_blocked', 'NONE');
+        return fail(MESSAGES.blocked);
+      }
+      entryWritten = first === 'added';
+      if (first !== 'added') entryFailure = first.failed;
+    }
     let outcome: Awaited<ReturnType<NativeUploader['uploadDetailed']>>;
     try {
       outcome = await deps.native.uploadDetailed({ pendingId: rec.pendingId, inspectionId });
@@ -280,6 +260,14 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       outcome = { ok: false, code: 'PLUGIN', retryable: true, retryAfterMs: null, halt: false };
     }
     if (outcome.ok) {
+      if (entryWritten) {
+        const placed = await entries.swap(inspectionId, rec.pendingId, outcome.key);
+        // The person deleted the photo while it uploaded: the success must not bring it back, and nothing is deleted here.
+        if (placed === 'removed') return fail(MESSAGES.photoKeptNotAdded);
+        // The document could not be reached just now: the entry still names the photo and the row is `uploaded`, so the
+        // reconciler swaps the entry and removes the file. Answering ok would make the editor add a second entry.
+        if (placed === 'later') return { ok: false, error: MESSAGES.unreachable, kept: true };
+      }
       if (created) await removeRow(rec.pendingId);
       return { ok: true, key: outcome.key };
     }
@@ -290,7 +278,9 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       return fail(error);
     }
     if (leavesNothingToKeep(outcome.code, outcome.retryable)) {
-      if (created) await removeRow(rec.pendingId);
+      // The entry written first goes with the row. When it cannot be taken back the row stays, so the document never names a
+      // photo that has no row behind it.
+      if (created && (!entryWritten || (await entries.remove(inspectionId, rec)))) await removeRow(rec.pendingId);
       lost('nothing_to_keep', outcome.code);
       return fail(error);
     }
@@ -301,17 +291,14 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     // A queued row's entry is the editor's, and is never written or repaired here (a version restore may have removed
     // it on purpose): `kept` is claimed only when the document really holds it.
     if (!created) {
-      if (await entryExists(inspectionId, rec)) return { ok: false, error, kept: true };
+      if (await entries.exists(inspectionId, rec)) return { ok: false, error, kept: true };
       lost('entry_missing_for_queued', outcome.code);
       return fail(error);
     }
-    const entry = await addEntry(inspectionId, rec);
-    if (entry === 'added') return { ok: false, error, kept: true };
-    if (entry === 'blocked') {
-      lost('entry_blocked', outcome.code);
-      return fail(MESSAGES.blocked);
-    }
-    lost('entry_failed', `${entry.failed}:${outcome.code}`);
+    if (entryWritten) return { ok: false, error, kept: true };
+    // The entry could not be written before the upload either, and it is not tried a second time: the bytes stay, and the
+    // answer says they were not added to the inspection.
+    lost('entry_failed', `${entryFailure ?? 'UNKNOWN'}:${outcome.code}`);
     return fail(MESSAGES.photoKeptNotAdded);
   }
 

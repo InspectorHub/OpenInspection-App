@@ -93,3 +93,26 @@ export function hasPendingEntryInDoc(doc: Y.Doc, findingKey: string, itemId: str
   if (!(photos instanceof Y.Array)) return false;
   return photos.toArray().some((entry) => entry instanceof Y.Map && entry.get('pendingId') === pendingId);
 }
+
+/**
+ * Removes the entry of a photo that is still only on the device, found by its pending id, and answers whether one was
+ * there. It is the inverse of `appendPendingInDoc`, for a photo whose bytes turned out to leave nothing to keep after the
+ * entry was written first. An entry that already carries a key (`pendingUpload` no longer true) is never removed here.
+ */
+export function removePendingInDoc(doc: Y.Doc, findingKey: string, itemId: string, pendingId: string): boolean {
+  if (!isItemKey(findingKey, itemId) || typeof pendingId !== 'string' || pendingId === '') return false;
+  const item = doc.getMap<unknown>('results').get(findingKey);
+  const photos = item instanceof Y.Map ? item.get('photos') : undefined;
+  if (!(photos instanceof Y.Array)) return false;
+  let removed = false;
+  doc.transact(() => {
+    for (let i = photos.length - 1; i >= 0; i -= 1) {
+      const entry = photos.get(i);
+      if (entry instanceof Y.Map && entry.get('pendingId') === pendingId && entry.get('pendingUpload') === true) {
+        photos.delete(i, 1);
+        removed = true;
+      }
+    }
+  });
+  return removed;
+}

@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
-import { appendPendingInDoc, hasPendingEntryInDoc } from './pending-doc-append';
+import { appendPendingInDoc, hasPendingEntryInDoc, removePendingInDoc } from './pending-doc-append';
 import { resolvePendingInDoc } from './pending-doc';
 
 const FK = '_default:s1:i1';
@@ -152,5 +152,33 @@ describe('hasPendingEntryInDoc', () => {
     expect(hasPendingEntryInDoc(doc, FK, 'i1', 'p1')).toBe(true);
     expect(hasPendingEntryInDoc(doc, FK, 'i1', 'p2')).toBe(false);
     expect(hasPendingEntryInDoc(doc, '_default:s1:other', 'i1', 'p1')).toBe(false);
+  });
+});
+
+describe('removePendingInDoc', () => {
+  it('removes only the pending entry with that id and leaves the others in order', () => {
+    const doc = new Y.Doc();
+    appendPendingInDoc(doc, FK, 'i1', 'p1');
+    appendPendingInDoc(doc, FK, 'i1', 'p2');
+    appendPendingInDoc(doc, FK, 'i1', 'p3');
+    expect(removePendingInDoc(doc, FK, 'i1', 'p2')).toBe(true);
+    expect(photosOf(doc).map((entry) => entry.pendingId)).toEqual(['p1', 'p3']);
+  });
+
+  it('never removes an entry that already carries a key, and answers false when there is nothing to remove', () => {
+    const doc = new Y.Doc();
+    appendPendingInDoc(doc, FK, 'i1', 'p1');
+    expect(resolvePendingInDoc(doc, 'p1', 'tenant/x/p1.jpg')).toBe('resolved');
+    expect(removePendingInDoc(doc, FK, 'i1', 'p1')).toBe(false);
+    expect(photosOf(doc)).toHaveLength(1);
+    expect(removePendingInDoc(new Y.Doc(), FK, 'i1', 'p1')).toBe(false);
+  });
+
+  it('refuses a key that is not an item key, and an empty id, without touching the document', () => {
+    const doc = new Y.Doc();
+    appendPendingInDoc(doc, FK, 'i1', 'p1');
+    expect(removePendingInDoc(doc, '_default:s1:other', 'i1', 'p1')).toBe(false);
+    expect(removePendingInDoc(doc, FK, 'i1', '')).toBe(false);
+    expect(photosOf(doc)).toHaveLength(1);
   });
 });

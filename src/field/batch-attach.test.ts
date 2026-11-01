@@ -117,14 +117,15 @@ describe('a selection where some uploads fail and are kept', () => {
   it('keeps every selected photo in SELECTION order, so the first photo stays first', async () => {
     const w = await createUploaderWorld();
     seedPhotos(w.doc, FK, []);
-    // The first photo uploads; the second and third fail on the way (kept, a pending entry is written at once); the rest upload.
+    // The first photo uploads; the second and third fail on the way (kept); the rest upload. Every entry is written before its
+    // upload starts, so all five sit in selection order from the beginning and a success swaps its entry in place.
     w.plugin.script = [{ kind: 'complete' }, { kind: 'fail' }, { kind: 'fail' }, { kind: 'complete' }, { kind: 'complete' }];
     const recs = records(5);
     const batch = await runBatch(w, recs);
     expect(batch.results.filter((r) => r.ok)).toHaveLength(3);
-    // Before ordering, the kept entries sit ahead of the late-attached successes (the 0.6.0 defect).
+    // Before ordering: with the entry written first, the 0.6.0 defect (kept entries ahead of late-attached successes) does not arise.
     attach(w.doc, batch.keys);
-    expect(photosOf(w.doc, FK).map(idOf)).toEqual(['batch-2', 'batch-3', 'batch-1', 'batch-4', 'batch-5']);
+    expect(photosOf(w.doc, FK).map(idOf)).toEqual(['batch-1', 'batch-2', 'batch-3', 'batch-4', 'batch-5']);
     orderPhotoBatch(w.doc, batch.results.flatMap((r, i): Named[] => (r.ok && r.key !== undefined ? [{ key: r.key }] : [{ pendingId: (recs[i] as Photo).pendingId }])));
     const entries = photosOf(w.doc, FK);
     expect(entries).toHaveLength(5);

@@ -75,7 +75,8 @@ describe('photo diagnostics', () => {
     const r = await rig(() => stub('NETWORK'));
     r.w.docFailure.error = new MediaError('BLOCKED');
     await r.upload();
-    expect(r.codes).toEqual(['photo_not_kept:entry_blocked:NETWORK:online']);
+    // Blocked while the entry is written, which is now before the upload: there is no upload outcome to name.
+    expect(r.codes).toEqual(['photo_not_kept:entry_blocked:NONE:online']);
   });
 
   it('a kept photo and a policy refusal leave nothing', async () => {

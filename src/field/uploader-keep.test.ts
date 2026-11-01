@@ -89,32 +89,35 @@ describe('a failed online upload of an item photo keeps the original', () => {
     ['INVALID', false],
     ['UNSUPPORTED_KIND', false],
     ['FILE', false],
-  ])('%s (retryable %s) leaves no bytes to keep: no entry, no kept, and the row this call created is removed', async (code, retryable) => {
+  ])('%s (retryable %s) leaves no bytes to keep: no kept, the entry written first is taken back, and the row this call created is removed', async (code, retryable) => {
     const w = await createUploaderWorld();
     const result = await stubbed(w, code, retryable)(INSPECTION, null).upload(photo('p1'));
     expect(result.ok).toBe(false);
     expect('kept' in result).toBe(false);
-    expect(w.docCalls).toEqual([]);
+    // One call wrote the entry before the upload, the other took it back: the document ends as it began.
+    expect(w.docCalls).toEqual([INSPECTION, INSPECTION]);
     expect(photosOf(w.doc, FK)).toEqual([]);
     expect(await rowStates(w)).toEqual([]);
   });
 
-  it('a block that begins during the upload keeps the row and writes nothing to the document', async () => {
+  it('a block that begins during the upload keeps the row and the entry written before it, and writes nothing more to the document', async () => {
     const w = await createUploaderWorld();
     const result = await stubbed(w, 'BLOCKED', false)(INSPECTION, null).upload(photo('p1'));
     expect(result).toStrictEqual({ ok: false, error: MESSAGES.blocked });
     expect(await rowStates(w)).toEqual([['p1', 'pending', 0]]);
-    expect(w.docCalls).toEqual([]);
-    expect(photosOf(w.doc, FK)).toEqual([]);
+    // Only the entry written before the upload started: nothing is written, swapped or taken back once the block is known.
+    expect(w.docCalls).toEqual([INSPECTION]);
+    expect(photosOf(w.doc, FK)).toEqual([PENDING('p1')]);
   });
 
-  it('control: a success removes the row, appends nothing and does not say kept', async () => {
+  it('control: a success removes the row, leaves the key (not a pending entry) in the document and does not say kept', async () => {
     const w = await createUploaderWorld();
     const result = await w.factory(INSPECTION, null).upload(photo('p1'));
     expect(result).toStrictEqual({ ok: true, key: keyFor('p1') });
     expect(await rowStates(w)).toEqual([]);
-    expect(w.docCalls).toEqual([]);
-    expect(photosOf(w.doc, FK)).toEqual([]);
+    // One call wrote the entry before the upload, the other swapped it for the key.
+    expect(w.docCalls).toEqual([INSPECTION, INSPECTION]);
+    expect(photosOf(w.doc, FK)).toEqual([{ key: keyFor('p1'), mediaType: 'photo' }]);
   });
 
   it('the row exists before the document is asked for the entry', async () => {
@@ -127,7 +130,8 @@ describe('a failed online upload of an item photo keeps the original', () => {
     };
     const result = await createUploaderFactory({ ...w.deps, withDoc })(INSPECTION, null).upload(photo('p1'));
     expect(result.ok).toBe(false);
-    expect(seen).toEqual(['failed']);
+    // The entry is written before the upload starts, so the row has not been tried yet.
+    expect(seen).toEqual(['pending']);
   });
 
   it('uses the item id of the record: a key whose last part is another item is refused and nothing is written', async () => {
@@ -297,7 +301,9 @@ describe('when the entry cannot be written the bytes stay and the answer does no
     w.docFailure.error = new MediaError('BLOCKED');
     const result = await w.factory(INSPECTION, null).upload(photo('p1'));
     expect(result).toStrictEqual({ ok: false, error: MESSAGES.blocked });
-    expect(await rowStates(w)).toEqual([['p1', 'failed', 1]]);
+    // Blocked while the entry is written first: nothing is uploaded, and the row is left as it was stored.
+    expect(w.nativeCalls).toEqual([]);
+    expect(await rowStates(w)).toEqual([['p1', 'pending', 0]]);
     expect(w.errors).toEqual([]);
   });
 
