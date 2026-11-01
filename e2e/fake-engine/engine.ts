@@ -17,6 +17,8 @@ export interface RendererEngine {
   completedCounts: Map<string, number>;
   /** Date.now() of every delivered 2xx upload response, in order. */
   completedAt: number[];
+  /** Every ACCEPTED `POST /api/inspections/insp-7/cover`: the source photo key, the crop JSON and the size of the baked image. Refusals are not recorded. */
+  covers: Array<{ sourceKey: string; crop: string; bytes: number }>;
   /** While true the engine behaves like an unreachable host: every open connection is destroyed and new ones are reset at once. */
   setUnavailable(value: boolean): void;
   /** Request-body read failures that were NOT a connection abort. Specs should expect this to stay empty. */
@@ -67,6 +69,27 @@ function multipartFile(body: Buffer, contentType: string | undefined): Buffer | 
   return body.subarray(fileStart, fileEnd);
 }
 
+/** Every part of a multipart body: its field name and bytes. Enough for the cover form (an image file plus two text fields). */
+function multipartParts(body: Buffer, contentType: string | undefined): Map<string, Buffer> | null {
+  const boundary = /(?:^|;)\s*boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType ?? '');
+  const value = boundary?.[1] ?? boundary?.[2]?.trim();
+  if (!value) return null;
+  const parts = new Map<string, Buffer>();
+  const delimiter = Buffer.from(`--${value}`);
+  let at = body.indexOf(delimiter);
+  while (at >= 0) {
+    const start = at + delimiter.length;
+    if (body.subarray(start, start + 2).toString('latin1') === '--') break;
+    const headersEnd = body.indexOf(Buffer.from('\r\n\r\n'), start);
+    const next = body.indexOf(delimiter, headersEnd + 4);
+    if (headersEnd < 0 || next < 0) return null;
+    const name = /name="([^"]*)"/i.exec(body.subarray(start, headersEnd).toString('latin1'))?.[1];
+    if (name !== undefined) parts.set(name, body.subarray(headersEnd + 4, next - 2));
+    at = next;
+  }
+  return parts;
+}
+
 /** Loopback engine for renderer visual QA and the real Diagnostics check path. */
 export async function startRendererEngine(options: RendererEngineOptions = {}): Promise<RendererEngine> {
   let url = '';
@@ -76,6 +99,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const connections = new Set<Socket>();
   const completedCounts = new Map<string, number>();
   const completedAt: number[] = [];
+  const covers: Array<{ sourceKey: string; crop: string; bytes: number }> = [];
   const errors: string[] = [];
   let unavailable = false;
   const uploads = new Map<string, Buffer>();
@@ -157,6 +181,21 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       if (!authorized) { response.writeHead(401).end(); return; }
       if (stored === undefined) { response.writeHead(404).end(); return; }
       response.writeHead(200, { 'content-type': key.endsWith('.png') ? 'image/png' : 'image/jpeg', 'content-length': stored.length }).end(stored);
+      return;
+    }
+    if (request.method === 'POST' && route === '/api/inspections/insp-7/cover') {
+      // Like the real route (POST /{id}/cover): needs the Bearer session; 400 when the image is missing or the source key is
+      // not a photo of this inspection; 413 over 10 MiB. The answer carries the stored key as `coverImageKey`.
+      if (request.headers.authorization !== 'Bearer renderer-access-token') { request.resume(); json({ success: false }, 401); return; }
+      void readBody(request).then((raw) => {
+        const parts = multipartParts(raw, request.headers['content-type']);
+        const image = parts?.get('image');
+        const sourceKey = parts?.get('sourceKey')?.toString('utf8') ?? '';
+        if (image !== undefined && image.length > 10 * 1024 * 1024) { json({ success: false }, 413); return; }
+        if (image === undefined || image.length === 0 || !uploads.has(sourceKey)) { json({ success: false }, 400); return; }
+        covers.push({ sourceKey, crop: parts?.get('crop')?.toString('utf8') ?? '', bytes: image.length });
+        json({ success: true, data: { coverImageKey: `renderer-tenant/inspections/insp-7/covers/${covers.length}.jpg` } });
+      });
       return;
     }
     if (request.method === 'POST' && route === '/api/inspections/insp-7/media/upload-url') {
@@ -248,7 +287,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   if (!address || typeof address === 'string') throw new Error('renderer-engine-listen-failed');
   const host = options.host === undefined || options.host === '0.0.0.0' ? '127.0.0.1' : options.host === '::' ? '::1' : options.host;
   url = `http://${host.includes(':') ? `[${host}]` : host}:${address.port}`;
-  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, photoRequests, completedCounts, completedAt, errors, setUnavailable(value) {
+  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, photoRequests, completedCounts, completedAt, covers, errors, setUnavailable(value) {
     unavailable = value;
     if (value) for (const socket of connections) socket.destroy();
   }, setUploadDelay(ms) { uploadDelayMs = Math.max(0, ms); }, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {

@@ -195,4 +195,28 @@ describe('standalone fake engine', () => {
     const photo = await fetch(`${origin}/api/inspections/insp-7/photo?key=${encodeURIComponent(slot.key)}`, { headers: { authorization: 'Bearer renderer-access-token' } });
     expect(await photo.text()).toBe('JPEGBYTES');
   });
+
+  it('cover path: a crop of an uploaded photo returns a cover key; no image, a foreign source key, a missing session and an oversized image are refused like the real route', async () => {
+    const { origin, control } = await start();
+    const slotResponse = await post(`${origin}/api/inspections/insp-7/media/upload-url`, { pendingId: 'p1', contentType: 'image/jpeg' });
+    const slot = ((await slotResponse.json()) as { data: { url: string; key: string } }).data;
+    const { type, body } = multipart('JPEGBYTES');
+    expect((await fetch(slot.url, { method: 'POST', headers: { 'content-type': type }, body })).status).toBe(201);
+    const form = (fields: Record<string, string | Blob>) => { const f = new FormData(); for (const [k, v] of Object.entries(fields)) { if (typeof v === 'string') f.append(k, v); else f.append(k, v, 'cover.jpg'); } return f; };
+    const session = { authorization: 'Bearer renderer-access-token' };
+    const send = (fields: Record<string, string | Blob>, headers: Record<string, string> = session) => fetch(`${origin}/api/inspections/insp-7/cover`, { method: 'POST', headers, body: form(fields) });
+    const jpeg = new Blob(['COVERBYTES'], { type: 'image/jpeg' });
+    const ok = await send({ image: jpeg, sourceKey: slot.key, crop: '{"x":0}' });
+    expect(ok.status).toBe(200);
+    const key = ((await ok.json()) as { data: { coverImageKey: string } }).data.coverImageKey;
+    expect(key).toMatch(/^renderer-tenant\/inspections\/insp-7\/covers\/.+\.jpg$/);
+    expect((await send({ sourceKey: slot.key, crop: '{}' })).status).toBe(400);
+    expect((await send({ image: new Blob([]), sourceKey: slot.key, crop: '{}' })).status).toBe(400);
+    expect((await send({ image: jpeg, sourceKey: 'renderer-tenant/inspections/other/photos/x.jpg', crop: '{}' })).status).toBe(400);
+    expect((await send({ image: jpeg, sourceKey: slot.key, crop: '{}' }, {})).status).toBe(401);
+    expect((await send({ image: new Blob([new Uint8Array(10 * 1024 * 1024 + 1)]), sourceKey: slot.key, crop: '{}' })).status).toBe(413);
+    const state = (await (await fetch(`${control}/__test__/state`)).json()) as { covers: Array<{ sourceKey: string; crop: string; bytes: number }> };
+    // Only the one accepted request is recorded: a refusal must not look like a saved cover.
+    expect(state.covers).toEqual([{ sourceKey: slot.key, crop: '{"x":0}', bytes: 10 }]);
+  });
 });
