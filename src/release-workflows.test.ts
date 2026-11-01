@@ -1064,6 +1064,8 @@ describe('CI iOS simulator job', () => {
 
   it('runs the smoke script on the built app after the build, and keeps its screenshots for 7 days even when it fails', () => {
     const smokeAt = runs.findIndex((r) => r.includes('scripts/ios-simulator-smoke.sh'));
+    // A script committed from Windows is not executable in git (the first CI run failed with 'Permission denied'): call it through bash.
+    expect(runs[smokeAt]).toMatch(/^bash scripts\/ios-simulator-smoke\.sh /);
     expect(smokeAt).toBeGreaterThan(runs.findIndex((r) => r.includes('iphonesimulator')));
     const upload = (sim?.steps ?? []).find((s) => s.uses?.startsWith('actions/upload-artifact@'));
     expect(upload?.if).toBe('always()');
