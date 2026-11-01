@@ -84,6 +84,7 @@ save_app_log() {
   if grep -q 'BackupExclusion failed' "$OUT/${label}.log"; then fail "$label: BackupExclusion.apply reported a failure (see the log above)"; fi
   # Control first: a capture that saw nothing proves nothing. Capacitor prints lines of its own while it loads, so an empty
   # capture means the capture is blind (or logging is off in this build) and a green result would be meaningless.
+  tr -d '\r\004' < "$OUT/${label}.typescript" 2>/dev/null | sed 's/^\^D//' > "$OUT/${label}.console" || true
   echo "--- $label: what the app printed to stdout/stderr ($(wc -l < "$OUT/${label}.console" | tr -d ' ') lines; full: ${label}.console) ---"
   head -40 "$OUT/${label}.console" || true
   [ -s "$OUT/${label}.console" ] || fail "$label: nothing was captured from the app's stdout/stderr, so this check cannot see its errors"
@@ -107,11 +108,18 @@ smoke_device() {
   xcrun simctl install "$udid" "$APP_PATH"
   # The app's JavaScript console reaches the native side through Swift print() on stdout, not the unified log that
   # `log show` reads. Redirected to a FILE, stdout is block-buffered and stays empty until the buffer fills (runs 41266804318
-  # and 41267660047 captured 0 bytes of it), so the app is launched with a PTY, which makes stdout line-buffered.
-  xcrun simctl launch --console-pty "$udid" "$APP_ID" > "$OUT/${label}.console" 2>&1 &
+  # and 41267660047 captured 0 bytes of it), so the app gets a PTY (--console-pty), which makes its stdout line-buffered.
+  # simctl itself needs a terminal for that and CI has none (run 41268388426: the backgrounded launcher died silently and the
+  # app never started), so it runs under script(1), whose -F flushes the capture after every write instead of at exit.
+  script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty "$udid" "$APP_ID" > /dev/null 2>&1 &
   LAUNCH_PID=$!
   sleep "$SETTLE_SECONDS"
-  app_is_running "$udid" || fail "$label: the app is not running $SETTLE_SECONDS seconds after launch"
+  tr -d '\r\004' < "$OUT/${label}.typescript" 2>/dev/null | sed 's/^\^D//' > "$OUT/${label}.console" || true
+  if ! app_is_running "$udid"; then
+    echo "--- $label: what simctl launch printed ---"
+    cat "$OUT/${label}.console" 2>/dev/null || true
+    fail "$label: the app is not running $SETTLE_SECONDS seconds after launch"
+  fi
   echo "ok: $label: the app is still running after launch"
 
   xcrun simctl io "$udid" screenshot "$OUT/${label}.png"
