@@ -10,7 +10,8 @@
 #   4. require com.apple.MobileBackup on every directory listed in ios/App/App/BackupExclusion.swift
 #   5. save one screenshot per device
 # Nothing here signs in, talks to a server or uses a secret.
-set -euo pipefail
+# -E: functions inherit the ERR trap, otherwise a failure inside smoke_device prints no log tail at all.
+set -Eeuo pipefail
 
 APP_ID="io.inspectorhub.app"
 APP_PATH="${1:?usage: ios-simulator-smoke.sh <path to App.app> [output directory]}"
@@ -62,7 +63,26 @@ app_is_running() {
   [ -n "$line" ] && ! printf '%s' "$line" | awk '{print $1}' | grep -qx -- '-'
 }
 
-has_backup_attribute() { xattr -p com.apple.MobileBackup "$1" >/dev/null 2>&1; }
+# Which extended attribute marks "excluded from backup" is NOT assumed: the legacy key is com.apple.MobileBackup, and
+# URLResourceValues.isExcludedFromBackup is documented to write its own metadata attribute. The first CI run found the
+# legacy one missing, so both are accepted and every attribute is printed; narrow this once a run shows which one is real.
+BACKUP_ATTRIBUTES=("com.apple.MobileBackup" "com.apple.metadata:com_apple_backup_excludeItem")
+has_backup_attribute() {
+  local attribute
+  for attribute in "${BACKUP_ATTRIBUTES[@]}"; do
+    if xattr -p "$attribute" "$1" >/dev/null 2>&1; then return 0; fi
+  done
+  return 1
+}
+
+# Everything the app logged since launch, kept as an artifact, with the lines that matter printed.
+save_app_log() {
+  local label="$1" udid="$2"
+  xcrun simctl spawn "$udid" log show --last 10m --info --debug --predicate 'process == "App"' > "$OUT/${label}.log" 2>&1 || true
+  echo "--- $label: app log lines about errors, storage, keychain or backup exclusion (full log: ${label}.log) ---"
+  grep -iE 'error|fail|sqlite|keychain|secret|BackupExclusion|entitlement' "$OUT/${label}.log" | tail -60 || echo "(none)"
+  if grep -q 'BackupExclusion failed' "$OUT/${label}.log"; then fail "$label: BackupExclusion.apply reported a failure (see the log above)"; fi
+}
 
 smoke_device() {
   local label="$1" udid="$2"
@@ -88,6 +108,12 @@ smoke_device() {
   data="$(xcrun simctl get_app_container "$udid" "$APP_ID" data)"
   echo "--- $label: Library ---"
   ls -la "$data/Library"
+  save_app_log "$label" "$udid"
+  local shown
+  for shown in $BACKUP_DIRS; do
+    echo "--- $label: extended attributes of Library/$shown ---"
+    xattr -l "$data/Library/$shown" || true
+  done
   # Control: a directory nobody marked must NOT carry the attribute, otherwise the check below could never fail.
   local control="$data/Library/smoke-control-$$"
   mkdir -p "$control"

@@ -1082,6 +1082,6 @@ describe('CI iOS simulator job', () => {
     // A check that cannot fail proves nothing: it must also prove the attribute is absent on an untouched directory.
     expect(smokeScript).toMatch(/control/i);
     expect(smokeScript.startsWith('#!/usr/bin/env bash')).toBe(true);
-    expect(smokeScript).toContain('set -euo pipefail');
+    expect(smokeScript).toContain('set -Eeuo pipefail');
   });
 });
