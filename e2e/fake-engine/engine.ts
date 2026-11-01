@@ -19,6 +19,8 @@ export interface RendererEngine {
   completedAt: number[];
   /** Every ACCEPTED `POST /api/inspections/insp-7/cover`: the source photo key, the crop JSON and the size of the baked image. Refusals are not recorded. */
   covers: Array<{ sourceKey: string; crop: string; bytes: number }>;
+  /** Every accepted `POST /api/client/import`: what reached the engine, so a spec can compare it with the file it sent. */
+  imports: Array<{ contentLength: number | null; byteLength: number; sha256: string; elapsedMs: number; inspections: number }>;
   /** While true the engine behaves like an unreachable host: every open connection is destroyed and new ones are reset at once. */
   setUnavailable(value: boolean): void;
   /** Request-body read failures that were NOT a connection abort. Specs should expect this to stay empty. */
@@ -107,6 +109,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const uploads = new Map<string, Buffer>();
   const uploadCounts = new Map<string, number>();
   const uploadContentLengths: Array<number | null> = [];
+  const imports: RendererEngine['imports'] = [];
   const photoRequests: Array<{ key: string; w: string | null; authorized: boolean }> = [];
   const activeUploadResponses = new Set<import('node:http').ServerResponse>();
   const uploadTokens = new Map<string, string>();
@@ -248,6 +251,28 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       json({ success: true, data: { ticket: 'renderer-collab-ticket-1234' } });
       return;
     }
+    if (request.method === 'POST' && route === '/api/client/import') {
+      // Like the real route: needs the Bearer session, application/zip and a Content-Length. The body is read whole and only
+      // measured (declared length, bytes read, sha256, time); the answer confirms every inspection in the package.
+      if (request.headers.authorization !== 'Bearer renderer-access-token') { request.resume(); json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Sign in required' } }, 401); return; }
+      if (!/^application\/zip\s*(;|$)/i.test(request.headers['content-type'] ?? '')) { request.resume(); json({ success: false, error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'application/zip required' } }, 415); return; }
+      const declared = request.headers['content-length'];
+      if (declared === undefined) { request.resume(); json({ success: false, error: { code: 'LENGTH_REQUIRED', message: 'Content-Length required' } }, 411); return; }
+      const started = performance.now();
+      void readBody(request).then(async (zip) => {
+        const elapsedMs = Math.round(performance.now() - started);
+        const { readPackageSummary } = await import('@inspectorhub/offline-package');
+        const { counts } = readPackageSummary(new Uint8Array(zip.buffer, zip.byteOffset, zip.byteLength));
+        imports.push({ contentLength: Number(declared), byteLength: zip.length, sha256: createHash('sha256').update(zip).digest('hex'), elapsedMs, inspections: counts.inspections });
+        json({ success: true, data: { inspections: counts.inspections, photos: counts.photos, outbox: { applied: counts.writes, skipped: 0, failed: [] }, yjs: { changed: counts.inspections, unchanged: 0 } } });
+      }).catch((error: unknown) => {
+        // A connection destroyed mid-body is an aborted attempt; anything else (an unreadable package included) is recorded, not hidden.
+        const text = error instanceof Error ? `${(error as NodeJS.ErrnoException).code ?? ''} ${error.message}` : String(error);
+        if (!/ECONNRESET|aborted|premature close/i.test(text)) errors.push(`import: ${text}`);
+        if (!response.headersSent && !response.destroyed) json({ success: false, error: { code: 'INVALID_PACKAGE', message: 'unreadable package' } }, 400);
+      });
+      return;
+    }
     if (request.method === 'POST' && route === '/api/client/inspections/visible') {
       void readBody(request).then((raw) => {
         const body = JSON.parse(raw.toString('utf8')) as { ids?: unknown };
@@ -290,7 +315,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   if (!address || typeof address === 'string') throw new Error('renderer-engine-listen-failed');
   const host = options.host === undefined || options.host === '0.0.0.0' ? '127.0.0.1' : options.host === '::' ? '::1' : options.host;
   url = `http://${host.includes(':') ? `[${host}]` : host}:${address.port}`;
-  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, photoRequests, completedCounts, completedAt, covers, errors, setUnavailable(value) {
+  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, imports, photoRequests, completedCounts, completedAt, covers, errors, setUnavailable(value) {
     unavailable = value;
     if (value) for (const socket of connections) socket.destroy();
   }, setUploadDelay(ms) { uploadDelayMs = Math.max(0, ms); }, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {

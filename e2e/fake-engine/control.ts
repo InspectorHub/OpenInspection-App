@@ -44,6 +44,7 @@ export async function startControlServer(engine: RendererEngine): Promise<Contro
         completedCounts: Object.fromEntries(engine.completedCounts),
         photoRequests: engine.photoRequests,
         covers: engine.covers,
+        imports: engine.imports,
         activeUploadCount: engine.activeUploadCount,
         errors: engine.errors,
       });

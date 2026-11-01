@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { makePackage } from '../../src/offline/test-support/import-fixtures';
 
 const serve = fileURLToPath(new URL('./serve.mjs', import.meta.url));
 let child: ChildProcess | undefined;
@@ -235,5 +237,20 @@ describe('standalone fake engine', () => {
     const state = (await (await fetch(`${control}/__test__/state`)).json()) as { covers: Array<{ sourceKey: string; crop: string; bytes: number }> };
     // Only the one accepted request is recorded: a refusal must not look like a saved cover.
     expect(state.covers).toEqual([{ sourceKey: slot.key, crop: '{"x":0}', bytes: 10 }]);
+  });
+  it('import path: refuses without a session, without application/zip and without a length, then records the bytes it read and confirms every inspection', async () => {
+    const { origin, control } = await start();
+    const { zip, summary } = makePackage({ tenantId: 'renderer-tenant', inspections: 3, photos: { 0: 2 }, updates: { 1: 1 } });
+    const send = (headers: Record<string, string>) => fetch(`${origin}/api/client/import`, { method: 'POST', headers, body: Buffer.from(zip) });
+    expect((await send({ 'content-type': 'application/zip' })).status).toBe(401);
+    expect((await send({ authorization: 'Bearer renderer-access-token', 'content-type': 'application/json' })).status).toBe(415);
+    const answer = await send({ authorization: 'Bearer renderer-access-token', 'content-type': 'application/zip' });
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ success: true, data: { inspections: 3, photos: 2, outbox: { applied: summary.counts.writes, skipped: 0, failed: [] }, yjs: { changed: 3, unchanged: 0 } } });
+    const state = (await (await fetch(`${control}/__test__/state`)).json()) as { imports: Array<{ contentLength: number; byteLength: number; sha256: string; elapsedMs: number; inspections: number }>; errors: string[] };
+    expect(state.imports).toHaveLength(1);
+    expect(state.imports[0]).toMatchObject({ contentLength: zip.byteLength, byteLength: zip.byteLength, sha256: createHash('sha256').update(zip).digest('hex'), inspections: 3 });
+    expect(state.imports[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(state.errors).toEqual([]);
   });
 });
