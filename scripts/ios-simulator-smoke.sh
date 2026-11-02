@@ -103,21 +103,26 @@ save_app_log() {
 # while it boots (CI runs 41363127461 for the iPad and 41365341593 for the iPhone), and it still exits 0: the script then went on
 # and failed later with "the app is not running", which blames the app for a runner problem. So its output is read.
 #
-# A plain shutdown and boot was not enough (run 41372183809): the shutdown itself hung for 75 s, and the second boot then printed
-# "Device already booted" for a simulator that never ran the app (not running 72 s after launch, empty app log). So a failed boot
-# resets CoreSimulator as a whole before the next attempt (shutdown all, restart the service, erase the device), and a boot only
-# counts once the simulator answers a command, not when bootstatus stops talking. Three attempts, then it says plainly that it is
-# the simulator.
+# What the runs show (41372183809, whose retry passed, against 41374220395, whose reset failed six times out of six): when bootstatus
+# reports Status=4294967295 after 1 to 2 minutes it has given up WAITING, not the boot: the simulator keeps booting, and the next
+# `simctl boot` printed "Device already booted" on a simulator that then ran the app and passed. Shutting it down, restarting
+# CoreSimulatorService and erasing it (the first version of this retry) interrupted exactly that boot and started the slow boot over,
+# three times. So a boot that bootstatus gave up on is left alone and waited for until the simulator answers a command; only a
+# simulator that stays silent for the whole wait is reset and booted again. Three attempts, then it says plainly that it is the
+# simulator.
 boot_simulator() {
   local label="$1" udid="$2" attempt out
   for attempt in 1 2 3; do
     xcrun simctl boot "$udid" 2>/dev/null || true
     out="$(xcrun simctl bootstatus "$udid" -b 2>&1)" || true
     printf '%s\n' "$out" | tail -3
-    if ! printf '%s' "$out" | grep -q 'Status=4294967295' && simulator_answers "$udid"; then
-      return 0
+    if ! printf '%s' "$out" | grep -q 'Status=4294967295'; then
+      simulator_answers "$udid" 30 && return 0
+    else
+      echo "::warning::$label: bootstatus gave up (attempt $attempt of 3); leaving the boot alone and waiting for the simulator to answer"
+      simulator_answers "$udid" 240 && return 0
     fi
-    echo "::warning::$label: the simulator did not come up (attempt $attempt of 3); resetting CoreSimulator"
+    echo "::warning::$label: the simulator never answered (attempt $attempt of 3); resetting CoreSimulator"
     xcrun simctl shutdown all 2>/dev/null || true
     killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
     sleep 5
@@ -127,12 +132,12 @@ boot_simulator() {
 }
 
 # True once the booted simulator runs a command: `launchctl list` inside it is what app_is_running relies on later, so a simulator
-# that cannot answer it cannot be tested however "booted" it claims to be. Gives it up to 30 s.
+# that cannot answer it cannot be tested however "booted" it claims to be. simulator_answers <udid> <seconds to wait>.
 simulator_answers() {
   local waited=0
   until xcrun simctl spawn "$1" launchctl list > /dev/null 2>&1; do
     waited=$((waited + 3))
-    [ "$waited" -lt 30 ] || return 1
+    [ "$waited" -lt "$2" ] || return 1
     sleep 3
   done
 }
