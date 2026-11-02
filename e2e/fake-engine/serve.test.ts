@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makePackage } from '../../src/offline/test-support/import-fixtures';
@@ -252,5 +254,17 @@ describe('standalone fake engine', () => {
     expect(state.imports[0]).toMatchObject({ contentLength: zip.byteLength, byteLength: zip.byteLength, sha256: createHash('sha256').update(zip).digest('hex'), inspections: 3 });
     expect(state.imports[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(state.errors).toEqual([]);
+  });
+  it('--tls-cert and --tls-key serve HTTPS (the announced origin is https and the certificate is the one given); one without the other is refused', async () => {
+    const cert = fileURLToPath(new URL('../../e2e-electron/fixtures/loopback-cert.pem', import.meta.url));
+    const key = fileURLToPath(new URL('../../e2e-electron/fixtures/loopback-key.pem', import.meta.url));
+    const { origin } = await start(['--tls-cert', cert, '--tls-key', key]);
+    expect(origin.startsWith('https://127.0.0.1:')).toBe(true);
+    const status = await new Promise<number>((resolve, reject) => {
+      httpsRequest(`${origin}/api/client/compat`, { ca: readFileSync(cert) }, (res) => { res.resume(); resolve(res.statusCode ?? 0); }).on('error', reject).end();
+    });
+    expect(status).toBe(200);
+    await stop();
+    await expect(start(['--tls-cert', cert])).rejects.toThrow(/go together/);
   });
 });

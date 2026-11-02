@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 
@@ -39,6 +40,8 @@ export interface RendererEngineOptions {
   port?: number;
   /** Further origins echoed in CORS, on top of ALLOWED_ORIGINS (a dev bundle served from the host, for example). */
   extraAllowedOrigins?: string[];
+  /** Serve HTTPS instead of HTTP (a packaged desktop build only connects to https). The caller owns the certificate. */
+  tls?: { cert: string | Buffer; key: string | Buffer };
 }
 
 /** Origins the clients send: Electron and Android Capacitor (https://localhost), iOS Capacitor (capacitor://localhost), a plain-http dev shell. Anything else gets no ACAO header. */
@@ -115,7 +118,8 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const uploadTokens = new Map<string, string>();
   const compatibility = { minSupported: null as string | null, recommended: null as string | null, downloadUrl: null as string | null };
   const allowedOrigins = [...ALLOWED_ORIGINS, ...(options.extraAllowedOrigins ?? [])];
-  const server: Server = createServer((request, response) => {
+  const scheme = options.tls === undefined ? 'http' : 'https';
+  const server: Server | HttpsServer = (options.tls === undefined ? createServer() : createHttpsServer(options.tls)).on('request', (request, response) => {
     const requestOrigin = request.headers.origin;
     if (typeof requestOrigin === 'string' && allowedOrigins.includes(requestOrigin)) response.setHeader('Access-Control-Allow-Origin', requestOrigin);
     response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-client-platform,x-client-version');
@@ -124,7 +128,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     response.setHeader('Vary', 'Origin');
     if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
     // Absolute URLs handed to clients follow the Host the client used (127.0.0.1, 10.0.2.2, localhost), so one engine serves every emulator.
-    const origin = request.headers.host ? `http://${request.headers.host}` : url;
+    const origin = request.headers.host ? `${scheme}://${request.headers.host}` : url;
     const route = new URL(request.url ?? '/', url).pathname;
     requests.push(`${request.method ?? 'GET'} ${route}`);
     const json = (body: unknown, status = 200) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
@@ -314,7 +318,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('renderer-engine-listen-failed');
   const host = options.host === undefined || options.host === '0.0.0.0' ? '127.0.0.1' : options.host === '::' ? '::1' : options.host;
-  url = `http://${host.includes(':') ? `[${host}]` : host}:${address.port}`;
+  url = `${scheme}://${host.includes(':') ? `[${host}]` : host}:${address.port}`;
   return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, imports, photoRequests, completedCounts, completedAt, covers, errors, setUnavailable(value) {
     unavailable = value;
     if (value) for (const socket of connections) socket.destroy();

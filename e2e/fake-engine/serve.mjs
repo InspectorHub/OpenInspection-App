@@ -2,12 +2,13 @@
 // Standalone fake engine for native E2E: Electron, Android emulator (10.0.2.2) and iOS simulator (localhost).
 // Plain Node >= 22.18 (built-in TypeScript type stripping), no build step, no dependencies.
 //
-//   node e2e/fake-engine/serve.mjs [--host 127.0.0.1] [--port 0] [--scenario default|inspection] [--upload-delay-ms N] [--allow-origin <origin>]...
+//   node e2e/fake-engine/serve.mjs [--host 127.0.0.1] [--port 0] [--scenario default|inspection] [--upload-delay-ms N] [--allow-origin <origin>]... [--tls-cert <pem> --tls-key <pem>]
 //
 // Prints exactly one JSON line on stdout when ready: {"origin":"http://host:port","control":"http://127.0.0.1:port"}
 // (origin uses 127.0.0.1 when bound to 0.0.0.0; the emulator reaches the same server as http://10.0.2.2:port).
 // Test-only controls live on the separate loopback `control` origin under /__test__/ (see control.ts).
 // SIGINT/SIGTERM close both servers and exit 0.
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 
 // The engine and control modules are TypeScript; Node strips types natively from 22.18. Check before importing them.
@@ -27,6 +28,8 @@ const { values } = parseArgs({
     scenario: { type: 'string', default: 'default' },
     'upload-delay-ms': { type: 'string', default: '0' },
     'allow-origin': { type: 'string', multiple: true, default: [] },
+    'tls-cert': { type: 'string' },
+    'tls-key': { type: 'string' },
   },
 });
 
@@ -59,7 +62,14 @@ if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(values.host)) {
 `);
 }
 
-const engine = await startRendererEngine({ ...scenario, host: values.host, port, uploadDelayMs, extraAllowedOrigins: extraOrigins });
+// HTTPS for a client that refuses plain http (a packaged desktop build). Both files or neither; the certificate is the caller's.
+if ((values['tls-cert'] === undefined) !== (values['tls-key'] === undefined)) {
+  process.stderr.write('--tls-cert and --tls-key go together\n');
+  process.exit(2);
+}
+const tls = values['tls-cert'] === undefined || values['tls-key'] === undefined ? undefined : { cert: readFileSync(values['tls-cert']), key: readFileSync(values['tls-key']) };
+
+const engine = await startRendererEngine({ ...scenario, host: values.host, port, uploadDelayMs, extraAllowedOrigins: extraOrigins, ...(tls === undefined ? {} : { tls }) });
 const control = await startControlServer(engine);
 
 let closing = false;
