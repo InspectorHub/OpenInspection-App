@@ -66,9 +66,16 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
     expect(r.out).toContain('RESULT=booted');
     expect(r.out).toContain('no SpringBoard line with a pid showed up');
     expect(r.out).toContain('com.apple.something'); // the whole list, so the next log shows the real label
-    // It did wait, it did not return on the first answer: that is several probes, not a number of seconds (the grace period counts whole
-    // seconds of the clock, so how much real time passes can be less than one).
-    expect(r.calls.filter((c) => c.includes('launchctl list')).length).toBeGreaterThan(2);
+    expect(resets(r.calls)).toEqual([]);
+  });
+
+  it('answering is not enough: SpringBoard that shows up at the 5th probe is waited for, and the function returns on THAT probe, not on the first answer', () => {
+    // Decided by the scenario, not by the clock: no machine speed can change how many probes there were.
+    const r = run(boot, { LIST: 'none', SPRINGBOARD_AFTER: '4', SMOKE_SPRINGBOARD_GRACE: '60', SMOKE_ANSWER_QUICK: '120' });
+    expect(r.out).toContain('RESULT=booted');
+    expect(r.out).toContain('ok: iphone: SpringBoard is listed as: 123 0 com.apple.SpringBoard');
+    expect(r.out).not.toContain('no SpringBoard line');
+    expect(r.calls.filter((c) => c.includes('launchctl list'))).toHaveLength(5);
     expect(resets(r.calls)).toEqual([]);
   });
 

@@ -52,9 +52,11 @@ adb exec-out screencap -p > "$OUT/screen.png"
 
 # The WebView's accessibility tree is built the first time something asks for it, so the first dump can hold only the native shell
 # (run 41295240990: 7 nodes, no text, while the screenshot taken just before showed the screen). Ask again until the text is there.
+# 15 looks by default; a test that runs this whole script against a stand-in adb sets fewer, because every stand-in call is a process.
+MAX_UI_ATTEMPTS="${SMOKE_UI_ATTEMPTS:-15}"
 attempts=0
 dismissed=0
-until [ "$attempts" -ge 15 ]; do
+until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]; do
   attempts=$((attempts + 1))
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null || true
   adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null

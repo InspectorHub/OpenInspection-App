@@ -8,6 +8,7 @@
 #   ANSWER_AFTER     the first N `launchctl list` probes fail, then it answers (default 0)
 #   NEVER_ANSWER     set: `launchctl list` never answers
 #   LIST             springboard (default) | none: whether the answer lists SpringBoard with a pid
+#   SPRINGBOARD_AFTER with LIST=none: SpringBoard is listed from the probe after this many (a SpringBoard that shows up late)
 #   APP_UP_AT_LAUNCH the app process exists once this many launches were started (0 = never)
 #   APP_DASH         set: the app is listed but with a dash instead of a pid (not running)
 #   CRASH_ON_LAUNCH  set: every launch leaves a crash report behind
@@ -45,7 +46,7 @@ xcrun() {
       n="$(counter probes)"
       [ -z "${NEVER_ANSWER:-}" ] || return 1
       [ "$n" -gt "${ANSWER_AFTER:-0}" ] || return 1
-      if [ "${LIST:-springboard}" = springboard ]; then printf '123\t0\tcom.apple.SpringBoard\n'; else printf -- '-\t0\tcom.apple.something\n'; fi
+      if [ "${LIST:-springboard}" = springboard ] || { [ -n "${SPRINGBOARD_AFTER:-}" ] && [ "$n" -gt "$SPRINGBOARD_AFTER" ]; }; then printf '123\t0\tcom.apple.SpringBoard\n'; else printf -- '-\t0\tcom.apple.something\n'; fi
       launches="$(cat "$STATE/launches" 2>/dev/null || echo 0)"
       if [ "${APP_UP_AT_LAUNCH:-0}" -gt 0 ] && [ "$launches" -ge "${APP_UP_AT_LAUNCH:-0}" ]; then
         if [ -n "${APP_DASH:-}" ]; then printf -- '-\t0\tUIKitApplication:%s[abcd]\n' "$APP_ID"; else printf '4242\t0\tUIKitApplication:%s[abcd]\n' "$APP_ID"; fi

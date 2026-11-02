@@ -110,9 +110,11 @@ describe.skipIf(process.platform !== 'win32')('registry guard', () => {
       const lockDir = tmp();
       let release: () => void = () => undefined;
       const gate = new Promise<void>((resolve) => { release = resolve; });
+      let changed: () => void = () => undefined;
+      const firstHasChangedTheKey = new Promise<void>((resolve) => { changed = resolve; });
       let secondRan = false;
-      const first = withRegistryGuard([SCRATCH_KEY], async () => { addValue('', 'Probe', 'changed by the first'); await gate; }, { backupDir: tmp(), lockDir, ...quiet });
-      await new Promise((r) => setTimeout(r, 300)); // the first has taken its backup and changed the key
+      const first = withRegistryGuard([SCRATCH_KEY], async () => { addValue('', 'Probe', 'changed by the first'); changed(); await gate; }, { backupDir: tmp(), lockDir, ...quiet });
+      await firstHasChangedTheKey; // its own signal: it has taken its backup and changed the key, however slowly this machine got there
       await expect(withRegistryGuard([SCRATCH_KEY], () => { secondRan = true; }, { backupDir: tmp(), lockDir, ...quiet })).rejects.toThrow(/in progress/);
       expect(secondRan).toBe(false);
       release();
@@ -200,10 +202,12 @@ describe.skipIf(process.platform !== 'win32')('registry guard', () => {
       const order: string[] = [];
       let release: () => void = () => undefined;
       const gate = new Promise<void>((resolve) => { release = resolve; });
-      const run = withRegistryGuard([SCRATCH_KEY], async () => { addValue('', 'Probe', 'changed by the run'); await gate; }, {
+      let changed: () => void = () => undefined;
+      const hasChangedTheKey = new Promise<void>((resolve) => { changed = resolve; });
+      const run = withRegistryGuard([SCRATCH_KEY], async () => { addValue('', 'Probe', 'changed by the run'); changed(); await gate; }, {
         ...own(), proc, onAbort: () => { order.push('onAbort'); },
       });
-      await new Promise((r) => setTimeout(r, 300));
+      await hasChangedTheKey;
       expect(dump()).not.toBe(before);
       proc.emit('SIGINT');
       // Synchronous: no await between the signal and this check, exactly what a process that is about to exit gets.

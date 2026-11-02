@@ -1410,8 +1410,10 @@ describe('Android emulator smoke workflow', () => {
   });
 
   it('reads the UI tree more than once: the first dump can hold only the native shell (run 41295240990: 7 nodes and no text, while the screenshot showed the screen)', () => {
-    const loop = /until \[ "\$attempts" -ge (\d+) \]/.exec(script);
-    expect(Number(loop?.[1])).toBeGreaterThanOrEqual(10);
+    // The DEFAULT budget stays generous (a test may set fewer, through SMOKE_UI_ATTEMPTS, to keep a whole-script run short), and the loop uses it.
+    const budget = /MAX_UI_ATTEMPTS="\$\{SMOKE_UI_ATTEMPTS:-(\d+)\}"/.exec(script);
+    expect(Number(budget?.[1])).toBeGreaterThanOrEqual(10);
+    expect(script).toContain('until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]');
     // The retry sits around the dump itself, and the checks on its result come after it.
     expect(script.indexOf('until [ "$attempts"')).toBeLessThan(script.indexOf('uiautomator dump'));
     expect(script.indexOf('uiautomator dump')).toBeLessThan(script.indexOf('after $attempts attempts'));
@@ -1515,7 +1517,7 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
       expect(text, name).toContain('dismiss_not_responding');
     }
     // In the smoke loop the dialog is checked BEFORE the app's own text, and the loop goes round again after a tap.
-    const loop = smoke.slice(smoke.indexOf('until [ "$attempts" -ge 15 ]'));
+    const loop = smoke.slice(smoke.indexOf('until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]'));
     expect(loop.indexOf('dismiss_not_responding')).toBeGreaterThan(0);
     expect(loop.indexOf('dismiss_not_responding')).toBeLessThan(loop.indexOf('Choose your server'));
     expect(loop).toMatch(/dismiss_not_responding "\$OUT\/ui\.xml"; then[\s\S]*?continue/);
@@ -1527,7 +1529,7 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(golden).toContain('settings put global hide_error_dialogs 1');
     expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('adb shell am start -n'));
     // After the loop, a last press is followed by one more look, so the checks read the screen and not the dialog that was pressed.
-    const after = smoke.slice(smoke.indexOf('until [ "$attempts" -ge 15 ]'));
+    const after = smoke.slice(smoke.indexOf('until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]'));
     expect(after).toContain('dismissed=1');
     expect(after.indexOf('if [ "$dismissed" -eq 1 ]')).toBeGreaterThan(after.indexOf('done'));
     expect(after.indexOf('if [ "$dismissed" -eq 1 ]')).toBeLessThan(after.indexOf('UI tree read in'));

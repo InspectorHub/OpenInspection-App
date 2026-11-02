@@ -2,14 +2,18 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 /**
  * The two Android emulator scripts are run WHOLE, with a stand-in adb, maestro and sleep first on PATH (source in fixtures/android-stubs),
  * and what is asserted is what they did: which adb calls, in which order, with which result. What this cannot show is how a real emulator
  * behaves: that is what the CI job shows. The dialog's real uiautomator tree is the fixture of CI run 41367506059.
  */
+// Every call to a stand-in is a process, and a hosted Windows runner starts them slowly: a whole-script run took 40 s there and 8 s here.
+vi.setConfig({ testTimeout: 120_000 });
 const ROOT = resolve(__dirname, '..', '..');
+// How many looks the smoke script takes before it gives up (its default is 15; fewer here, because each look costs several processes).
+const LOOKS = 3;
 const STUBS = join(__dirname, 'fixtures', 'android-stubs');
 const DIALOG = join(__dirname, 'fixtures', 'anr-pixel-launcher.ui.xml');
 const bashAvailable = spawnSync('bash', ['-c', 'true']).status === 0;
@@ -78,26 +82,26 @@ describe.skipIf(!bashAvailable)('android-emulator-smoke.sh, run whole against a 
   });
 
   it('a dialog that comes back for the whole budget: after the last press there is one more look, so the checks read the screen and not the dialog', () => {
-    const r = smoke({ UI_SEQUENCE: `${Array(15).fill('dialog').join(',')},app` });
+    const r = smoke({ UI_SEQUENCE: `${Array(LOOKS).fill('dialog').join(',')},app`, SMOKE_UI_ATTEMPTS: String(LOOKS) });
     expect(r.status).toBe(0);
-    expect(taps(r.calls)).toHaveLength(15);
-    expect(dumps(r.calls)).toBe(16); // 15 in the loop, 1 after it
+    expect(taps(r.calls)).toHaveLength(LOOKS);
+    expect(dumps(r.calls)).toBe(LOOKS + 1); // the looks in the loop, 1 after it
     expect(r.out).toContain('ok: the first screen is "Choose your server"');
   });
 
   it('control: the same dialog that is STILL there on the extra look is a failure with the honest message, not a pass', () => {
-    const r = smoke({ UI_SEQUENCE: 'dialog' });
+    const r = smoke({ UI_SEQUENCE: 'dialog', SMOKE_UI_ATTEMPTS: String(LOOKS) });
     expect(r.status).not.toBe(0);
-    expect(dumps(r.calls)).toBe(16);
+    expect(dumps(r.calls)).toBe(LOOKS + 1);
     expect(r.out).toMatch(/does not belong to io\.inspectorhub\.app|not in the UI tree/);
   });
 
-  it('a screen that never shows the first screen and no dialog: 15 looks, no tap, a failure naming the attempts', () => {
-    const r = smoke({ UI_SEQUENCE: 'blank' });
+  it('a screen that never shows the first screen and no dialog: every look is used, no tap, a failure naming the attempts', () => {
+    const r = smoke({ UI_SEQUENCE: 'blank', SMOKE_UI_ATTEMPTS: String(LOOKS) });
     expect(r.status).not.toBe(0);
-    expect(dumps(r.calls)).toBe(15);
+    expect(dumps(r.calls)).toBe(LOOKS);
     expect(taps(r.calls)).toEqual([]);
-    expect(r.out).toContain('is not in the UI tree after 15 attempts');
+    expect(r.out).toContain(`is not in the UI tree after ${String(LOOKS)} attempts`);
   });
 
   it('a FATAL EXCEPTION of the app fails the run; one of the test tooling does not', () => {
