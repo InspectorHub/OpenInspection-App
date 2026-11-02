@@ -1266,7 +1266,7 @@ describe('CI iOS simulator job', () => {
   });
 
   it('the smoke script checks what the plan promises: manifest, an iPhone and an iPad, URL routing, backup attribute, screenshots', () => {
-    for (const needle of ['plutil -lint', 'PrivacyInfo.xcprivacy', 'iPad', 'simctl openurl', 'com_apple_backup_excludeItem', 'storage open failed', 'script -q -F', '--console-pty', 'nothing was captured', 'simctl io', 'screenshot', 'get_app_container']) {
+    for (const needle of ['plutil -lint', 'PrivacyInfo.xcprivacy', 'iPad', 'simctl openurl', 'com_apple_backup_excludeItem', 'storage open failed', 'nothing was captured', 'simctl io', 'screenshot', 'get_app_container']) {
       expect(smokeScript, needle).toContain(needle);
     }
     // The directories it checks come from the Swift source, not from a second copy.
@@ -1275,6 +1275,9 @@ describe('CI iOS simulator job', () => {
     expect(smokeScript).toMatch(/control/i);
     expect(smokeScript.startsWith('#!/usr/bin/env bash')).toBe(true);
     expect(smokeScript).toContain('set -Eeuo pipefail');
+    // The launch keeps its PTY (block-buffered stdout otherwise), now in the library the script sources.
+    const lib = readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8');
+    expect(lib).toContain('script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty');
   });
 });
 
@@ -1354,57 +1357,26 @@ describe('native logging stays off outside the simulator job', () => {
     expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
   });
 
-  it('a simulator whose bootstatus gave up is waited for, not interrupted, and only a silent one is reset', () => {
-    // CI runs 41363127461 (iPad) and 41365341593 (iPhone) ended with `Status=4294967295, isTerminal=YES` from bootstatus, and it still
-    // exited 0, so the script went on and failed later with "the app is not running". Run 41372183809 passed on a plain retry: bootstatus
-    // had given up WAITING after about a minute while the simulator kept booting, and the next boot printed "Device already booted".
-    // Run 41374220395 then failed six times out of six on a retry that shut everything down, restarted the service and erased the
-    // device, because that interrupted the boot that was about to finish.
+  it('boots and launches through the tested library, and keeps no second, untested copy of those functions in the script', () => {
+    // What boot_simulator, simulator_answers, bootstatus_bounded and launch_app DO is checked by running them against a stubbed xcrun
+    // (scripts/lib/ios-simulator.test.ts); a text match here could not tell a right implementation from a wrong one with the same words.
     const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
-    expect(script).toContain('boot_simulator()');
-    expect(script).toContain('Status=4294967295');
-    expect(script).toContain('for attempt in 1 2 3');
-    // The boot output is captured and checked, not only printed.
-    expect(script).toMatch(/out="\$\(xcrun simctl bootstatus "\$udid" -b 2>&1\)"/);
-    // "Booted" means the simulator runs a command (the one app_is_running relies on), within a stated number of seconds.
-    expect(script).toContain('simulator_answers()');
-    expect(script).toMatch(/simulator_answers\(\) \{[\s\S]*?xcrun simctl spawn "\$1" launchctl list[\s\S]*?-lt "\$2"/);
-    const body = script.slice(script.indexOf('boot_simulator() {'), script.indexOf('simulator_answers() {'));
-    // After a give-up the simulator is left alone and waited for (the long wait comes first) ...
-    expect(body).toContain('simulator_answers "$udid" 240');
-    // ... and the reset (shutdown, service restart, erase) only follows a simulator that stayed silent for that whole wait.
-    const wait = body.indexOf('simulator_answers "$udid" 240');
-    for (const reset of ['xcrun simctl shutdown all', 'killall -9 com.apple.CoreSimulator.CoreSimulatorService', 'xcrun simctl erase "$udid"']) {
-      expect(body, reset).toContain(reset);
-      expect(body.indexOf(reset), reset).toBeGreaterThan(wait);
+    const lib = readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8');
+    expect(script).toContain('lib/ios-simulator.sh');
+    for (const fn of ['app_is_running', 'boot_simulator', 'simulator_answers', 'bootstatus_bounded', 'launch_app']) {
+      expect(lib, fn).toMatch(new RegExp(`^${fn}\\(\\) \\{`, 'm'));
+      expect(script, fn).not.toMatch(new RegExp(`^${fn}\\(\\) \\{`, 'm'));
     }
-    expect(body).not.toMatch(/Status=4294967295[^\n]*\n[^\n]*xcrun simctl shutdown/);
-    expect(script).toContain('the simulator did not boot after 3 attempts');
-    // smoke_device boots through the helper; the bare two-line boot is gone.
-    expect(script).toMatch(/smoke_device\(\) \{[\s\S]*?boot_simulator "\$label" "\$udid"/);
-    expect(script).not.toMatch(/xcrun simctl boot "\$udid" 2>\/dev\/null \|\| true\n  xcrun simctl bootstatus "\$udid" -b\n/);
-  });
-
-  it('a launch that produced no app process is repeated once, with what the simulator was doing printed', () => {
-    // Run 41375830738: the simulator answered commands after a slow boot, then showed no app process for 72 s and an empty app log.
-    const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
-    expect(script).toContain('launch_app()');
-    const body = script.slice(script.indexOf('launch_app() {'), script.indexOf('smoke_device() {'));
-    expect(body).toContain('for attempt in 1 2');
-    // The launch stays under script(1) with --console-pty (block-buffered stdout otherwise), and the process wait is bounded.
-    expect(body).toContain('script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty');
-    expect(body).toContain('-ge 60');
-    // The first launch is stopped before the second, and a failed one prints what the simulator was doing.
-    const stop = body.indexOf('xcrun simctl terminate');
-    expect(stop).toBeGreaterThan(0);
-    expect(body.indexOf('what the simulator was doing')).toBeGreaterThan(0);
-    expect(body).toMatch(/SpringBoard/);
-    // Giving up is not decided here: the check after the settle time still fails the run with the app's own message.
-    expect(script).toContain('seconds after launch');
-    // smoke_device launches through the helper; the inline launch is gone from it.
     const device = script.slice(script.indexOf('smoke_device() {'));
+    expect(device).toContain('boot_simulator "$label" "$udid"');
     expect(device).toContain('launch_app "$label" "$udid"');
-    expect(device).not.toContain('script -q -F');
+    // The library is sourced after fail() exists (it calls it) and before smoke_device runs.
+    expect(script.indexOf('fail() {')).toBeLessThan(script.indexOf('lib/ios-simulator.sh'));
+    expect(script.indexOf('lib/ios-simulator.sh')).toBeLessThan(script.indexOf('smoke_device() {'));
+    // The check after the settle time still decides the verdict, with the app's own message.
+    expect(script).toContain('seconds after launch');
+    // The test that runs them is there and can run (the driver and the library exist next to it).
+    expect(readFileSync(join(ROOT, 'scripts', 'lib', 'fixtures', 'ios-simulator-driver.sh'), 'utf8')).toContain('. "$LIB"');
   });
 });
 
@@ -1550,6 +1522,15 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     // The golden flow checks once BEFORE Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
     expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeGreaterThan(0);
     expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeLessThan(golden.indexOf('maestro --device'));
+    // A dialog that would come up LATER, while Maestro runs and nothing may look at the screen, is prevented: error dialogs are hidden
+    // before the app is started (a crash of the app is still found by the logcat check).
+    expect(golden).toContain('settings put global hide_error_dialogs 1');
+    expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('adb shell am start -n'));
+    // After the loop, a last press is followed by one more look, so the checks read the screen and not the dialog that was pressed.
+    const after = smoke.slice(smoke.indexOf('until [ "$attempts" -ge 15 ]'));
+    expect(after).toContain('dismissed=1');
+    expect(after.indexOf('if [ "$dismissed" -eq 1 ]')).toBeGreaterThan(after.indexOf('done'));
+    expect(after.indexOf('if [ "$dismissed" -eq 1 ]')).toBeLessThan(after.indexOf('UI tree read in'));
   });
 
   it('both emulator scripts count only a crash of the APP process, not a FATAL EXCEPTION logged by the test tooling', () => {
@@ -1588,13 +1569,34 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
 });
 
 describe('the packaged Windows registry smoke is manual only', () => {
-  it('is mentioned by no workflow file (it rewrites a registry key and must never run on a schedule or in CI)', () => {
-    const dir = join(ROOT, '.github', 'workflows');
-    const files = readdirSync(dir).filter((name) => /\.ya?ml$/.test(name));
-    expect(files.length).toBeGreaterThan(3);
-    for (const name of files) {
-      const text = readFileSync(join(dir, name), 'utf8');
-      expect(text, name).not.toMatch(/windows-packaged-import-smoke|registry-guard/);
-    }
+  const NAMES = /windows-packaged-import-smoke|registry-guard/;
+  /** Every file under a directory, without following links. */
+  function filesUnder(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]));
+  }
+
+  it('is mentioned by nothing that could run it for the project: no workflow, no composite action, no npm script, no other script', () => {
+    const github = filesUnder(join(ROOT, '.github'));
+    const workflows = github.filter((f) => /\.ya?ml$/.test(f) && f.includes(`${join('.github', 'workflows')}`));
+    expect(workflows.length).toBeGreaterThan(3);
+    // The files that ARE the smoke test, its guard and their tests may name each other; nothing else may name them.
+    const own = new Set(['windows-packaged-import-smoke.mjs', 'registry-guard.mjs', 'registry-guard.test.ts', 'registry-guard-uncaught.mjs']);
+    const scripts = filesUnder(join(ROOT, 'scripts')).filter((f) => !own.has(f.split(/[\\/]/).at(-1)!));
+    const scanned = [...github, join(ROOT, 'package.json'), ...scripts];
+    for (const file of scanned) expect(readFileSync(file, 'utf8'), file).not.toMatch(NAMES);
+    // Controls: the scan sees the places a launcher could hide, and the pattern can match what it is looking for.
+    expect(github.some((f) => /[\\/]\.github[\\/]actions[\\/]/.test(f)) || github.length > 3).toBe(true);
+    expect(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts).toBeTypeOf('object');
+    expect(scripts.length).toBeGreaterThan(5);
+    expect(readFileSync(join(ROOT, 'scripts', 'windows-packaged-import-smoke.mjs'), 'utf8')).toMatch(NAMES);
+  });
+
+  it('refuses to start in CI and without the explicit flag, before anything is started', () => {
+    const text = readFileSync(join(ROOT, 'scripts', 'windows-packaged-import-smoke.mjs'), 'utf8');
+    expect(text).toMatch(/process\.env\.CI !== undefined \|\| process\.env\.GITHUB_ACTIONS !== undefined/);
+    expect(text).toContain('--allow-registry-change');
+    // The check comes before the guard is entered and before any child process is spawned.
+    expect(text.indexOf('Refusing to run in CI')).toBeLessThan(text.indexOf('withRegistryGuard(['));
+    expect(text.indexOf('Refusing to run in CI')).toBeLessThan(text.indexOf('spawn(process.execPath'));
   });
 });
