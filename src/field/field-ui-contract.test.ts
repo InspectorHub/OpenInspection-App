@@ -46,13 +46,20 @@ export type PendingEntryFields = Assert<Equal<Extract<PendingMediaRecord, { kind
 export const appSlots: FieldHostSlots = { humanCheck: 'not-required' };
 export const appSlotsWithStatus: FieldHostSlots = { humanCheck: 'not-required', renderStatus: () => null };
 
-const PINNED = '0.6.2';
+const PINNED = '0.7.0';
 const REREAD = `@inspectorhub/field-ui is no longer ${PINNED}. Before bumping the pin, re-read: this file, src/field/batch-attach.test.ts (it has its own pin and models the photo-batch ordering of field-ui), src/field/uploader-refusal.test.ts, src/media/pending-doc-append.ts against the package's appendPendingPhoto, and src/field/photo-urls.ts against FieldUrls. Then update PINNED here and in batch-attach.test.ts after re-reading.`;
 
 describe('the installed @inspectorhub/field-ui', () => {
   it(`is exactly ${PINNED}`, () => {
     const pkg = JSON.parse(readFileSync(new URL('../../node_modules/@inspectorhub/field-ui/package.json', import.meta.url), 'utf8')) as { version: string };
     expect(pkg.version, REREAD).toBe(PINNED);
+  });
+
+  it('exports appendPhoto and pushPendingPhoto, the by-key and by-pendingId upserts that are public API since 0.7.0 (the save-to-gallery phases build on them)', async () => {
+    const api = await import('@inspectorhub/field-ui');
+    expect(typeof api.appendPhoto).toBe('function');
+    expect(typeof api.pushPendingPhoto).toBe('function');
+    expect(typeof api.appendPendingPhoto).toBe('function'); // the one this app's pending-doc-append is checked against below
   });
 });
 

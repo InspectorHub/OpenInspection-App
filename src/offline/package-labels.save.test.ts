@@ -21,23 +21,30 @@ describe('saving a part: the shared library drops per-inspection labels, so the 
   const made = makePackage({ inspections: 3, labels: { 'insp-0': '12 Oak Street', 'insp-1': '34 Birch Lane', 'insp-2': '9 Elm Road' }, photos: { 1: 2 }, updates: { 1: 1 } });
   const all = new Map(readLabels(made.zip, made.ids));
 
-  it('documents the library: a part it cuts does not keep an entry\'s extra key', () => {
-    // If this turns red the library keeps entry keys itself (the fix that carries every key of the raw entry into the part). `withLabels`
-    // stays: it is what keeps an untrusted file's other keys and junk labels out of a part the person shares onward (tests below).
-    const part = extractHeldBackPackage(made.zip, ['insp-1']);
-    expect(read(part, ['insp-1'])).toEqual({});
-    expect(read(splitPackage(made.zip, ['insp-1']).part, ['insp-1'])).toEqual({});
+  it('documents the library: since offline-package 0.2.1 a part it cuts keeps the entry\'s label itself', () => {
+    // Before 0.2.1 both of these read {} (the library dropped every extra key of the entry). If this turns red the library stopped keeping
+    // them again, and `withLabels` is what puts them back. `withLabels` stays either way: it is what keeps an untrusted file's other keys
+    // and junk labels out of a part the person shares onward (tests below), and the label it writes comes from the map, never from the part.
+    expect(read(extractHeldBackPackage(made.zip, ['insp-1']), ['insp-1'])).toEqual({ 'insp-1': '34 Birch Lane' });
+    expect(read(splitPackage(made.zip, ['insp-1']).part, ['insp-1'])).toEqual({ 'insp-1': '34 Birch Lane' });
   });
 
-  it('withLabels puts back the label of the inspections the part holds, and only those', () => {
-    const part = extractHeldBackPackage(made.zip, ['insp-1']);
+  /** A part as the library wrote it before 0.2.1: the same entries without their label. */
+  const withoutLabels = (part: Uint8Array): Uint8Array => withEntries(part, entriesOf(part).map((entry) => {
+    const { label: _label, ...rest } = entry as Record<string, unknown>;
+    return rest;
+  }));
+
+  it('withLabels puts back the label of the inspections the part holds, and only those (on a part that lost them)', () => {
+    const part = withoutLabels(extractHeldBackPackage(made.zip, ['insp-1']));
+    expect(read(part, ['insp-1'])).toEqual({});
     const labelled = withLabels(part, all);
     expect(read(labelled, ['insp-0', 'insp-1', 'insp-2'])).toEqual({ 'insp-1': '34 Birch Lane' });
     expect(readPackageSummary(labelled).manifest.inspections.map((i) => i.id)).toEqual(['insp-1']);
   });
 
   it('the labelled part is still a package the shared parser accepts, with the same contents', () => {
-    const part = extractHeldBackPackage(made.zip, ['insp-1', 'insp-2']);
+    const part = withoutLabels(extractHeldBackPackage(made.zip, ['insp-1', 'insp-2']));
     const labelled = withLabels(part, all);
     expect(() => parsePackage(labelled)).not.toThrow();
     expect(readPackageSummary(labelled).counts).toEqual(readPackageSummary(part).counts);
@@ -50,10 +57,20 @@ describe('saving a part: the shared library drops per-inspection labels, so the 
     }
   });
 
-  it('with nothing to put back the part is handed back untouched', () => {
+  it('a part that already carries the right labels (what the library writes since 0.2.1) is handed back untouched', () => {
     const part = extractHeldBackPackage(made.zip, ['insp-1']);
-    expect(withLabels(part, new Map())).toBe(part);
-    expect(withLabels(part, new Map([['insp-0', 'Not in this part']]))).toBe(part);
+    expect(withLabels(part, all)).toBe(part);
+    // A part that never had a label, and nothing to put back, is untouched too.
+    const bare = withoutLabels(part);
+    expect(withLabels(bare, new Map())).toBe(bare);
+    expect(withLabels(bare, new Map([['insp-0', 'Not in this part']]))).toBe(bare);
+  });
+
+  it('the label comes from the map, never from the part: a label the part carries and the map does not know is dropped', () => {
+    const part = extractHeldBackPackage(made.zip, ['insp-1']);
+    expect(read(part, ['insp-1'])).toEqual({ 'insp-1': '34 Birch Lane' });
+    expect(read(withLabels(part, new Map()), ['insp-1'])).toEqual({});
+    expect(read(withLabels(part, new Map([['insp-1', '1 Other Way']])), ['insp-1'])).toEqual({ 'insp-1': '1 Other Way' });
   });
 
   it('a label in the map is cleaned again before it is written', () => {

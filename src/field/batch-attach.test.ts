@@ -13,8 +13,8 @@ import { createUploaderWorld, type UploaderWorld } from './test-support/uploader
  * pushes at the end, then `findings.orderPhotoBatch`) on top of the app's real uploader, store, background uploader and
  * pending-entry code.
  *
- * THIS IS A MODEL. field-ui 0.6.2 does not export `orderPhotoBatch`, `attachPhotoBatch` or `usePhotoBatchUpload`, so
- * `orderPhotoBatch` below is a hand copy of `src/shared/photo-batch-order.ts` of 0.6.2. The version pin at the bottom forces a
+ * THIS IS A MODEL. field-ui 0.7.0 does not export `orderPhotoBatch`, `attachPhotoBatch` or `usePhotoBatchUpload`, so
+ * `orderPhotoBatch` below is a hand copy of `src/shared/photo-batch-order.ts` of 0.7.0. The version pin at the bottom forces a
  * re-read of that function whenever the package changes.
  */
 const FK = '_default:s1:i1';
@@ -58,7 +58,12 @@ function attach(doc: Y.Doc, keys: string[]): void {
   }
 }
 
-/** Hand copy of field-ui 0.6.2 `orderPhotoBatch`: put the named entries into the slots they already occupy, in selection order. */
+/**
+ * Re-read against field-ui 0.7.0 (2026-11-02, a diff of the two dist/index.js): `orderPhotoBatch` and `attachPhotoBatch` are unchanged. What
+ * 0.7.0 adds here is a `source` ('camera' | 'library' | 'burst') carried in the batch and in each upload's meta; it does not take part in the
+ * ordering, so the model below leaves it out. The editor also no longer blocks adding a photo while an upload is running.
+ */
+/** Hand copy of field-ui 0.7.0 `orderPhotoBatch`: put the named entries into the slots they already occupy, in selection order. */
 function orderPhotoBatch(doc: Y.Doc, selection: Named[]): void {
   const arr = itemPhotos(doc);
   const matches = (el: Y.Map<unknown>, n: Named): boolean => ('key' in n ? el.get('key') === n.key : n.pendingId !== '' && el.get('pendingId') === n.pendingId);
@@ -89,7 +94,7 @@ function orderPhotoBatch(doc: Y.Doc, selection: Named[]): void {
 }
 
 /**
- * `attachPhotoBatch` of 0.6.2: attach the keys, then order the whole selection (successes by key, kept ones by pendingId).
+ * `attachPhotoBatch` of 0.7.0: attach the keys, then order the whole selection (successes by key, kept ones by pendingId).
  * Since 0.6.2 the ordering step runs even when no file succeeded (0.6.1 returned early when there were no keys); it is skipped
  * only for an empty selection.
  */
@@ -132,9 +137,9 @@ describe('a selection where some uploads fail and are kept', () => {
     expect(entries.map(idOf)).toEqual(['batch-1', 'batch-2', 'batch-3', 'batch-4', 'batch-5']);
   });
 
-  it('is modelled on field-ui 0.6.2; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
+  it('is modelled on field-ui 0.7.0; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
     const manifest = JSON.parse(readFileSync('node_modules/@inspectorhub/field-ui/package.json', 'utf8')) as { version: string };
-    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.6.2');
+    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.7.0');
   });
 });
 
