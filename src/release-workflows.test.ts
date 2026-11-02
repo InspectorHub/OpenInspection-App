@@ -1382,6 +1382,9 @@ describe('native logging stays off outside the simulator job', () => {
     const device = script.slice(script.indexOf('smoke_device() {'));
     expect(device).toContain('boot_simulator "$label" "$udid"');
     expect(device).toContain('launch_app "$label" "$udid"');
+    // The checks that the app is STILL running ask for a time window, not a single probe (a slow or stopped probe is not a dead app).
+    expect(device).toContain('wait_for_app "$udid"');
+    expect(device).not.toMatch(/if ! app_is_running|app_is_running "\$udid" \|\|/);
     // The library is sourced after fail() exists (it calls it) and before smoke_device runs.
     expect(script.indexOf('fail() {')).toBeLessThan(script.indexOf('lib/ios-simulator.sh'));
     expect(script.indexOf('lib/ios-simulator.sh')).toBeLessThan(script.indexOf('smoke_device() {'));

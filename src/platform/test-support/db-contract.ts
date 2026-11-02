@@ -54,6 +54,8 @@ export function describeDbContract(name: string, make: () => Promise<Db>): void 
       expect(value).toBeInstanceOf(Uint8Array);
       expect(value).not.toBe(original);
       expect(value).toEqual(original);
-    });
+      // On a quiet laptop this takes 7 to 11 s (a million-element array and the round trip); with the machine busy it took 37 to 44 s, over the
+      // 30 s default. The time is the cost of the test's data, not a hang, so it gets a limit that a loaded runner cannot reach.
+    }, 120_000);
   });
 }

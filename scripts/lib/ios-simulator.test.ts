@@ -101,7 +101,8 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
     expect(r.calls.at(-1)).not.toMatch(/shutdown|erase|killall/);
     // The reset comes after the wait for an answer, not instead of it.
     const firstReset = r.calls.findIndex((c) => /simctl shutdown all/.test(c));
-    expect(r.calls.slice(0, firstReset).filter((c) => c.includes('launchctl list')).length).toBeGreaterThan(1);
+    // At least one probe came first. How many fits in a one-second window depends on how fast this machine starts processes, so it is not counted.
+    expect(r.calls.slice(0, firstReset).filter((c) => c.includes('launchctl list')).length).toBeGreaterThanOrEqual(1);
   });
 
   it('a launchctl probe that hangs is stopped at its limit, and the next probe is tried', () => {
@@ -175,6 +176,38 @@ describe.skipIf(!bashAvailable)('app_is_running', () => {
 
   it('is false, not an error, when launchctl does not answer at all', () => {
     expect(run(started + check, { APP_UP_AT_LAUNCH: '1', NEVER_ANSWER: '1' }).out).toContain('NOT-RUNNING');
+  });
+});
+
+describe.skipIf(!bashAvailable)('wait_for_app (a check that the app is STILL running)', () => {
+  const started = 'echo 1 > "$STATE/launches"; ';
+  const wait = (seconds: number): string => `if wait_for_app UDID-1 ${String(seconds)}; then echo RESULT=running; else echo RESULT=gone; fi`;
+
+  it('is true at once when the app is listed', () => {
+    const r = run(started + wait(5), { APP_UP_AT_LAUNCH: '1' });
+    expect(r.out).toContain('RESULT=running');
+    expect(r.calls.filter((c) => c.includes('launchctl list'))).toHaveLength(1);
+  });
+
+  it('a probe that hangs and is stopped is NOT "the app is gone": the next probe finds it (the shape of run 41397218349)', () => {
+    // The first probe would hang for 30 s and is stopped after 1 s; the old check asked once and called that "not running".
+    const r = run(started + wait(30), { APP_UP_AT_LAUNCH: '1', SPAWN_HANG_FIRST: '1', SMOKE_PROBE_LIMIT: '1' });
+    expect(r.out).toContain('RESULT=running');
+    expect(r.out).toContain('was still running after 1 s and was stopped (this says nothing about the app)');
+    expect(r.calls.filter((c) => c.includes('launchctl list')).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('control: the single-probe check really does call that case "not running" (what the fix changes)', () => {
+    const r = run(started + 'if app_is_running UDID-1; then echo RESULT=running; else echo RESULT=gone; fi', { APP_UP_AT_LAUNCH: '1', SPAWN_HANG_FIRST: '1', SMOKE_PROBE_LIMIT: '1' });
+    expect(r.out).toContain('RESULT=gone');
+  });
+
+  it('an app that is really gone is still reported gone, once the time is up (a crash is not hidden by the retries)', () => {
+    const r = run(wait(2), { APP_UP_AT_LAUNCH: '0' });
+    expect(r.out).toContain('RESULT=gone');
+    // It did not give up at the first probe: it kept asking until the window was over (a 2 s window on the clock is 1 to 2 real seconds). How many
+    // probes that took depends on the machine, so they are not counted.
+    expect(r.seconds).toBeGreaterThanOrEqual(1);
   });
 });
 

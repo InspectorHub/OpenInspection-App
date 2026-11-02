@@ -13,7 +13,8 @@
 #  - Every wait is a deadline on the wall clock ($SECONDS), not a count of sleeps, and every call to the simulator that could hang is bounded
 #    too (GNU timeout): a probe against a wedged simulator can itself take as long as it likes.
 #
-# Overridable for tests: SMOKE_BOOT_LIMIT (bootstatus, 240 s), SMOKE_PROBE_LIMIT (one launchctl probe, 20), SMOKE_ANSWER_QUICK (30),
+# Overridable for tests: SMOKE_BOOT_LIMIT (bootstatus, 240 s), SMOKE_PROBE_LIMIT (one launchctl probe, 60), SMOKE_RECHECK_SECONDS (30),
+# SMOKE_ANSWER_QUICK (30),
 # SMOKE_ANSWER_LIMIT (240), SMOKE_SPRINGBOARD_GRACE (20), SMOKE_LAUNCH_LIMIT (60), SMOKE_POLL_SECONDS (3), SMOKE_CRASH_DIR (the host's
 # DiagnosticReports).
 
@@ -32,8 +33,16 @@ TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
 # probe_launchctl <udid>: `launchctl list` inside the simulator, bounded (SMOKE_PROBE_LIMIT). The list goes to PROBE_OUT; the status says
 # whether it ran (non-zero when it failed or hung).
 probe_launchctl() {
-  local rc=0
-  PROBE_OUT="$("$TIMEOUT_BIN" -k 2 "${SMOKE_PROBE_LIMIT:-20}" xcrun simctl spawn "$1" launchctl list 2>/dev/null)" || rc=$?
+  local rc=0 started="$SECONDS" took limit="${SMOKE_PROBE_LIMIT:-60}"
+  PROBE_OUT="$("$TIMEOUT_BIN" -k 2 "$limit" xcrun simctl spawn "$1" launchctl list 2>/dev/null)" || rc=$?
+  took=$((SECONDS - started))
+  # A probe is slow when the simulator is busy (an app handling a URL, a boot): run 41397218349 had one that took long enough for a 20 s limit
+  # to stop it, and a stopped probe was read as "the app is not running". Slow ones are written down so the next log shows how slow.
+  if [ "$rc" -eq 124 ]; then
+    echo "::warning::a launchctl probe was still running after $limit s and was stopped (this says nothing about the app)"
+  elif [ "$took" -ge 5 ]; then
+    echo "note: a launchctl probe took $took s"
+  fi
   return "$rc"
 }
 
@@ -53,6 +62,17 @@ app_is_running() {
     esac
   done <<< "$PROBE_OUT"
   return 1
+}
+
+# wait_for_app <udid> <seconds>: true as soon as the app is listed with a pid, false when it was not within <seconds>. For a CHECK that the app is
+# still running: one probe that is slow, stopped or answers nothing is not "the app is gone", so it is asked again until the time is up. An app that
+# really died is not listed for the whole time, and the check fails after it.
+wait_for_app() {
+  local udid="$1" end=$((SECONDS + $2))
+  until app_is_running "$udid"; do
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep 2
+  done
 }
 
 # simulator_answers <udid> <seconds> [name]: true once `launchctl list` runs inside the simulator and lists SpringBoard with a pid. If it runs

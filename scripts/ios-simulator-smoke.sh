@@ -111,7 +111,7 @@ smoke_device() {
   # Then give the web app SETTLE_SECONDS to start and try to open its storage.
   sleep "$SETTLE_SECONDS"
   tr -d '\r\004' < "$OUT/${label}.typescript" 2>/dev/null | sed 's/^\^D//' > "$OUT/${label}.console" || true
-  if ! app_is_running "$udid"; then
+  if ! wait_for_app "$udid" "${SMOKE_RECHECK_SECONDS:-30}"; then
     echo "--- $label: what simctl launch printed ---"
     cat "$OUT/${label}.console" 2>/dev/null || true
     fail "$label: the app is not running $SETTLE_SECONDS seconds after launch"
@@ -123,7 +123,7 @@ smoke_device() {
 
   xcrun simctl openurl "$udid" "$APP_ID:/oauth/callback?code=x&state=y"
   sleep 4
-  app_is_running "$udid" || fail "$label: the app is not running after the callback URL was opened"
+  wait_for_app "$udid" "${SMOKE_RECHECK_SECONDS:-30}" || fail "$label: the app is not running after the callback URL was opened"
   echo "ok: $label: the callback URL was routed and the app survived it"
 
   local data
