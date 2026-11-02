@@ -74,6 +74,20 @@ start_app() {
   dismiss_not_responding "$OUT/ui-preflight.xml" || true
 }
 
+# --- the photo the flow will pick ---
+# Put into the device's media index well BEFORE the flow opens the picker. Maestro's addMedia did it just before, and on API 34 the picker then
+# listed nothing ("No photos or videos", CI run 41415156795): the index lags the file. Here the sign-in and the download give it minutes, and the
+# script does not go on until the index itself lists the file (a query, not a sleep).
+adb push maestro/fixtures/roof-photo.jpg /sdcard/Pictures/roof-photo.jpg
+adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Pictures/roof-photo.jpg > /dev/null
+indexed=0
+for _ in $(seq 1 30); do
+  if adb shell content query --uri content://media/external/images/media --projection _display_name | grep -q 'roof-photo.jpg'; then indexed=1; break; fi
+  sleep 2
+done
+[ "$indexed" = 1 ] || fail "the media index does not list roof-photo.jpg after 60 s"
+echo "ok: roof-photo.jpg is in the media index"
+
 # --- G3 part A: sign in, download, engine off, add the photo ---
 adb shell pm clear "$APP_ID"
 start_app

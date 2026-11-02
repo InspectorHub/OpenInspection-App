@@ -36,7 +36,7 @@ const COMMANDS = new Set([
 ]);
 
 /** The golden flows also use Maestro's retry, media, script and screenshot commands; the ordered emulator run does not. */
-const GOLDEN_COMMANDS = new Set([...COMMANDS, 'retry', 'runScript', 'addMedia', 'assertScreenshot', 'takeScreenshot']);
+const GOLDEN_COMMANDS = new Set([...COMMANDS, 'retry', 'runScript', 'assertScreenshot', 'takeScreenshot']);
 
 /**
  * Where the text of a golden flow may come from besides this repository's `src`: the shared field-ui library (the editor and its photo
@@ -252,9 +252,9 @@ describe('the golden Maestro flows', () => {
     expect(missingFromApp(flow, source, origins, GOLDEN_COMMANDS)).toEqual([]);
     expect(missingFromApp(flow.replace('"Add from library"', '"Add from the shelf"'), source, origins, GOLDEN_COMMANDS).length).toBeGreaterThan(0);
     expect(missingFromApp(flow.replace('"Open 77 Test Photo Lane"', '"Open 78 Test Photo Lane"'), source, origins, GOLDEN_COMMANDS).length).toBeGreaterThan(0);
-    expect(inspect(flow.replace('- addMedia:', '- addTheMedia:'), GOLDEN_COMMANDS).problems).toContain('unknown command addTheMedia');
+    expect(inspect(flow.replace('- runScript:', '- runTheScript:'), GOLDEN_COMMANDS).problems).toContain('unknown command runTheScript');
     // The ordered run's rules are untouched: it still does not know these commands.
-    expect(inspect(flow).problems).toContain('unknown command addMedia');
+    expect(inspect(flow).problems).toContain('unknown command runScript');
   });
 
   it('no golden flow holds a credential: typed text is an environment reference only', () => {

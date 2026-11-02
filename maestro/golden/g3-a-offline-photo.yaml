@@ -4,7 +4,8 @@
 #   maestro --device <serial> test -e SERVER_URL=http://localhost:8791 -e CONTROL_URL=http://127.0.0.1:<port> maestro/golden/g3-a-offline-photo.yaml
 #
 # The engine must run with `--scenario inspection` (inspection insp-7, "77 Test Photo Lane" is visible to the signed-in inspector).
-# Start from a clean, already-running app, as for G2 (scripts/android-emulator-offline-photo.sh does that).
+# Start from a clean, already-running app, as for G2, with maestro/fixtures/roof-photo.jpg already in the device's media index
+# (scripts/android-emulator-offline-photo.sh does both).
 appId: io.inspectorhub.app
 ---
 - runFlow:
@@ -33,12 +34,11 @@ appId: io.inspectorhub.app
     env:
       CONTROL_URL: ${CONTROL_URL}
       UNAVAILABLE: "true"
-- addMedia:
-    files:
-      - ../fixtures/roof-photo.jpg
 - tapOn: "Add photo"
 - tapOn: "Add from library"
-# The system photo picker (Android 13+). The fixture was added just now, so the newest tile is ours.
+# The system photo picker (Android 13+). The script pushed the fixture to /sdcard/Pictures and waited until the media index listed it BEFORE
+# this flow started (Maestro's own addMedia put the file in just before the picker opened, and on API 34 the picker then said "No photos or
+# videos": CI run 41415156795), so the one tile is ours.
 - extendedWaitUntil:
     visible: "Photo taken on.*"
     timeout: 30000

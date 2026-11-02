@@ -1603,8 +1603,17 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
   it('the engine goes off in part A BEFORE the photo is added, and the script proves nothing reached it before the restart', () => {
     const off = flowA.indexOf('UNAVAILABLE: "true"');
     expect(off).toBeGreaterThan(0);
-    expect(off).toBeLessThan(flowA.indexOf('addMedia'));
-    expect(flowA.indexOf('addMedia')).toBeLessThan(flowA.indexOf('Add from library'));
+    expect(off).toBeLessThan(flowA.indexOf('tapOn: "Add photo"'));
+    expect(flowA.indexOf('tapOn: "Add photo"')).toBeLessThan(flowA.indexOf('Add from library'));
+    // The picture is in the media index (checked by a query, not a sleep) before Maestro starts: Maestro's addMedia raced the index on API 34.
+    expect(stepsOf(flowA)).not.toContain('addMedia'); // the comment may name it, a step may not
+    const pushed = g3.indexOf('adb push maestro/fixtures/roof-photo.jpg');
+    const queried = g3.indexOf('content query --uri content://media/external/images/media');
+    const startedA = g3.indexOf('timeout 900 maestro --device "$serial" test -e "SERVER_URL');
+    expect(pushed).toBeGreaterThan(0);
+    expect(queried).toBeGreaterThan(pushed);
+    expect(startedA).toBeGreaterThan(queried);
+    expect(g3).toContain('fail "the media index does not list roof-photo.jpg after 60 s"');
     // Two none-uploaded checks (after A, after B) both come before the engine is switched on and before the one-uploaded wait.
     const none = [...g3.matchAll(/engine-state\.mjs" "\$CONTROL_URL" none-uploaded/g)].map((m) => m.index ?? -1);
     expect(none).toHaveLength(2);
@@ -1652,7 +1661,7 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     const height = png.readUInt32BE(20);
     expect([width, height]).toEqual([168, 173]);
     // The fixture the flow adds is the picture the reference shows.
-    expect(flowA).toContain('../fixtures/roof-photo.jpg');
+    expect(g3).toContain('adb push maestro/fixtures/roof-photo.jpg');
     expect(readFileSync(join(ROOT, 'maestro', 'fixtures', 'roof-photo.jpg')).subarray(0, 3).toString('hex')).toBe('ffd8ff');
   });
 
