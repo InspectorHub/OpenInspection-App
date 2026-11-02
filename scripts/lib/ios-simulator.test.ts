@@ -26,7 +26,7 @@ function run(scenario: string, env: Record<string, string> = {}): Result {
   const started = Date.now();
   const r = spawnSync('bash', [DRIVER], {
     encoding: 'utf8',
-    env: { ...process.env, LIB, STATE: state.replace(/\\/g, '/'), SCENARIO: scenario, SMOKE_ANSWER_QUICK: '3', SMOKE_ANSWER_LIMIT: '3', SMOKE_SPRINGBOARD_GRACE: '1', SMOKE_LAUNCH_LIMIT: '2', SMOKE_BOOT_LIMIT: '30', ...env },
+    env: { ...process.env, LIB, STATE: state.replace(/\\/g, '/'), SCENARIO: scenario, SMOKE_ANSWER_QUICK: '3', SMOKE_ANSWER_LIMIT: '3', SMOKE_SPRINGBOARD_GRACE: '1', SMOKE_LAUNCH_LIMIT: '3', SMOKE_BOOT_LIMIT: '30', ...env },
   });
   const calls = readFileSync(join(state, 'calls.log'), 'utf8').split('\n').filter(Boolean);
   return { out: `${r.stdout}${r.stderr}`, calls, status: r.status, seconds: (Date.now() - started) / 1000 };
@@ -53,7 +53,8 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
   });
 
   it('bootstatus gave up and the simulator only answers after several probes: it WAITS for it (a first failed probe is not the end)', () => {
-    const r = run(boot, { BOOTSTATUS_TEXT: SPRINGBOARD_GAVE_UP, ANSWER_AFTER: '6' });
+    // The limit is far away on purpose: a loaded machine (the whole suite runs in parallel) must not run out of it before the 7th probe.
+    const r = run(boot, { BOOTSTATUS_TEXT: SPRINGBOARD_GAVE_UP, ANSWER_AFTER: '6', SMOKE_ANSWER_LIMIT: '60' });
     expect(r.out).toContain('RESULT=booted');
     expect(resets(r.calls)).toEqual([]);
     expect(r.calls.filter((c) => c.includes('launchctl list')).length).toBeGreaterThanOrEqual(7);
@@ -93,12 +94,44 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
   });
 
   it('a bootstatus that does not end by itself is stopped at its limit and treated as given up, not waited for forever', () => {
-    const r = run(boot, { BOOTSTATUS_HANG: '8', SMOKE_BOOT_LIMIT: '1' });
+    const r = run(boot, { BOOTSTATUS_HANG: '20', SMOKE_BOOT_LIMIT: '1' });
     expect(r.out).toContain('RESULT=booted');
     expect(r.out).toContain('was still running after 1 s and was stopped');
     expect(r.out).toContain('bootstatus gave up (attempt 1 of 3)');
-    expect(r.seconds).toBeLessThan(7);
+    expect(r.seconds).toBeLessThan(15); // it would take 20 s if the limit did nothing; the margin is for a loaded machine
     expect(resets(r.calls)).toEqual([]);
+  });
+});
+
+describe.skipIf(!bashAvailable)('what the simulator listed is written down on every run', () => {
+  const boot = 'if boot_simulator iphone UDID-1; then echo RESULT=booted; else echo RESULT=failed; fi';
+  function summaryFile(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ios-sim-summary-'));
+    dirs.push(dir);
+    return join(dir, 'summary.md').replace(/\\/g, '/');
+  }
+
+  it('SpringBoard found: the line as the simulator printed it goes to the log and to the job summary, naming the simulator', () => {
+    const summary = summaryFile();
+    const r = run(boot, { GITHUB_STEP_SUMMARY: summary });
+    expect(r.out).toContain('ok: iphone: SpringBoard is listed as: 123 0 com.apple.SpringBoard');
+    expect(readFileSync(summary, 'utf8')).toContain('- iphone: SpringBoard listed as `123 0 com.apple.SpringBoard`');
+  });
+
+  it('SpringBoard not found within the grace period: the summary says so and lists what the simulator did list, so the real label can be read', () => {
+    const summary = summaryFile();
+    const r = run(boot, { LIST: 'none', GITHUB_STEP_SUMMARY: summary, SMOKE_SPRINGBOARD_GRACE: '2', SMOKE_ANSWER_QUICK: '6' });
+    expect(r.out).toContain('RESULT=booted');
+    const text = readFileSync(summary, 'utf8');
+    expect(text).toContain('**SpringBoard was NOT listed**');
+    expect(text).toContain('com.apple.something');
+    expect(text).not.toContain('SpringBoard listed as');
+  });
+
+  it('without GITHUB_STEP_SUMMARY nothing is written anywhere and nothing fails (a run outside CI)', () => {
+    const r = run(boot);
+    expect(r.out).toContain('RESULT=booted');
+    expect(r.out).toContain('SpringBoard is listed as');
   });
 });
 

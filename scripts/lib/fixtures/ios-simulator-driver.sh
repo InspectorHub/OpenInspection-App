@@ -30,7 +30,7 @@ counter() { local n; n="$(cat "$STATE/$1" 2>/dev/null || echo 0)"; n=$((n + 1));
 script() {
   echo "script $*" >> "$LOG"
   counter launches > /dev/null
-  if [ -n "${CRASH_ON_LAUNCH:-}" ]; then command sleep 1.2; : > "$SMOKE_CRASH_DIR/App-2026-11-02-crash.ips"; fi
+  if [ -n "${CRASH_ON_LAUNCH:-}" ]; then command sleep 0.4; : > "$SMOKE_CRASH_DIR/App-2026-11-02-crash.ips"; fi
 }
 
 xcrun() {

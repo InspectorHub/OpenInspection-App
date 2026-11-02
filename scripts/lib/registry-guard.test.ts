@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
-  ABORT_SIGNALS, APP_KEY, SCRATCH_KEY, VERIFY_FAILED_EXIT_CODE, installAbortHandlers, keyExists, keyExistsWith, looksLikeLeftover, withRegistryGuard,
+  ABORT_SIGNALS, APP_KEY, SCRATCH_KEY, SCRATCH_KEY_2, VERIFY_FAILED_EXIT_CODE, installAbortHandlers, keyExists, keyExistsWith, looksLikeLeftover, withRegistryGuard,
 } from './registry-guard.mjs';
 
 // These tests touch ONLY the scratch key. The real io.inspectorhub.app key is never read, written or exported.
@@ -319,5 +319,63 @@ describe('looksLikeLeftover (the open command the smoke script refuses to back u
     ['control: no command at all', null, false],
   ] as const)('%s', (_name, command, expected) => {
     expect(looksLikeLeftover(command)).toBe(expected);
+  });
+});
+
+// Several keys in one run. Only test-only scratch keys are used; the real key is never read, written or exported.
+describe.skipIf(process.platform !== 'win32')('a run over several keys', () => {
+  const KEYS = [SCRATCH_KEY, SCRATCH_KEY_2];
+  const set = (key: string, value: string) => reg('add', key, '/v', 'Probe', '/t', 'REG_SZ', '/d', value, '/f');
+  const dumpOf = (key: string): string => reg('query', key, '/s');
+  const deleteBoth = () => { for (const key of KEYS) { try { reg('delete', key, '/f'); } catch { /* absent */ } } };
+  const tamper = (index: number) => (saved: { file: string }[]) => {
+    const file = saved[index]!.file;
+    const text = readFileSync(file).toString('utf16le').replace(/ original/, ' TAMPERED');
+    writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text.replace(/^\uFEFF/, ''), 'utf16le')]));
+  };
+  const changeBoth = () => { set(SCRATCH_KEY, 'changed by the run'); set(SCRATCH_KEY_2, 'changed by the run'); };
+
+  afterEach(deleteBoth);
+  afterAll(deleteBoth);
+
+  it('restores every key and frees every lock when all of them verify', async () => {
+    deleteBoth();
+    set(SCRATCH_KEY, 'one original');
+    set(SCRATCH_KEY_2, 'two original');
+    const before = KEYS.map(dumpOf);
+    const lockDir = tmp();
+    await withRegistryGuard(KEYS, changeBoth, { backupDir: tmp(), lockDir, ...quiet });
+    expect(KEYS.map(dumpOf)).toEqual(before);
+    // Both locks are gone: each key can be guarded again at once.
+    for (const key of KEYS) await expect(withRegistryGuard([key], () => 'again', { backupDir: tmp(), lockDir, ...quiet })).resolves.toBe('again');
+  });
+
+  it('a key that did not exist before is deleted again while the other one is restored', async () => {
+    deleteBoth();
+    set(SCRATCH_KEY, 'one original');
+    const before = dumpOf(SCRATCH_KEY);
+    await withRegistryGuard(KEYS, changeBoth, { backupDir: tmp(), lockDir: tmp(), ...quiet });
+    expect(dumpOf(SCRATCH_KEY)).toBe(before);
+    expect(keyExists(SCRATCH_KEY_2)).toBe(false);
+  });
+
+  it.each([[0, 1], [1, 0]])('when key %i fails to restore, key %i is still restored and verified, the failure is reported with its own diff, and only the failed key keeps its lock', async (failing, fine) => {
+    deleteBoth();
+    set(SCRATCH_KEY, 'one original');
+    set(SCRATCH_KEY_2, 'two original');
+    const before = KEYS.map(dumpOf);
+    const lockDir = tmp();
+    const err = await withRegistryGuard(KEYS, changeBoth, { backupDir: tmp(), lockDir, ...quiet, afterBackup: tamper(failing) })
+      .then(() => undefined, (e: unknown) => e as { exitCode: number; message: string; diff: string[] });
+    expect(err).toBeDefined();
+    expect(err!.exitCode).toBe(VERIFY_FAILED_EXIT_CODE);
+    expect(err!.message).toMatch(/restore failed/);
+    expect(err!.diff.some((line) => line.startsWith('- ') && line.includes('original'))).toBe(true);
+    expect(err!.diff.some((line) => line.startsWith('+ ') && line.includes('TAMPERED'))).toBe(true);
+    // The key that could be restored is back, exactly as it was...
+    expect(dumpOf(KEYS[fine]!)).toBe(before[fine]);
+    // ...and its lock is gone, so it can be guarded again, while the key that failed still refuses.
+    await expect(withRegistryGuard([KEYS[fine]!], () => 'free', { backupDir: tmp(), lockDir, ...quiet })).resolves.toBe('free');
+    await expect(withRegistryGuard([KEYS[failing]!], () => 'blocked', { backupDir: tmp(), lockDir, ...quiet })).rejects.toThrow(/in progress|WITHOUT a verified restore/);
   });
 });

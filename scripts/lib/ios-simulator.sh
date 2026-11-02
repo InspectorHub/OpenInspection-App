@@ -15,6 +15,9 @@
 # Overridable for tests: SMOKE_BOOT_LIMIT (bootstatus, 240 s), SMOKE_ANSWER_QUICK (30), SMOKE_ANSWER_LIMIT (240), SMOKE_SPRINGBOARD_GRACE (20),
 # SMOKE_LAUNCH_LIMIT (60), SMOKE_POLL_SECONDS (3), SMOKE_CRASH_DIR (the host's DiagnosticReports).
 
+# A line for the job summary, when there is one (GitHub sets GITHUB_STEP_SUMMARY; elsewhere this does nothing).
+summary_line() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+
 app_is_running() {
   # `launchctl list` prints "<pid> <status> UIKitApplication:<id>[...]"; a dash instead of the pid means not running.
   local line
@@ -22,20 +25,27 @@ app_is_running() {
   [ -n "$line" ] && ! printf '%s' "$line" | awk '{print $1}' | grep -qx -- '-'
 }
 
-# simulator_answers <udid> <seconds>: true once `launchctl list` runs inside the simulator and lists SpringBoard with a pid. If it runs
+# simulator_answers <udid> <seconds> [name]: true once `launchctl list` runs inside the simulator and lists SpringBoard with a pid. If it runs
 # but SpringBoard is not listed within the grace period (or the label is not what was guessed), it goes on with a warning and the whole
 # list. False when it never ran within <seconds>.
 simulator_answers() {
-  local udid="$1" limit="$2" end out answered_at="" grace="${SMOKE_SPRINGBOARD_GRACE:-20}" last=""
+  local udid="$1" limit="$2" name="${3:-simulator}" end out seen answered_at="" grace="${SMOKE_SPRINGBOARD_GRACE:-20}" last=""
   end=$((SECONDS + limit))
   while :; do
     if out="$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null)"; then
       last="$out"
       [ -n "$answered_at" ] || answered_at="$SECONDS"
-      if printf '%s\n' "$out" | grep -Eiq '^[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+.*SpringBoard'; then return 0; fi
+      seen="$(printf '%s\n' "$out" | grep -Ei '^[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+.*SpringBoard' | head -1 || true)"
+      if [ -n "$seen" ]; then
+        # Written down on EVERY run: whether SpringBoard is the label to wait for was a guess, and this is how a run settles it.
+        echo "ok: $name: SpringBoard is listed as: $(printf '%s' "$seen" | tr -s '[:space:]' ' ')"
+        summary_line "- $name: SpringBoard listed as \`$(printf '%s' "$seen" | tr -s '[:space:]' ' ')\`"
+        return 0
+      fi
       if [ "$SECONDS" -ge $((answered_at + grace)) ]; then
-        echo "::warning::the simulator answers launchctl but no SpringBoard line with a pid showed up in ${grace} s; going on. What it lists:"
+        echo "::warning::$name: the simulator answers launchctl but no SpringBoard line with a pid showed up in ${grace} s; going on. What it lists:"
         printf '%s\n' "$last" | head -40
+        summary_line "- $name: **SpringBoard was NOT listed** within ${grace} s; the simulator lists: $(printf '%s\n' "$last" | awk '{print $3}' | head -15 | tr '\n' ' ')"
         return 0
       fi
     fi
@@ -80,10 +90,10 @@ boot_simulator() {
     rc=0
     bootstatus_bounded "$udid" "${SMOKE_BOOT_LIMIT:-240}" || rc=$?
     if [ "$rc" -ne 124 ] && ! printf '%s' "$BOOTSTATUS_OUT" | grep -q 'Status=4294967295'; then
-      simulator_answers "$udid" "${SMOKE_ANSWER_QUICK:-30}" && return 0
+      simulator_answers "$udid" "${SMOKE_ANSWER_QUICK:-30}" "$label" && return 0
     else
       echo "::warning::$label: bootstatus gave up (attempt $attempt of 3); leaving the boot alone and waiting for the simulator to answer"
-      simulator_answers "$udid" "${SMOKE_ANSWER_LIMIT:-240}" && return 0
+      simulator_answers "$udid" "${SMOKE_ANSWER_LIMIT:-240}" "$label" && return 0
     fi
     # Nothing to reset for: after the last attempt the failure is reported with the simulator as it is.
     [ "$attempt" -lt 3 ] || break

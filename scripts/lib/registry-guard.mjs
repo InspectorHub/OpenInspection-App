@@ -21,7 +21,9 @@ import { join } from 'node:path';
 
 export const APP_KEY = 'HKCU\\Software\\Classes\\io.inspectorhub.app';
 export const SCRATCH_KEY = 'HKCU\\Software\\Classes\\io.inspectorhub.smoke-scratch';
-const ALLOWED = new Set([APP_KEY.toLowerCase(), SCRATCH_KEY.toLowerCase()]);
+// A second test-only key: it lets the tests guard SEVERAL keys in one run (one of them failing to restore) without touching the real one.
+export const SCRATCH_KEY_2 = 'HKCU\\Software\\Classes\\io.inspectorhub.smoke-scratch-two';
+const ALLOWED = new Set([APP_KEY.toLowerCase(), SCRATCH_KEY.toLowerCase(), SCRATCH_KEY_2.toLowerCase()]);
 
 export const VERIFY_FAILED_EXIT_CODE = 3;
 export const ABORT_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'];
@@ -194,19 +196,19 @@ export function installAbortHandlers({ proc = process, restore }) {
   };
 }
 
+/** Restores and verifies every key, one at a time. Returns one { ok, error } per key, in the order of `saved`; a failure never stops the others. */
 function restoreAll(saved, log) {
-  const problems = [];
-  for (const { key, file, existedBefore, expected } of saved) {
+  return saved.map(({ key, file, existedBefore, expected }) => {
     try {
       restoreKey(key, file, existedBefore);
       verifyRestored(key, file, existedBefore, expected);
       log(`registry guard: ${key} restored and verified identical`);
+      return { ok: true };
     } catch (error) {
-      problems.push(error);
       process.stderr.write(`REGISTRY GUARD: restoring ${key} FAILED: ${error.message}\n${(error.diff ?? []).join('\n')}\nBackup: ${file}\nBy hand: ${manualRestoreCommand(key, file, existedBefore)}\n`);
+      return { ok: false, error };
     }
-  }
-  return problems;
+  });
 }
 
 /**
@@ -227,6 +229,8 @@ export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAb
 
   const locks = [];
   const releaseAll = () => { for (const path of locks) releaseLock(path); };
+  // A key whose restore did not verify keeps its lock (the next run on THAT key must refuse); the keys that did verify are free again.
+  const releaseVerified = (results) => { results.forEach((r, i) => { if (r.ok) releaseLock(locks[i]); }); };
   const saved = [];
   try {
     for (const key of keys) {
@@ -261,9 +265,9 @@ export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAb
     restore: (why) => {
       log(`registry guard: ${why}: stopping what the run started and restoring before exit`);
       try { onAbort?.(); } catch { /* the restore matters more than the cleanup */ }
-      const problems = restoreAll(saved, log);
-      if (problems.length === 0) releaseAll();
-      return problems.length;
+      const results = restoreAll(saved, log);
+      releaseVerified(results);
+      return results.filter((r) => !r.ok).length;
     },
   });
   let failure;
@@ -273,10 +277,11 @@ export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAb
   } catch (error) {
     failure = error;
   }
-  const problems = restoreAll(saved, log);
+  const results = restoreAll(saved, log);
   uninstall();
   // A lock is only removed after a verified restore: a failed one must stop the next run from backing up a modified key as the original.
-  if (problems.length === 0) releaseAll();
+  releaseVerified(results);
+  const problems = results.filter((r) => !r.ok).map((r) => r.error);
   if (problems.length > 0) {
     const first = problems[0];
     throw new RegistryGuardError(`registry restore failed (${first.message})${failure ? `; the guarded run also failed: ${failure.message}` : ''}`, {
