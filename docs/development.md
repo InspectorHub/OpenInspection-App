@@ -440,7 +440,7 @@ The ordered flows above are not run in CI (they need an account on a real engine
 
 ## Android emulator in CI (G1 to G4)
 
-`.github/workflows/android-emulator.yml` starts one emulator and runs three scripts in it (G1, G2, then G3 and G4, described below):
+`.github/workflows/android-emulator.yml` runs on pull requests and by hand (`gh workflow run android-emulator.yml --ref main`); **a push to main does not run it**, so a green main CI says nothing about these flows. It starts one emulator and runs three scripts in it (G1, G2, then G3 and G4, described below):
 
 - **G1, the launch smoke** (`scripts/android-emulator-smoke.sh`): installs the debug APK with its assets bundled inside, as shipped, starts it, and requires the first screen ("Choose your server"), a live process and no crash.
 - **G2, controlled sign-in** (`scripts/android-emulator-golden.sh` and `maestro/golden/g2-controlled-sign-in.yaml`): the work list with nothing waiting to upload and the status dot Online, reached through the fake engine's sign-in, which completes the browser step by itself.

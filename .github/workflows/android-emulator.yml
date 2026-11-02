@@ -13,6 +13,8 @@ name: Android emulator smoke
 # The launch smoke installs the bundled APK and does not depend on any dev-server step.
 on:
   pull_request:
+  # Also by hand (gh workflow run), so the emulator flows can be run on main without opening a pull request.
+  workflow_dispatch:
 
 permissions:
   contents: read
