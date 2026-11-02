@@ -94,8 +94,13 @@ adb shell am force-stop "$APP_ID"
 [ -z "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app is still running after force-stop"
 # After the restart the work list is first, or the app's own offer to show upload progress, which is asked while a photo is waiting.
 start_app "Work list|Show upload progress"
-timeout 900 maestro --device "$serial" test --format junit --output "$OUT/maestro-g3-b.xml" --debug-output "$OUT/maestro-debug-b" maestro/golden/g3-b-after-restart.yaml
+timeout 900 maestro --device "$serial" test --format junit --output "$OUT/maestro-g3-b.xml" --debug-output "$OUT/maestro-debug-b" --test-output-dir "$OUT/maestro-b-files" maestro/golden/g3-b-after-restart.yaml
 echo "ok: part B passed (the photo and its thumbnail survived the restart, engine still off)"
+# G4: the screenshot of the tile that part B took. It must exist (a flow that took none proves nothing) and be a picture.
+tile="$(find "$OUT/maestro-b-files" -name 'g4-thumbnail-offline.png' | head -1)"
+[ -n "$tile" ] || fail "part B took no screenshot of the tile (no g4-thumbnail-offline.png under $OUT/maestro-b-files)"
+cp "$tile" "$OUT/g4-thumbnail-offline.png"
+node "$HERE/lib/thumbnail-check.mjs" "$OUT/g4-thumbnail-offline.png"
 node "$HERE/lib/engine-state.mjs" "$CONTROL_URL" none-uploaded
 
 # --- the engine comes back: the photo is uploaded, once ---

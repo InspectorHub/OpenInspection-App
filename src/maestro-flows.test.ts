@@ -36,7 +36,7 @@ const COMMANDS = new Set([
 ]);
 
 /** The golden flows also use Maestro's retry, media, script and screenshot commands; the ordered emulator run does not. */
-const GOLDEN_COMMANDS = new Set([...COMMANDS, 'retry', 'runScript', 'assertScreenshot', 'takeScreenshot']);
+const GOLDEN_COMMANDS = new Set([...COMMANDS, 'retry', 'runScript', 'takeScreenshot']);
 
 /**
  * Where the text of a golden flow may come from besides this repository's `src`: the shared field-ui library (the editor and its photo

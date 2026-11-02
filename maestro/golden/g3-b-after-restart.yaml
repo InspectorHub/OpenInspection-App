@@ -1,5 +1,5 @@
 # G3 part B and G4: the app was killed with the photo still waiting (the engine is still off). After the restart the item, the photo and
-# its thumbnail are back, and the thumbnail is a picture, not a placeholder (G4: compared with a reference of the same fixture).
+# its thumbnail are back, and the thumbnail is a picture, not a placeholder (G4: judged by the script from the screenshot this flow takes).
 # The script that runs this starts the app first (am start; see g2-controlled-sign-in.yaml for why Maestro does not).
 appId: io.inspectorhub.app
 ---
@@ -21,17 +21,13 @@ appId: io.inspectorhub.app
     timeout: 30000
 # Still not uploaded: the engine is off.
 - assertVisible: "UPLOADING"
-# G4: the tile (the node that carries the UPLOADING badge covers the whole tile) must look like the reference, which is the same fixture
-# photo as the app showed it. A placeholder, a flat grey or an empty tile is far below the threshold. To renew the reference after a
-# change to the tile's look, run this flow with takeScreenshot (same path and cropOn) instead and review the picture before committing it.
-# The tile can be caught half drawn (assertScreenshot does not retry by itself), so wait for the screen to be still and try up to three times.
+# G4: take a picture of the tile (the node that carries the UPLOADING badge covers the whole tile). The script judges it afterwards
+# (scripts/lib/thumbnail-check.mjs): a photo has many colours, a placeholder or an empty tile has one. It is not compared with a reference
+# image: the crop is 168 x 173 px on one emulator image and 168 x 171 on another, and Maestro's assertScreenshot refuses a size mismatch.
+# Wait for the screen to be still first, so the tile is not caught half drawn.
 - waitForAnimationToEnd:
     timeout: 5000
-- retry:
-    maxRetries: 3
-    commands:
-      - assertScreenshot:
-          path: references/g4-thumbnail-offline
-          thresholdPercentage: 90
-          cropOn:
-            text: "UPLOADING"
+- takeScreenshot:
+    path: g4-thumbnail-offline
+    cropOn:
+      text: "UPLOADING"

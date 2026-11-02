@@ -1658,18 +1658,18 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     for (const label of ['Add', 'Add photo', 'Add from library', 'Add (x)', 'Done now']) expect(matches(label), label).toBe(false);
   });
 
-  it('G4 compares the tile with a reference picture that exists and is a real image, not a flat one', () => {
-    expect(flowB).toContain('assertScreenshot:');
-    const reference = join(ROOT, 'maestro', 'golden', 'references', 'g4-thumbnail-offline.png');
-    const png = readFileSync(reference);
-    expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
-    // A flat or near-flat picture deflates to almost nothing; the fixture photo is a gradient with shapes.
-    expect(png.length).toBeGreaterThan(5000);
-    // Tied to the tile it was taken from (168 x 173 px at 1080 x 2400, the Pixel 6 profile CI uses): a screenshot of a whole screen is far bigger.
-    const width = png.readUInt32BE(16);
-    const height = png.readUInt32BE(20);
-    expect([width, height]).toEqual([168, 173]);
-    // The fixture the flow adds is the picture the reference shows.
+  it('G4 takes a screenshot of the tile in part B and the script judges it by colours, after part B and before the engine comes back', () => {
+    expect(stepsB).toContain('takeScreenshot:');
+    expect(stepsB).not.toContain('assertScreenshot'); // a size-dependent comparison: 168 x 173 px on one emulator image, 168 x 171 on another
+    expect(stepsB).toContain('text: "UPLOADING"');
+    const partB = g3.indexOf('g3-b-after-restart.yaml"');
+    const check = g3.indexOf('lib/thumbnail-check.mjs');
+    const on = g3.indexOf('set_engine false' + String.fromCharCode(10) + 'node');
+    expect(g3).toContain('--test-output-dir "$OUT/maestro-b-files"');
+    expect(g3).toContain('fail "part B took no screenshot of the tile');
+    expect(check).toBeGreaterThan(partB);
+    expect(on).toBeGreaterThan(check);
+    // The fixture the flow picks is a photo with colour, not a mostly white one (that one would look almost like a placeholder).
     expect(g3).toContain('adb push maestro/fixtures/roof-photo.jpg');
     expect(readFileSync(join(ROOT, 'maestro', 'fixtures', 'roof-photo.jpg')).subarray(0, 3).toString('hex')).toBe('ffd8ff');
   });
