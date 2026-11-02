@@ -35,6 +35,10 @@ trap on_error ERR
 
 fail() { echo "::error::$*"; return 1; }
 
+# app_is_running, boot_simulator, launch_app and what they wait for: see the comments in that file (they are tested with a stubbed xcrun).
+# shellcheck source=lib/ios-simulator.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/ios-simulator.sh"
+
 # ---- 1. static checks on the built bundle -------------------------------------------------------
 [ -d "$APP_PATH" ] || fail "no app bundle at $APP_PATH"
 plutil -lint "$APP_PATH/Info.plist"
@@ -54,13 +58,6 @@ pick_device() {
   xcrun simctl list devices available -j | jq -r --arg prefix "$1" '
     [.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith($prefix))]
     | last | .udid // empty'
-}
-
-app_is_running() {
-  # `launchctl list` prints "<pid> <status> UIKitApplication:<id>[...]"; a dash instead of the pid means not running.
-  local line
-  line="$(xcrun simctl spawn "$1" launchctl list | grep "UIKitApplication:$APP_ID" || true)"
-  [ -n "$line" ] && ! printf '%s' "$line" | awk '{print $1}' | grep -qx -- '-'
 }
 
 # What URLResourceValues.isExcludedFromBackup really writes, observed in CI run 41263679703 on the simulator: an attribute
@@ -97,73 +94,6 @@ save_app_log() {
     grep -h 'storage open failed' "$OUT/${label}.console" "$OUT/${label}.log" | head -3
     fail "$label: the app could not open its storage (see the line above)"
   fi
-}
-
-# Boots one simulator and waits for it. `bootstatus -b` can end with `Status=4294967295, isTerminal=YES`, the simulator giving up
-# while it boots (CI runs 41363127461 for the iPad and 41365341593 for the iPhone), and it still exits 0: the script then went on
-# and failed later with "the app is not running", which blames the app for a runner problem. So its output is read.
-#
-# What the runs show (41372183809, whose retry passed, against 41374220395, whose reset failed six times out of six): when bootstatus
-# reports Status=4294967295 after 1 to 2 minutes it has given up WAITING, not the boot: the simulator keeps booting, and the next
-# `simctl boot` printed "Device already booted" on a simulator that then ran the app and passed. Shutting it down, restarting
-# CoreSimulatorService and erasing it (the first version of this retry) interrupted exactly that boot and started the slow boot over,
-# three times. So a boot that bootstatus gave up on is left alone and waited for until the simulator answers a command; only a
-# simulator that stays silent for the whole wait is reset and booted again. Three attempts, then it says plainly that it is the
-# simulator.
-boot_simulator() {
-  local label="$1" udid="$2" attempt out
-  for attempt in 1 2 3; do
-    xcrun simctl boot "$udid" 2>/dev/null || true
-    out="$(xcrun simctl bootstatus "$udid" -b 2>&1)" || true
-    printf '%s\n' "$out" | tail -3
-    if ! printf '%s' "$out" | grep -q 'Status=4294967295'; then
-      simulator_answers "$udid" 30 && return 0
-    else
-      echo "::warning::$label: bootstatus gave up (attempt $attempt of 3); leaving the boot alone and waiting for the simulator to answer"
-      simulator_answers "$udid" 240 && return 0
-    fi
-    echo "::warning::$label: the simulator never answered (attempt $attempt of 3); resetting CoreSimulator"
-    xcrun simctl shutdown all 2>/dev/null || true
-    killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-    sleep 5
-    xcrun simctl erase "$udid" 2>/dev/null || true
-  done
-  fail "$label: the simulator did not boot after 3 attempts; this is the runner's simulator, not the app"
-}
-
-# True once the booted simulator runs a command: `launchctl list` inside it is what app_is_running relies on later, so a simulator
-# that cannot answer it cannot be tested however "booted" it claims to be. simulator_answers <udid> <seconds to wait>.
-simulator_answers() {
-  local waited=0
-  until xcrun simctl spawn "$1" launchctl list > /dev/null 2>&1; do
-    waited=$((waited + 3))
-    [ "$waited" -lt "$2" ] || return 1
-    sleep 3
-  done
-}
-
-# Starts the app under script(1) (see smoke_device) and waits up to 60 s for its process. The iPad simulator can take well over 12 s
-# to start the app (run 41268952771), but run 41375830738 showed a simulator that answered commands after a slow boot and then never
-# produced the process at all in 72 s, with an empty app log. A launch that produced no process is therefore repeated once, after
-# the first one is stopped, and the second failure prints what the simulator was doing so the next log can tell the cause.
-launch_app() {
-  local label="$1" udid="$2" attempt waited
-  for attempt in 1 2; do
-    script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty "$udid" "$APP_ID" > /dev/null 2>&1 &
-    LAUNCH_PID=$!
-    waited=0
-    until app_is_running "$udid" || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
-    if app_is_running "$udid"; then return 0; fi
-    echo "::warning::$label: no app process 60 s after launch (attempt $attempt of 2)"
-    echo "--- $label: what the simulator was doing ---"
-    xcrun simctl list devices | grep -E "Booted|$udid" || true
-    xcrun simctl spawn "$udid" launchctl list 2>&1 | grep -iE "SpringBoard|backboardd|UIKitApplication|PID" | head -12 || true
-    ls -t "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null | head -5 || true
-    kill "$LAUNCH_PID" 2>/dev/null || true
-    xcrun simctl terminate "$udid" "$APP_ID" > /dev/null 2>&1 || true
-    sleep 3
-  done
-  return 0
 }
 
 smoke_device() {

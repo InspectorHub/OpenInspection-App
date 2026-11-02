@@ -53,6 +53,10 @@ adb reverse tcp:5173 tcp:5173
 adb reverse tcp:8791 tcp:8791
 adb install -r "$APK"
 adb logcat -c
+# A system error dialog (a crash or an ANR of ANY app, the launcher's included: CI run 41367506059) would sit in front of the app for the
+# rest of the run, and nothing may read the screen while Maestro runs. The emulator is thrown away after the job. A crash of the app itself
+# is still caught: the process dies and the logcat check below finds its FATAL EXCEPTION.
+adb shell settings put global hide_error_dialogs 1 || true
 adb shell pm clear "$APP_ID"
 adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"
 
@@ -61,8 +65,9 @@ until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge 60 ]
 [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app process did not start within 60 s"
 echo "ok: the app is running, starting $FLOW against $ENGINE_ORIGIN"
 
-# A system "isn't responding" dialog in front of the app would make the flow fail on something that is not the app (CI run 41367506059).
-# Look once before Maestro starts and press Wait; not while it runs, because Maestro and uiautomator would share one UiAutomation channel.
+# A dialog that is ALREADY on screen (it came up before hide_error_dialogs took effect) would make the flow fail on something that is not
+# the app. Look once before Maestro starts and press Wait. Never while it runs: Maestro and uiautomator would share one UiAutomation
+# channel (that crashed UiAutomation before). A dialog that would appear later is the reason for hide_error_dialogs above.
 adb shell uiautomator dump /sdcard/ui-preflight.xml > /dev/null 2>&1 || true
 adb pull /sdcard/ui-preflight.xml "$OUT/ui-preflight.xml" > /dev/null 2>&1 || true
 dismiss_not_responding "$OUT/ui-preflight.xml" || true

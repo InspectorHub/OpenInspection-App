@@ -53,15 +53,24 @@ adb exec-out screencap -p > "$OUT/screen.png"
 # The WebView's accessibility tree is built the first time something asks for it, so the first dump can hold only the native shell
 # (run 41295240990: 7 nodes, no text, while the screenshot taken just before showed the screen). Ask again until the text is there.
 attempts=0
+dismissed=0
 until [ "$attempts" -ge 15 ]; do
   attempts=$((attempts + 1))
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null || true
   adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null
   # A system "isn't responding" dialog can sit in front of a healthy app (CI run 41367506059): press Wait and look again.
-  if dismiss_not_responding "$OUT/ui.xml"; then sleep 2; continue; fi
+  if dismiss_not_responding "$OUT/ui.xml"; then dismissed=1; sleep 2; continue; fi
+  dismissed=0
   if grep -q "Choose your server" "$OUT/ui.xml"; then break; fi
   sleep 2
 done
+# If the last look found a dialog and pressed Wait, ui.xml still shows that dialog: look once more, so the checks below read the screen
+# after the press and not the dialog (which would fail the run with a message about another window).
+if [ "$dismissed" -eq 1 ]; then
+  sleep 2
+  adb shell uiautomator dump /sdcard/ui.xml > /dev/null || true
+  adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null
+fi
 echo "UI tree read in $attempts attempt(s)"
 # Control first: a UI tree that does not even name the app's package proves nothing about what is on screen.
 grep -q "package=\"$APP_ID\"" "$OUT/ui.xml" || fail "the UI tree does not belong to $APP_ID (is another window in front?)"
