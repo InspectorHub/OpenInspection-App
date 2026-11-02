@@ -1354,18 +1354,26 @@ describe('native logging stays off outside the simulator job', () => {
     expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
   });
 
-  it('a simulator that fails to boot is retried once and blamed for itself, not the app', () => {
+  it('a simulator that fails to boot is reset and retried, and blamed for itself, not the app', () => {
     // CI runs 41363127461 (iPad) and 41365341593 (iPhone) ended with `Status=4294967295, isTerminal=YES` from bootstatus: the runner's
     // simulator gave up while booting. bootstatus still exited 0, so the script went on and failed later with "the app is not running".
+    // Run 41372183809 showed a plain shutdown and boot is not enough: the second boot printed "Device already booted" for a simulator
+    // that never ran the app.
     const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
     expect(script).toContain('boot_simulator()');
     expect(script).toContain('Status=4294967295');
-    expect(script).toContain('for attempt in 1 2');
+    expect(script).toContain('for attempt in 1 2 3');
     // The boot output is captured and checked, not only printed.
     expect(script).toMatch(/out="\$\(xcrun simctl bootstatus "\$udid" -b 2>&1\)"/);
-    // A failed boot is shut down before the retry, and the final failure says it is the simulator.
-    expect(script).toContain('xcrun simctl shutdown "$udid"');
-    expect(script).toContain('the simulator did not boot after 2 attempts');
+    // A boot only counts once the simulator answers a command (the same one app_is_running relies on).
+    expect(script).toContain('simulator_answers()');
+    expect(script).toMatch(/simulator_answers\(\) \{[\s\S]*?xcrun simctl spawn "\$1" launchctl list/);
+    expect(script).toMatch(/Status=4294967295'? && simulator_answers "\$udid"/);
+    // A failed attempt resets CoreSimulator as a whole before the next one, and the final failure says it is the simulator.
+    expect(script).toContain('xcrun simctl shutdown all');
+    expect(script).toContain('killall -9 com.apple.CoreSimulator.CoreSimulatorService');
+    expect(script).toContain('xcrun simctl erase "$udid"');
+    expect(script).toContain('the simulator did not boot after 3 attempts');
     // smoke_device boots through the helper; the bare two-line boot is gone.
     expect(script).toMatch(/smoke_device\(\) \{[\s\S]*?boot_simulator "\$label" "\$udid"/);
     expect(script).not.toMatch(/xcrun simctl boot "\$udid" 2>\/dev\/null \|\| true\n  xcrun simctl bootstatus "\$udid" -b\n/);
