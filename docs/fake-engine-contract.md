@@ -41,7 +41,12 @@ Without the variable the check is skipped, and the skip is visible in the test o
 - `GET /api/inspections/{id}`: `propertyType` and `reportStatus` on the inspection, because the app reads them (`src/field/editor-data.ts`).
 - `GET /api/inspections/{id}/report-data`: `type: 'rich'` on every item, because `buildSchema` (`src/field/loader-schema.ts`) uses these sections instead of the template's, and the editor shows the rating row only for `rich` items.
 
-The contract lists none of these. Whether the live handlers return them is not established here. The engine's live contract suite (`npm run test:contract:live` in the engine) is the place to settle it: either the contract is missing fields, or the app reads fields that are absent (for `type`, a real inspection would then show without its rating row).
+The contract lists none of these, **and the real engine does return all three** (checked 2026-11-02 against engine commit `e9fc7a5b`):
+
+- Code: the handler of `GET /api/inspections/{id}` (`server/api/inspections/core.ts`) answers with the whole `inspections` row (`...result`), and `propertyType` and `reportStatus` are columns of that table (`server/lib/db/schema/inspection/core.ts`). The report-data service builds every item with `type: item.type ?? 'rich'` (`server/services/inspection/inspection-report.service.ts`), and the route returns that result as it is. Neither route validates its answer against the response schema.
+- Run time: a throwaway probe in the engine's own unit-test setup (real `InspectionService`, the real table definitions over an in-memory database; not committed) asked for an inspection with `property_type = single_family` and a template item with no type. `getInspection` returned `propertyType: "single_family"` and `reportStatus: "in_progress"`; `getReportData` returned an item with `type: "rich"`. The probe ran the service layer, not the HTTP route, so the route's own steps (the money projection, the readable-snapshot step) were not exercised; the code shows they do not remove these fields.
+
+So the contract under-documents these answers: the item in `report-data` also carries, among others, `parentId`, `ratingOptions`, `tabs`, `naKind`, `notInspectedReason`, `value` and `resolvedTabs`, none of which the contract lists. The app is not reading fields that are absent. The cost is that a change to any of them reaches the app with no contract diff to warn about it. Documenting them is a change to the engine's response schemas (and a regenerated contract), which belongs in the engine repository.
 
 ## When the engine changes its contract
 
