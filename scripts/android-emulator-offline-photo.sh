@@ -19,6 +19,8 @@ HERE="$(dirname "${BASH_SOURCE[0]}")"
 mkdir -p "$OUT"
 # shellcheck source=lib/dismiss-not-responding.sh
 . "$HERE/lib/dismiss-not-responding.sh"
+# shellcheck source=lib/android-start-app.sh
+. "$HERE/lib/android-start-app.sh"
 
 fail() { echo "::error::$*"; return 1; }
 on_error() {
@@ -63,17 +65,6 @@ set_engine() { # true = switched off
 }
 set_engine false
 
-start_app() {
-  adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"
-  local waited=0
-  until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
-  [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app process did not start within 60 s"
-  # A dialog that is already on screen would make a flow fail on something that is not the app. Look once, never while Maestro runs.
-  adb shell uiautomator dump /sdcard/ui-preflight.xml > /dev/null 2>&1 || true
-  adb pull /sdcard/ui-preflight.xml "$OUT/ui-preflight.xml" > /dev/null 2>&1 || true
-  dismiss_not_responding "$OUT/ui-preflight.xml" || true
-}
-
 # --- the photo the flow will pick ---
 # Put into the device's media index well BEFORE the flow opens the picker. Maestro's addMedia did it just before, and on API 34 the picker then
 # listed nothing ("No photos or videos", CI run 41415156795): the index lags the file. Here the sign-in and the download give it minutes, and the
@@ -90,7 +81,7 @@ echo "ok: roof-photo.jpg is in the media index"
 
 # --- G3 part A: sign in, download, engine off, add the photo ---
 adb shell pm clear "$APP_ID"
-start_app
+start_app "Choose your server"
 echo "ok: the app is running, starting part A against $ENGINE_ORIGIN (engine control $CONTROL_URL)"
 timeout 900 maestro --device "$serial" test -e "SERVER_URL=$ENGINE_ORIGIN" -e "CONTROL_URL=$CONTROL_URL" --format junit --output "$OUT/maestro-g3-a.xml" --debug-output "$OUT/maestro-debug-a" maestro/golden/g3-a-offline-photo.yaml
 echo "ok: part A passed (the photo was added with the engine off)"
@@ -101,7 +92,8 @@ node "$HERE/lib/engine-state.mjs" "$CONTROL_URL" none-uploaded
 # --- kill and restart: the photo must survive ---
 adb shell am force-stop "$APP_ID"
 [ -z "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app is still running after force-stop"
-start_app
+# After the restart the work list is first, or the app's own offer to show upload progress, which is asked while a photo is waiting.
+start_app "Work list|Show upload progress"
 timeout 900 maestro --device "$serial" test --format junit --output "$OUT/maestro-g3-b.xml" --debug-output "$OUT/maestro-debug-b" maestro/golden/g3-b-after-restart.yaml
 echo "ok: part B passed (the photo and its thumbnail survived the restart, engine still off)"
 node "$HERE/lib/engine-state.mjs" "$CONTROL_URL" none-uploaded

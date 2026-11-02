@@ -4,6 +4,7 @@
 #   UI_SEQUENCE  comma-separated kinds of screen the Nth `uiautomator dump` sees: dialog | app | blank (the last one repeats)
 #   XML_DIR      a directory holding dialog.xml, app.xml and blank.xml
 #   LOGCAT_TEXT  what `logcat -d` prints
+#   DUMP_FAILS_AFTER  the Nth `uiautomator dump` and every later one fails and writes nothing (default: they all work)
 set -u
 echo "adb $*" >> "$STATE/calls.log"
 cmd="${1:-}"
@@ -29,6 +30,7 @@ case "$cmd" in
         esac
         ;;
       pidof) printf '1234\r\n' ;;
+      rm) rm -f "$STATE/dev${!#}" ;;
       uiautomator)
         # Maestro and uiautomator would share one UiAutomation channel (that crashed it before): a dump while the Maestro stand-in runs is refused.
         if [ -e "$STATE/maestro.running" ]; then echo "OVERLAP: uiautomator while maestro runs" >> "$STATE/calls.log"; exit 1; fi
@@ -36,6 +38,7 @@ case "$cmd" in
         n="$(cat "$STATE/dumps" 2>/dev/null || echo 0)"
         n=$((n + 1))
         echo "$n" > "$STATE/dumps"
+        if [ -n "${DUMP_FAILS_AFTER:-}" ] && [ "$n" -gt "$DUMP_FAILS_AFTER" ]; then exit 1; fi
         IFS=',' read -r -a seq <<< "${UI_SEQUENCE:-app}"
         idx=$((n - 1))
         [ "$idx" -lt "${#seq[@]}" ] || idx=$((${#seq[@]} - 1))

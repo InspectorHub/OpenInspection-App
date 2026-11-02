@@ -1640,6 +1640,15 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(stepsB).not.toContain('launchApp');
   });
 
+  it('both starts of the app wait for the first screen by its text (a started app is not a shown app: CI run 41417726030)', () => {
+    expect(g3).toContain('. "$HERE/lib/android-start-app.sh"');
+    expect(g3).toContain('\nstart_app "Choose your server"\n');
+    expect(g3).toContain('\nstart_app "Work list|Show upload progress"\n');
+    // No second, untested copy of the start in the script itself.
+    expect(g3).not.toMatch(/^start_app\(\) \{/m);
+    expect(g3).not.toContain('adb shell am start');
+  });
+
   it('the picker confirm button pattern matches both labels seen (API 36 "Done", API 34 "Add (1)", the latter in CI run 41413632011) and nothing else of ours', () => {
     const pattern = /text: '([^']+)'/.exec(flowA.slice(flowA.indexOf('The picker confirms')))?.[1];
     expect(pattern).toBeDefined();
@@ -1667,7 +1676,7 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
 
   it('never types a credential, and gets the engine address from its arguments', () => {
     expect(g3.startsWith('#!/usr/bin/env bash')).toBe(true);
-    for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'hide_error_dialogs 1', 'dismiss_not_responding']) expect(g3, needle).toContain(needle);
+    for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'hide_error_dialogs 1', 'lib/dismiss-not-responding.sh']) expect(g3, needle).toContain(needle);
     expect(g3).not.toContain('10.0.2.2');
     expect(g3).not.toMatch(/PASSWORD|E2E_EMAIL|secrets\./);
   });
