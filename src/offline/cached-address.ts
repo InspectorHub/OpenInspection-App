@@ -25,8 +25,7 @@ export function addressOf(body: string): string | null {
     if (typeof inspection !== 'object' || inspection === null || !('propertyAddress' in inspection)) return null;
     const address = inspection.propertyAddress;
     if (typeof address !== 'string') return null;
-    const clean = stripBidi(address).trim();
-    return clean.length === 0 ? null : truncate(clean);
+    return cleanLabel(address);
   } catch {
     return null;
   }

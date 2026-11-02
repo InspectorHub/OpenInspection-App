@@ -125,7 +125,9 @@ function noAnswer(h: HeldBack, n: number, stopped: StopProblem | null, canSignIn
   if (h.status !== undefined) {
     return { key: 'busy', heading: `The server was busy or not available for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
   }
-  // After a stop the last attempt never went out; an earlier one may have been answered, so "did not answer" would not be known to be true.
+  // After a stop, an inspection that reaches here was in a request that went out (the ones that never went out are "not sent", see groupKey)
+  // and got no usable answer, and the import was then stopped before anything more could be learnt. An earlier attempt may even have been
+  // answered, so "did not answer in time" would not be known to be true.
   if (stopped !== null) return { key: 'cut_short', heading: `Sending was cut short before the server replied for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
   return { key: 'no_answer', heading: `The server did not answer in time for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
 }

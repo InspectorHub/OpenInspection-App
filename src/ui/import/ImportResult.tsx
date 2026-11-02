@@ -47,7 +47,8 @@ function Group({ group, showSave, saving, onSave }: { group: ResultGroup; showSa
  * `result-model.ts`; this file only lays it out.
  */
 export function ImportResult({ outcome, labels, saveNote, saving, onSave, onSignInAgain, onAgain, onAnother, onDone }: ImportResultProps) {
-  const model = useMemo(() => buildResult(outcome, labels, onSignInAgain !== undefined), [outcome, labels, onSignInAgain]);
+  const canSignIn = onSignInAgain !== undefined;
+  const model = useMemo(() => buildResult(outcome, labels, canSignIn), [outcome, labels, canSignIn]);
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   const { primary } = model;
