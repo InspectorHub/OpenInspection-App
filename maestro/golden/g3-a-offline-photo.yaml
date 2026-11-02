@@ -45,10 +45,11 @@ appId: io.inspectorhub.app
 - tapOn:
     text: "Photo taken on.*"
     index: 0
-# The picker confirms a selection with "Done" on the image seen (Android 16); another version may label it "Add", or return at once with no
-# button at all. Either way the next step is a hard wait for the tile.
+# The picker confirms a selection with "Done" on API 36 and with "Add (1)" on API 34 (seen in CI run 41413632011); a version that returns at
+# once has no button at all. Maestro matches the whole text, so the count in "Add (1)" is part of the pattern. Either way the next step is
+# a hard wait for the tile.
 - tapOn:
-    text: "Done|Add"
+    text: 'Done|Add \(\d+\)'
     optional: true
 # Added while the engine is off: the tile shows the picture at once and says it is still on its way. Nothing was lost on the way in.
 - extendedWaitUntil:

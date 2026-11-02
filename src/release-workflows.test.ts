@@ -1631,6 +1631,15 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(stepsB).not.toContain('launchApp');
   });
 
+  it('the picker confirm button pattern matches both labels seen (API 36 "Done", API 34 "Add (1)", the latter in CI run 41413632011) and nothing else of ours', () => {
+    const pattern = /text: '([^']+)'/.exec(flowA.slice(flowA.indexOf('The picker confirms')))?.[1];
+    expect(pattern).toBeDefined();
+    // Maestro matches the whole text, like an anchored expression.
+    const matches = (label: string): boolean => new RegExp(`^(?:${pattern ?? ''})$`).test(label);
+    for (const label of ['Done', 'Add (1)', 'Add (12)']) expect(matches(label), label).toBe(true);
+    for (const label of ['Add', 'Add photo', 'Add from library', 'Add (x)', 'Done now']) expect(matches(label), label).toBe(false);
+  });
+
   it('G4 compares the tile with a reference picture that exists and is a real image, not a flat one', () => {
     expect(flowB).toContain('assertScreenshot:');
     const reference = join(ROOT, 'maestro', 'golden', 'references', 'g4-thumbnail-offline.png');
