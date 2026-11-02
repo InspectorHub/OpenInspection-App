@@ -51,6 +51,7 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['shell.openLogs', [], CHANNELS.shell.openLogs],
   ['shell.openDataFolder', [], CHANNELS.shell.openDataFolder],
   ['dialogs.saveExport', ['f', 'n'], CHANNELS.dialogs.saveExport],
+  ['gallery.save', ['InspectorHub-20261102-101500-ab12cd34.jpg', new Uint8Array([1])], CHANNELS.gallery.save],
   ['updater.state', [], CHANNELS.updater.state],
   ['updater.check', [], CHANNELS.updater.check],
   ['updater.download', [], CHANNELS.updater.download],

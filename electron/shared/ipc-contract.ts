@@ -98,6 +98,11 @@ export interface DesktopBridge {
   auth: { onCallback(listener: (url: string) => void): () => void };
   app: { onActiveChange(listener: (active: boolean) => void): () => void };
   dialogs: { saveExport(fileUri: string, suggestedName: string): Promise<'saved' | 'cancelled'> };
+  /**
+   * A COPY of a photo taken in the app, put into the Pictures\InspectorHub folder. The renderer names the file by a fixed pattern
+   * (`GALLERY_FILE_NAME`) and never a path; the main process decides the folder. It never deletes anything.
+   */
+  gallery: { save(name: string, data: Uint8Array): Promise<'saved'> };
   updater: {
     state(): Promise<UpdaterState>;
     onState(listener: (state: UpdaterState) => void): () => void;
@@ -122,6 +127,7 @@ export const BRIDGE_METHODS = {
   auth: ['onCallback'],
   app: ['onActiveChange'],
   dialogs: ['saveExport'],
+  gallery: ['save'],
   updater: ['state', 'onState', 'check', 'download', 'installAndRestart'],
   media: ['decodeHeic'],
 } as const satisfies { [N in BridgeNamespace]: readonly (keyof DesktopBridge[N])[] };
@@ -160,6 +166,7 @@ export const CHANNELS = {
   uploader: { start: 'uploader:start', remove: 'uploader:remove' },
   shell: { openExternal: 'shell:open-external', openLogs: 'shell:open-logs', openDataFolder: 'shell:open-data-folder' },
   dialogs: { saveExport: 'dialogs:save-export' },
+  gallery: { save: 'gallery:save' },
   updater: {
     state: 'updater:state',
     check: 'updater:check',
@@ -172,6 +179,12 @@ export const CHANNELS = {
 type LeafValues<T> = T extends string ? T : { [K in keyof T]: LeafValues<T[K]> }[keyof T];
 /** The name of any request channel, as a literal union. */
 export type ChannelName = LeafValues<typeof CHANNELS>;
+
+/**
+ * The only file name the gallery channel accepts: "InspectorHub-", a date and time, a piece of the pending id (letters and digits) and an image
+ * extension. No path separator, no dot but the last, no space: a name cannot climb out of the folder or name another file type.
+ */
+export const GALLERY_FILE_NAME = /^InspectorHub-[0-9]{8}-[0-9]{6}-[A-Za-z0-9]{1,16}\.(?:jpg|png|heic|heif|webp)$/;
 
 /** Event channels (`webContents.send` to a preload listener). The listener receives the payload and nothing else. */
 export const EVENT_CHANNELS = {

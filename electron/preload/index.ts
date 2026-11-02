@@ -144,6 +144,7 @@ const bridge: DesktopBridge = {
   } },
   app: { onActiveChange: (listener) => listen(EVENT_CHANNELS.activeChange, listener) },
   dialogs: { saveExport: (fileUri, suggestedName) => call(CHANNELS.dialogs.saveExport, fileUri, suggestedName) },
+  gallery: { save: (name, data) => call(CHANNELS.gallery.save, name, data) },
   updater: {
     state: () => call(CHANNELS.updater.state),
     onState: (listener) => listen(EVENT_CHANNELS.updaterState, listener),

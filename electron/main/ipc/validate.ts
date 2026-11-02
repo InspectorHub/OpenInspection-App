@@ -4,7 +4,7 @@
  * is refused; an object with a key the contract does not name is refused too.
  */
 import { isStreamUploadUrl, MAX_DECODE_INPUT_BYTES, MAX_MEDIA_BYTES } from '../../../src/media/media-types.ts';
-import type { DbParam, DecodeHeicRequest, UploaderStartOptions } from '../../shared/ipc-contract.ts';
+import { GALLERY_FILE_NAME, type DbParam, type DecodeHeicRequest, type UploaderStartOptions } from '../../shared/ipc-contract.ts';
 import { RESERVED_SECRET_KEYS } from '../data/reserved-secrets.ts';
 import { DB_PARAM_STRING_MAX, DB_PARAMS_MAX, IPC_BYTES_MAX } from '../../shared/ipc-byte-limits.ts';
 
@@ -198,6 +198,9 @@ export const validators = {
   },
   dialogs: {
     saveExport: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [nonEmptyText(URL_MAX), nonEmptyText(NAME_MAX)]),
+  },
+  gallery: {
+    save: (raw: unknown[]): [string, Uint8Array] => typed<[string, Uint8Array]>(raw, [(value: unknown): string => (typeof value === 'string' && GALLERY_FILE_NAME.test(value) ? value : fail()), uint8]),
   },
   updater: {
     state: none,

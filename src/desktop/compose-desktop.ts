@@ -3,6 +3,7 @@ import { createDesktopAuthSession } from './auth-session-desktop';
 import { createDesktopDb } from './db-ipc';
 import { createDesktopFiles } from './files-ipc';
 import { createDesktopKeyValue } from './kv-ipc';
+import { createDesktopGallery } from './photo-gallery-desktop';
 import { createDesktopSharer } from './sharer-desktop';
 import { createDesktopSecureStore } from './secure-store-ipc';
 import { createDesktopDecodeImage } from './media/decode-heic';
@@ -27,6 +28,7 @@ export async function composeDesktop(bridge: DesktopBridge): Promise<AppServices
     openExternal: (url) => bridge.shell.openExternal(url),
     ...(decodeHeic === undefined ? {} : { decodeImage: createDesktopDecodeImage({ media: { decodeHeic } }) }),
     sharer: createDesktopSharer(bridge),
+    photoGallery: createDesktopGallery(bridge),
     closeDb: () => bridge.db.close(),
   });
 }

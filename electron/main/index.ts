@@ -11,6 +11,7 @@ import { createAppOriginHandler, createHttpsPassthrough, isAppOrigin } from './a
 import { createKvHost } from './data/kv.ts';
 import { createFilesHost } from './data/files-host.ts';
 import { createDialogsHost } from './dialogs.ts';
+import { createGalleryHost } from './gallery.ts';
 import { createMediaFileResolver, createUploaderHost } from './net/uploader-host.ts';
 import { createUploadTransport } from './net/upload-transport.ts';
 import { createHeicHelperRunner } from './media/heic-helper.ts';
@@ -208,6 +209,10 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       downloadsDir: app.getPath('downloads'),
       showItemInFolder: (path) => shell.showItemInFolder(path),
     });
+    const galleryHost = createGalleryHost({
+      fs: { mkdir: (path, options) => fs.mkdir(path, options), writeNew: (path, data) => fs.writeFile(path, data, { flag: 'wx' }) },
+      picturesDir: app.getPath('pictures'),
+    });
     uploaderHost = createUploaderHost({ transport: createUploadTransport(), resolveMediaFile: createMediaFileResolver({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache') }),
       timers: { setTimeout, clearTimeout }, random: Math.random, packaged: app.isPackaged });
     const buildMeta = readBuildMeta(app.getAppPath());
@@ -256,6 +261,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     registerHandler(registerDeps, 'updater:download', validators.updater.download, async () => update.download());
     registerHandler(registerDeps, 'updater:install-and-restart', validators.updater.installAndRestart, async () => update.installAndRestart());
     registerHandler(registerDeps, 'dialogs:save-export', validators.dialogs.saveExport, async (fileUri, suggestedName) => dialogsHost.saveExport(fileUri, suggestedName));
+    registerHandler(registerDeps, 'gallery:save', validators.gallery.save, async (name, data) => galleryHost.save(name, data));
     registerHandler(registerDeps, 'files:write', validators.files.write, async (path, bytes) => files.write(path, bytes));
     registerHandler(registerDeps, 'files:size', validators.files.size, async (path) => files.size(path));
     registerHandler(registerDeps, 'files:read', validators.files.read, async (path) => files.read(path));
