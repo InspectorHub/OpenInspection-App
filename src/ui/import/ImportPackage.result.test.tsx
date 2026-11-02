@@ -164,8 +164,8 @@ describe('the result page: when sending could not go on', () => {
   it('a request that lost its answer and was then cut short by the sign-in is NOT described as unsent', async () => {
     const view = await runToResult(makePackage({ inspections: 3 }), (n) => ({ kind: 'problem', problem: n === 1 ? 'offline' : 'auth' }));
     expect(view.calls).toHaveLength(2);
-    const group = screen.getByTestId('import-group-no_answer');
-    expect(group).toHaveTextContent('The server did not answer in time for these.');
+    const group = screen.getByTestId('import-group-cut_short');
+    expect(group).toHaveTextContent('Sending was cut short before the server replied for these.');
     expect(group).toHaveTextContent('It may or may not have received them.');
     expect(group).toHaveTextContent('Trying again is safe');
     expect(group).toHaveTextContent('Sign in again first.');

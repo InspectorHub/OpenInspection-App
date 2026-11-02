@@ -114,8 +114,8 @@ describe('the inspections that were not imported, grouped by what happened', () 
 
   it('sent without an answer and then cut short by the sign-in: may have arrived, so it does NOT say nothing was uploaded', () => {
     const rows = held('gave_up', 2);
-    const g = group({ held: rows, stopped: 'auth', requested: rows.map((r) => r.id) }, 'no_answer');
-    expect(g?.heading).toBe('The server did not answer in time for these.');
+    const g = group({ held: rows, stopped: 'auth', requested: rows.map((r) => r.id) }, 'cut_short');
+    expect(g?.heading).toBe('Sending was cut short before the server replied for these.');
     expect(g?.action).toContain('It may or may not have received them.');
     expect(g?.action).toContain('Trying again is safe');
     expect(g?.action).toContain('Sign in again first.');

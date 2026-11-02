@@ -11,6 +11,8 @@ export interface ImportResultProps {
   saveNote: { tone: 'info' | 'bad'; text: string } | null;
   saving: boolean;
   onSave(ids: readonly string[]): void;
+  /** Sends the person to the sign-in screen. Without it the page offers "Try again" after a sign-in stop, as it always did. */
+  onSignInAgain?: (() => void) | undefined;
   onAgain(): void;
   onAnother(): void;
   onDone(): void;
@@ -44,15 +46,17 @@ function Group({ group, showSave, saving, onSave }: { group: ResultGroup; showSa
  * act (server answers, counts, internal reasons) is behind "Details" and not on the page until it is opened. What to say is decided in
  * `result-model.ts`; this file only lays it out.
  */
-export function ImportResult({ outcome, labels, saveNote, saving, onSave, onAgain, onAnother, onDone }: ImportResultProps) {
-  const model = useMemo(() => buildResult(outcome, labels), [outcome, labels]);
+export function ImportResult({ outcome, labels, saveNote, saving, onSave, onSignInAgain, onAgain, onAnother, onDone }: ImportResultProps) {
+  const model = useMemo(() => buildResult(outcome, labels, onSignInAgain !== undefined), [outcome, labels, onSignInAgain]);
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   const { primary } = model;
   const saveGroups = model.groups.filter((g) => g.save).length;
 
   function runPrimary(): void {
-    if (primary.kind === 'retry') onAgain();
+    // Only a change of screen, no write, so a second tap in the same frame asks for the same screen and needs no latch.
+    if (primary.kind === 'signin') onSignInAgain?.();
+    else if (primary.kind === 'retry') onAgain();
     else if (primary.kind === 'save') onSave(primary.ids);
     else onDone();
   }

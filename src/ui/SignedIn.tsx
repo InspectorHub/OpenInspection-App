@@ -158,7 +158,7 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
       <>
         <ImportBoundary onBack={closeImport}>
           <Suspense fallback={<ImportLoading />}>
-            <LazyImportScreen services={services} origin={origin} stack={stack} timers={timers} onClose={closeImport} />
+            <LazyImportScreen services={services} origin={origin} stack={stack} timers={timers} onClose={closeImport} onSignInAgain={onSignInAgain} />
           </Suspense>
         </ImportBoundary>
         {prompt}

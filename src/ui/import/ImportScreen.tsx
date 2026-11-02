@@ -8,7 +8,7 @@ import { ImportPackage } from './ImportPackage';
  * The import screen of a signed-in session: the same authenticated client the editor's writes use (pinned origin, Bearer token, the
  * lock and the server-too-old gates asked right before every request), handed to the screen.
  */
-export function ImportScreen({ services, origin, stack, timers, onClose }: ImportScreenProps) {
+export function ImportScreen({ services, origin, stack, timers, onClose, onSignInAgain }: ImportScreenProps) {
   const api = useMemo(() => {
     const ports = editorPorts(services, stack, origin);
     return createApiClient({
@@ -27,6 +27,7 @@ export function ImportScreen({ services, origin, stack, timers, onClose }: Impor
       share={{ files: services.files, sharer: services.sharer, platform: services.platform, ...(timers === undefined ? {} : { timers }) }}
       now={() => services.clock.now()}
       onClose={onClose}
+      {...(onSignInAgain === undefined ? {} : { onSignInAgain })}
     />
   );
 }

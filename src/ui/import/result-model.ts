@@ -31,7 +31,8 @@ export interface ResultGroup {
   save: boolean;
 }
 
-export type PrimaryKind = 'retry' | 'save' | 'done';
+/** `signin` sends the person to the sign-in screen (the import is gone by then, so the file is chosen again afterwards). */
+export type PrimaryKind = 'retry' | 'save' | 'done' | 'signin';
 
 export interface ResultModel {
   headline: string;
@@ -48,8 +49,12 @@ export interface ResultModel {
 /** Words that must not appear in the text a person reads (the details are exempt). Matched whole-word, in any case. */
 export const BANNED_WORDS: readonly string[] = ['held back', 'gave up', 'refused', 'unsent', 'unconfirmed', 'stopped', 'not confirmed', 'part', 'package'];
 
+/** Names of things on other screens that the page may quote, because the person has to find them there. */
+const QUOTED_NAMES: readonly string[] = ['Import package'];
+
 export function bannedWordsIn(text: string): string[] {
-  return BANNED_WORDS.filter((word) => new RegExp(`\\b${word.replace(' ', '\\s+')}\\b`, 'i').test(text));
+  const plain = QUOTED_NAMES.reduce((rest, name) => rest.split(name).join(' '), text);
+  return BANNED_WORDS.filter((word) => new RegExp(`\\b${word.replace(' ', '\\s+')}\\b`, 'i').test(plain));
 }
 
 const plural = (n: number, noun: string): string => `${String(n)} ${noun}${n === 1 ? '' : 's'}`;
@@ -84,13 +89,22 @@ const STOP_HINT: Record<StopProblem, string> = {
   server_too_old: ' Your server also needs to be updated first.',
 };
 
-function notSent(stopped: StopProblem, n: number): Template {
+/** What the sign-in screen costs the person, said truthfully: leaving this screen discards the chosen file. */
+const SIGN_IN_THEN_CHOOSE_AGAIN = 'Sign in again, then open Import package and choose the file again.';
+
+function notSent(stopped: StopProblem, n: number, canSignIn: boolean): Template {
   const w = wordsFor(n);
   const nothing = `Nothing was uploaded for ${w.them}.`;
   const subject = n === 1 ? 'This inspection was' : 'These were';
   switch (stopped) {
     case 'auth':
-      return { key: 'not_sent:auth', heading: `${subject} not sent because you were signed out.`, action: `${nothing} Sign in again, then choose Try again.`, retry: true, save: false };
+      return {
+        key: 'not_sent:auth',
+        heading: `${subject} not sent because you were signed out.`,
+        action: canSignIn ? `${nothing} ${SIGN_IN_THEN_CHOOSE_AGAIN} Anything already imported is skipped.` : `${nothing} Sign in again, then choose Try again.`,
+        retry: true,
+        save: false,
+      };
     case 'locked':
       return { key: 'not_sent:locked', heading: `${subject} not sent because this device is locked.`, action: `${nothing} Verify this device online, then choose Try again.`, retry: true, save: false };
     case 'upgrade':
@@ -100,10 +114,10 @@ function notSent(stopped: StopProblem, n: number): Template {
   }
 }
 
-function noAnswer(h: HeldBack, n: number, stopped: StopProblem | null): Template {
+function noAnswer(h: HeldBack, n: number, stopped: StopProblem | null, canSignIn: boolean): Template {
   const w = wordsFor(n);
   const safe = SAFE_TO_REPEAT.replace('{them}', w.them);
-  const hint = stopped === null ? '' : STOP_HINT[stopped];
+  const hint = stopped === 'auth' && canSignIn ? ' Sign in again first, then open Import package and choose the file again.' : stopped === null ? '' : STOP_HINT[stopped];
   const retry = stopped !== 'upgrade' && stopped !== 'server_too_old';
   if (h.detail === 'local_error') {
     return { key: 'local', heading: `Something went wrong on this device before the server could answer for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
@@ -111,6 +125,8 @@ function noAnswer(h: HeldBack, n: number, stopped: StopProblem | null): Template
   if (h.status !== undefined) {
     return { key: 'busy', heading: `The server was busy or not available for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
   }
+  // After a stop the last attempt never went out; an earlier one may have been answered, so "did not answer" would not be known to be true.
+  if (stopped !== null) return { key: 'cut_short', heading: `Sending was cut short before the server replied for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
   return { key: 'no_answer', heading: `The server did not answer in time for ${w.these}.`, action: `${safe}${hint}`, retry, save: false };
 }
 
@@ -162,7 +178,7 @@ function saidNo(h: HeldBack, n: number): Template {
     case 'package_rejected':
       return rejected(h);
     case 'gave_up':
-      return noAnswer(h, n, null);
+      return noAnswer(h, n, null, false);
   }
 }
 
@@ -171,16 +187,17 @@ function groupKey(h: HeldBack, outcome: ImportOutcome): string {
   if (h.reason === 'gave_up') {
     if (h.status === undefined && !outcome.requested.has(h.id) && outcome.stopped !== null) return `not_sent:${outcome.stopped}`;
     if (h.detail === 'local_error') return 'local';
-    return h.status === undefined ? 'no_answer' : 'busy';
+    if (h.status !== undefined) return 'busy';
+    return outcome.stopped === null ? 'no_answer' : 'cut_short';
   }
   if (h.reason === 'package_rejected') return rejected(h).key;
   return h.reason;
 }
 
-function templateFor(h: HeldBack, n: number, outcome: ImportOutcome): Template {
+function templateFor(h: HeldBack, n: number, outcome: ImportOutcome, canSignIn: boolean): Template {
   if (h.reason === 'gave_up') {
-    if (h.status === undefined && !outcome.requested.has(h.id) && outcome.stopped !== null) return notSent(outcome.stopped, n);
-    return noAnswer(h, n, outcome.stopped);
+    if (h.status === undefined && !outcome.requested.has(h.id) && outcome.stopped !== null) return notSent(outcome.stopped, n, canSignIn);
+    return noAnswer(h, n, outcome.stopped, canSignIn);
   }
   return saidNo(h, n);
 }
@@ -190,7 +207,7 @@ const NO_LABELS: ReadonlyMap<string, string> = new Map();
 /** The cleaned address the file carried for an inspection, or null. Cleaned again here: this is the last step before the screen. */
 const labelOf = (id: string, labels: ReadonlyMap<string, string>): string | null => cleanLabel(labels.get(id));
 
-function buildGroups(outcome: ImportOutcome, labels: ReadonlyMap<string, string>): ResultGroup[] {
+function buildGroups(outcome: ImportOutcome, labels: ReadonlyMap<string, string>, canSignIn: boolean): ResultGroup[] {
   const byKey = new Map<string, HeldBack[]>();
   for (const row of outcome.report.heldBack) {
     const key = groupKey(row, outcome);
@@ -199,7 +216,7 @@ function buildGroups(outcome: ImportOutcome, labels: ReadonlyMap<string, string>
   return [...byKey.entries()].map(([key, rows]) => {
     const first = rows[0];
     if (first === undefined) throw new Error('empty group');
-    const t = templateFor(first, rows.length, outcome);
+    const t = templateFor(first, rows.length, outcome, canSignIn);
     return {
       key,
       heading: t.heading,
@@ -239,14 +256,18 @@ function detailsOf(outcome: ImportOutcome, labels: ReadonlyMap<string, string>):
   return lines;
 }
 
-export function buildResult(outcome: ImportOutcome, labels: ReadonlyMap<string, string> = NO_LABELS): ResultModel {
+/**
+ * `canSignIn`: the host can send the person to the sign-in screen. Only then, and only when the sign-in is what ended the import, the
+ * main action is "Sign in again" ("Try again" would fail the same way). The other stops have no sign-in cure.
+ */
+export function buildResult(outcome: ImportOutcome, labels: ReadonlyMap<string, string> = NO_LABELS, canSignIn = false): ResultModel {
   const { report } = outcome;
-  const groups = buildGroups(outcome, labels);
+  const groups = buildGroups(outcome, labels, canSignIn);
   const imported = report.imported.length;
   const notImported = report.heldBack.length;
   const changes = report.needsAttention.length;
   const allSkipped = imported > 0 && notImported === 0 && report.applied === 0 && report.skipped > 0 && changes === 0;
-  const maybe = groups.filter((g) => ['no_answer', 'busy', 'local'].includes(g.key)).reduce((sum, g) => sum + g.rows.length, 0);
+  const maybe = groups.filter((g) => ['no_answer', 'cut_short', 'busy', 'local'].includes(g.key)).reduce((sum, g) => sum + g.rows.length, 0);
   const absent = notImported - maybe;
 
   const meaning: string[] = [];
@@ -262,7 +283,8 @@ export function buildResult(outcome: ImportOutcome, labels: ReadonlyMap<string, 
   const saveIds = groups.filter((g) => g.save).flatMap((g) => g.rows.map((r) => r.id));
   const canRetry = groups.some((g) => g.retry);
   let primary: ResultModel['primary'];
-  if (canRetry) primary = { kind: 'retry', label: 'Try again', ids: [] };
+  if (canSignIn && outcome.stopped === 'auth') primary = { kind: 'signin', label: 'Sign in again', ids: [] };
+  else if (canRetry) primary = { kind: 'retry', label: 'Try again', ids: [] };
   else if (saveIds.length > 0) primary = { kind: 'save', label: `Save the ${String(saveIds.length)} that ${saveIds.length === 1 ? 'was' : 'were'} not imported`, ids: saveIds };
   else primary = { kind: 'done', label: 'Done', ids: [] };
 

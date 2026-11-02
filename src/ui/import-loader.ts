@@ -12,6 +12,8 @@ export interface ImportScreenProps {
   timers?: TimerPort | undefined;
   /** Back to Settings. */
   onClose(): void;
+  /** Sends the person to the sign-in screen (which leaves this screen). Without it a sign-in stop offers "Try again". */
+  onSignInAgain?: (() => void) | undefined;
 }
 
 /**

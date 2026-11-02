@@ -18,12 +18,12 @@ afterEach(cleanup);
 const identity = { userId: 'user-1', tenantId: 'tenant-1', role: 'inspector' };
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-async function mountOnSettings() {
+async function mountOnSettings(onSignInAgain?: () => void) {
   const world = await createSignedInWorld();
   const list = await createListWorld();
   const view = render(
     <OfflineStackContext.Provider value={list.stack}>
-      <SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} />
+      <SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} {...(onSignInAgain === undefined ? {} : { onSignInAgain })} />
     </OfflineStackContext.Provider>,
   );
   const user = userEvent.setup();
@@ -118,6 +118,25 @@ describe('SignedIn: the import screen is a chunk of its own', () => {
       importModule.load = real;
       quiet.mockRestore();
     }
+  });
+});
+
+describe('SignedIn: the sign-in ends an import', () => {
+  it('the result offers "Sign in again", and it reaches the host\'s sign-in path through the lazy chunk', async () => {
+    const signIn = vi.fn();
+    const { world, user } = await mountOnSettings(signIn);
+    world.server.queue('/api/client/import', () => json(401, { error: { code: 'UNAUTHORIZED' } }));
+    world.server.queue('/api/client/import', () => json(401, { error: { code: 'UNAUTHORIZED' } }));
+    await user.click(screen.getByRole('button', { name: 'Import package' }));
+    await act(async () => {
+      fireEvent.change(await screen.findByTestId('import-file-input'), { target: { files: [new File([makePackage({ inspections: 2 }).zip.slice()], 'export.zip')] } });
+    });
+    await user.click(await screen.findByRole('button', { name: 'Review and import' }));
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Import package' }));
+    const again = await screen.findByRole('button', { name: 'Sign in again' });
+    expect(signIn).not.toHaveBeenCalled();
+    await user.click(again);
+    expect(signIn).toHaveBeenCalledTimes(1);
   });
 });
 

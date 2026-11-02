@@ -34,7 +34,7 @@ export interface Opened {
   calls: ApiCall[];
 }
 
-export async function open(respond: Respond = (_n, b) => ok(b), tenantId = 'tenant-1', frame?: () => Promise<void>): Promise<Opened> {
+export async function open(respond: Respond = (_n, b) => ok(b), tenantId = 'tenant-1', frame?: () => Promise<void>, onSignInAgain?: () => void): Promise<Opened> {
   const world = await createExportWorld();
   const rig = scripted(respond);
   const onClose = vi.fn();
@@ -45,6 +45,7 @@ export async function open(respond: Respond = (_n, b) => ok(b), tenantId = 'tena
       share={{ files: world.files, sharer: world.sharer, platform: 'ios' }}
       now={() => world.clock.now()}
       onClose={onClose}
+      {...(onSignInAgain === undefined ? {} : { onSignInAgain })}
       importDeps={{ sleep: () => Promise.resolve(), nextFrame: frame ?? (() => Promise.resolve()) }}
     />,
   );
@@ -64,8 +65,8 @@ export async function toConfirm(): Promise<HTMLElement> {
   return screen.findByRole('alertdialog');
 }
 
-export async function runToResult(made: { zip: Uint8Array }, respond: Respond): Promise<Opened> {
-  const view = await open(respond);
+export async function runToResult(made: { zip: Uint8Array }, respond: Respond, onSignInAgain?: () => void): Promise<Opened> {
+  const view = await open(respond, 'tenant-1', undefined, onSignInAgain);
   await choose(zipFile(made.zip));
   const dialog = await toConfirm();
   await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Import package' }));

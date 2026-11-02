@@ -39,6 +39,8 @@ export interface ImportPackageProps {
   now(): number;
   /** Back to Settings. */
   onClose(): void;
+  /** Sends the person to the sign-in screen. Offered as the main action when the sign-in is what ended an import. */
+  onSignInAgain?: (() => void) | undefined;
   /** Replaces the waits, the clock and the frame wait of the import. Tests only. */
   importDeps?: ImportPackageDeps['importDeps'];
 }
@@ -50,7 +52,7 @@ export interface ImportPackageProps {
  * ref-based latch lets the confirm tap through once, and a second tap that lands before the screen has changed is dropped. The back
  * key is used up while the import runs, so a stray press cannot leave half-way through the series.
  */
-export function ImportPackage({ api, tenantId, share, now, onClose, importDeps }: ImportPackageProps) {
+export function ImportPackage({ api, tenantId, share, now, onClose, onSignInAgain, importDeps }: ImportPackageProps) {
   const { state, choose, reset, start, savePart } = useImportPackage({ api, tenantId, share, now, ...(importDeps === undefined ? {} : { importDeps }) });
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -165,6 +167,7 @@ export function ImportPackage({ api, tenantId, share, now, onClose, importDeps }
         <ImportResult
           outcome={state.outcome}
           labels={state.labels}
+          onSignInAgain={onSignInAgain}
           saveNote={saveNote}
           saving={saving}
           onSave={save}
