@@ -372,8 +372,10 @@ test('caps a 25-photo offline selection at 20 and shows the capped-batch notice'
     buffer: jpeg,
   })));
 
+  // The notice is a toast that goes away after 6 s (FieldEditor: durationMs 6000) and appears as soon as the batch is converted, BEFORE the
+  // photos are stored. On a slow runner storing 20 of them takes longer than that, so it is looked for first and the rows are waited for after.
+  await expect(page.getByText('Added the first 20 photos; add the rest in another batch.', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await mediaRows()).length, { timeout: 60_000 }).toBe(20);
-  await expect(page.getByText('Added the first 20 photos; add the rest in another batch.', { exact: true })).toBeVisible();
   expect((await mediaRows()).every((row) => row.content_type === 'image/jpeg')).toBe(true);
   expect(engine.requests.filter((request) => request === 'POST /api/public/uploads/photo')).toHaveLength(0);
 });

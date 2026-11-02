@@ -47,7 +47,8 @@ export function withLabels(part: Uint8Array, labels: ReadonlyMap<string, string>
       if (typeof row !== 'object' || row === null || !('id' in row) || typeof row.id !== 'string') return row;
       const label = cleanLabel(labels.get(row.id));
       const entry: Record<string, unknown> = { id: row.id };
-      if ('reportId' in row) entry.reportId = row.reportId;
+      const reportId = (row as { reportId?: unknown }).reportId;
+      if (typeof reportId === 'string') entry.reportId = reportId;
       if (label !== null) entry.label = label;
       if (!sameEntry(row as Record<string, unknown>, entry)) changed = true;
       return entry;

@@ -110,7 +110,7 @@ export function checkedLabel(at: number | null, now: number, locale: string = FO
  * U+202A-202E, U+2066-2069, U+200E, U+200F, U+061C (Arabic letter mark), U+200B (zero-width space), U+2060 (word joiner), U+FEFF.
  * U+200C and U+200D are NOT here: they are part of how Persian, Indic scripts and emoji sequences are written.
  */
-const BIDI = /[‪-‮⁦-⁩‎‏؜​⁠﻿]/g;
+const BIDI = /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c\u200b\u2060\ufeff]/g;
 
 /** Text from the server or from a cache, made safe to place next to our own words. */
 export function stripBidi(text: string): string {

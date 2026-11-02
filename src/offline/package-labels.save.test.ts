@@ -86,6 +86,13 @@ describe('saving a part: the shared library drops per-inspection labels, so the 
       expect(zipSize(clean)).toBeLessThan(zipSize(hostile));
     });
 
+    it('a reportId that is not a string is not carried into the part (the importer then rejects that part, which is better than passing junk on)', () => {
+      const odd = withEntries(base, [{ id: 'insp-1', reportId: { nested: ['x'] }, label: '34 Birch Lane' }]);
+      const clean = withLabels(odd, new Map([['insp-1', '34 Birch Lane']]));
+      expect(entriesOf(clean)).toEqual([{ id: 'insp-1', label: '34 Birch Lane' }]);
+      expect(() => parsePackage(clean)).toThrow();
+    });
+
     it('control: an honest part (the right label, nothing else) is handed back as it is, without being inflated and zipped again', () => {
       const honest = withEntries(base, [{ id: 'insp-1', reportId, label: '34 Birch Lane' }]);
       expect(withLabels(honest, new Map([['insp-1', '34 Birch Lane']]))).toBe(honest);
