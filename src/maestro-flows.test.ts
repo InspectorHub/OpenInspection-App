@@ -35,6 +35,24 @@ const COMMANDS = new Set([
   'waitForAnimationToEnd',
 ]);
 
+/** The golden flows also use Maestro's retry, media, script and screenshot commands; the ordered emulator run does not. */
+const GOLDEN_COMMANDS = new Set([...COMMANDS, 'retry', 'runScript', 'addMedia', 'assertScreenshot', 'takeScreenshot']);
+
+/**
+ * Where the text of a golden flow may come from besides this repository's `src`: the shared field-ui library (the editor and its photo
+ * strip are drawn by it), the fake engine's fixture data (an address, an item name), and the Android system itself (the photo picker).
+ */
+interface Origins {
+  /** Text searched in addition to the app source (library bundle, fixture data). */
+  extra: string;
+  /** Compared without regard to case: the app draws some labels in capitals with CSS and Android reports them as drawn ("ITEMS"). */
+  ignoreCase: boolean;
+  /** Strings built at run time from parts: each part must exist in the sources. */
+  composed: Readonly<Record<string, readonly string[]>>;
+  /** Pieces that belong to the Android system, not to any of our sources. */
+  system: ReadonlySet<string>;
+}
+
 const ENV_REFERENCE = /^"\$\{[A-Z][A-Z0-9_]*\}"$/;
 
 function flowFiles(): string[] {
@@ -65,7 +83,7 @@ interface Parsed {
 }
 
 /** Splits a flow into its header and its commands and reports every structural problem found, one line each. */
-function inspect(text: string): { parsed: Parsed | null; problems: string[] } {
+function inspect(text: string, commands: ReadonlySet<string> = COMMANDS): { parsed: Parsed | null; problems: string[] } {
   const problems: string[] = [];
   if (text.includes('\t')) problems.push('contains a tab');
   const lines = text.split(/\r?\n/);
@@ -81,7 +99,7 @@ function inspect(text: string): { parsed: Parsed | null; problems: string[] } {
     if (/^\S/.test(line)) {
       const match = /^- ([A-Za-z]+)(:.*)?$/.exec(line);
       if (match === null) problems.push(`not a command line: ${line}`);
-      else if (!COMMANDS.has(match[1] ?? '')) problems.push(`unknown command ${match[1] ?? ''}`);
+      else if (!commands.has(match[1] ?? '')) problems.push(`unknown command ${match[1] ?? ''}`);
     } else if (!/^ {2,}\S/.test(line)) {
       problems.push(`bad indentation: ${line}`);
     }
@@ -110,15 +128,23 @@ function fragments(selector: string): string[] {
     .filter((piece) => piece.length >= 3);
 }
 
-function missingFromApp(flow: string, source: string): string[] {
-  const { parsed } = inspect(flow);
+function missingFromApp(flow: string, source: string, origins?: Origins, commands: ReadonlySet<string> = COMMANDS): string[] {
+  const { parsed } = inspect(flow, commands);
   if (parsed === null) return ['(flow does not parse)'];
+  const haystack = origins === undefined ? source : `${source}\n${origins.extra}`;
+  const folded = origins?.ignoreCase === true ? haystack.toLowerCase() : haystack;
+  const has = (piece: string): boolean => (origins?.ignoreCase === true ? folded.includes(piece.toLowerCase()) : folded.includes(piece));
   const missing: string[] = [];
   for (const selector of selectors(parsed.body)) {
     if (ENGINE_OWNED.has(selector) || COMPUTED.has(selector)) continue;
+    const parts = origins?.composed[selector];
+    if (parts !== undefined) {
+      for (const part of parts) if (!has(part)) missing.push(`${selector} -> ${part} (a part of a composed string)`);
+      continue;
+    }
     const pieces = fragments(selector);
     if (pieces.length === 0) missing.push(`${selector} (no literal text to check)`);
-    for (const piece of pieces) if (!source.includes(piece)) missing.push(`${selector} -> ${piece}`);
+    for (const piece of pieces) if (!has(piece) && !(origins?.system.has(piece) ?? false)) missing.push(`${selector} -> ${piece}`);
   }
   return missing;
 }
@@ -195,23 +221,40 @@ describe('the golden Maestro flows', () => {
   const names = readdirSync(goldenDir).filter((name) => name.endsWith('.yaml')).sort();
   const flows = new Map(names.map((name) => [name, readFileSync(join(goldenDir, name), 'utf8')]));
   const source = appSource();
+  const origins: Origins = {
+    extra: [readFileSync(join(ROOT, 'node_modules', '@inspectorhub', 'field-ui', 'dist', 'index.js'), 'utf8'), readFileSync(join(ROOT, 'e2e', 'fake-engine', 'engine.ts'), 'utf8')].join('\n').replaceAll('&apos;', "'"),
+    ignoreCase: true,
+    // The work list row is named "Open <address>", the item row "<rating letter> <item name>", and the count is a plural: the parts exist, the whole does not.
+    composed: { 'Open 77 Test Photo Lane': ['Open', '77 Test Photo Lane'], 'A Roof cover': ['Roof cover'], 'Updated 1 inspection.': ['Updated', 'inspection'] },
+    system: new Set(['Photo taken on']), // the content description of a tile in the Android system photo picker
+  };
 
   it('finds the golden flows, and the ordered emulator run does not include them', () => {
-    expect(names).toEqual(['g2-controlled-sign-in.yaml']);
+    expect(names).toEqual(['g2-controlled-sign-in.yaml', 'g3-a-offline-photo.yaml', 'g3-b-after-restart.yaml']);
     const runner = readFileSync(join(FLOW_DIR, 'run-emulator.ps1'), 'utf8');
     for (const name of names) expect(runner).not.toContain(name);
   });
 
   it('every golden flow has the shape Maestro expects and targets the shipped app id', () => {
     for (const [name, text] of flows) {
-      const { parsed, problems } = inspect(text);
+      const { parsed, problems } = inspect(text, GOLDEN_COMMANDS);
       expect({ name, problems }).toEqual({ name, problems: [] });
       expect(parsed?.appId, name).toBe('io.inspectorhub.app');
     }
   });
 
-  it('every text a golden flow taps or waits for exists in the app source', () => {
-    for (const [name, text] of flows) expect({ name, missing: missingFromApp(text, source) }).toEqual({ name, missing: [] });
+  it('every text a golden flow taps or waits for exists in the app source, the field-ui library, the fixture data or the system picker', () => {
+    for (const [name, text] of flows) expect({ name, missing: missingFromApp(text, source, origins, GOLDEN_COMMANDS) }).toEqual({ name, missing: [] });
+  });
+
+  it('the checker still catches a renamed text in a golden flow (positive control) and a command it does not know', () => {
+    const flow = flows.get('g3-a-offline-photo.yaml') ?? '';
+    expect(missingFromApp(flow, source, origins, GOLDEN_COMMANDS)).toEqual([]);
+    expect(missingFromApp(flow.replace('"Add from library"', '"Add from the shelf"'), source, origins, GOLDEN_COMMANDS).length).toBeGreaterThan(0);
+    expect(missingFromApp(flow.replace('"Open 77 Test Photo Lane"', '"Open 78 Test Photo Lane"'), source, origins, GOLDEN_COMMANDS).length).toBeGreaterThan(0);
+    expect(inspect(flow.replace('- addMedia:', '- addTheMedia:'), GOLDEN_COMMANDS).problems).toContain('unknown command addTheMedia');
+    // The ordered run's rules are untouched: it still does not know these commands.
+    expect(inspect(flow).problems).toContain('unknown command addMedia');
   });
 
   it('no golden flow holds a credential: typed text is an environment reference only', () => {

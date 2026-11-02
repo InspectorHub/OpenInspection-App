@@ -438,9 +438,9 @@ The flows wait for elements to appear (`extendedWaitUntil`, `scrollUntilVisible`
 
 The ordered flows above are not run in CI (they need an account on a real engine); the golden flow G2 is, see "Android emulator in CI" below. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.
 
-## Android emulator in CI (G1 and G2)
+## Android emulator in CI (G1 to G4)
 
-`.github/workflows/android-emulator.yml` starts one emulator and runs two things in it:
+`.github/workflows/android-emulator.yml` starts one emulator and runs three scripts in it (G1, G2, then G3 and G4, described below):
 
 - **G1, the launch smoke** (`scripts/android-emulator-smoke.sh`): installs the debug APK with its assets bundled inside, as shipped, starts it, and requires the first screen ("Choose your server"), a live process and no crash.
 - **G2, controlled sign-in** (`scripts/android-emulator-golden.sh` and `maestro/golden/g2-controlled-sign-in.yaml`): the work list with nothing waiting to upload and the status dot Online, reached through the fake engine's sign-in, which completes the browser step by itself.
@@ -453,14 +453,20 @@ G2 starts the app with `adb shell pm clear` and `am start`, because Maestro's ow
 
 **What a green run does not prove yet.** None of the G2 steps had run in CI when this was written; the first run is the real test. Two things in it are a best effort and may need a second attempt: asking Chrome to skip its first-run screen on the emulator image (`chrome-command-line`), and the Maestro flags `--format junit --output ... --debug-output`. If the sign-in hangs in front of Chrome's first-run page, that is the cause.
 
-### How G3 and G4 would be added (not built)
+### G3 and G4: the photo taken offline, the restart, the upload, the thumbnail
 
-Both reuse the same two builds, the same engine and Vite, and one more rule: the engine is started with `--scenario inspection` so insp-7 is on the work list, and every step that talks to the engine's control origin (`http://127.0.0.1:<control port>/__test__/...`, printed by the engine at start) lives in the shell script around Maestro, because a Maestro flow cannot make an http call.
+`scripts/android-emulator-offline-photo.sh` runs after G2 in the same emulator session, on its **own fake engine** (port 8792, `--scenario inspection`, so insp-7 "77 Test Photo Lane" is on the work list). It needs its own because its flow switches the engine off, and the control server of that engine is the only thing that can do it: the workflow writes the control url the engine printed to `g3-control-url` and passes it in. The script, in order:
 
-- **G3, offline fill and photo, restart, upload.** The script pushes a JPEG to `/sdcard/Pictures` and starts a media scan, then runs flow part A: sign in (G2's steps), download today's work, open the item, add the photo from the library through the system picker. Before the photo is added the script switches the engine off with `POST /__test__/unavailable {"value":true}`. After part A it kills the process (`adb shell am force-stop`), starts it again and runs part B: the entry and the photo are still there. Then it turns the engine back on and polls `GET /__test__/state` until `completedCounts` shows one completed upload for the photo's key. This needs one flow file per part and a stable accessibility label on the picker's confirm button.
-- **G4, the thumbnail is a picture, also offline after a restart.** Maestro cannot judge image content. The state endpoint already lists the authorized photo requests, so the script asserts through it that the app asked for the photo with its session. It then takes `adb exec-out screencap -p` after a restart with the engine switched off and runs a small Node check on the thumbnail's rectangle (not one flat grey, not the placeholder colour). The rectangle comes from the UI tree dump (`uiautomator dump`), not from fixed pixel coordinates.
+1. Switches the engine on (a leftover from an earlier run is written down, not assumed), clears the app, starts it, and runs **part A** (`maestro/golden/g3-a-offline-photo.yaml`): G2's sign-in through `runFlow`, download today's work, open the item, switch the engine **off** (a Maestro `runScript` calling `POST /__test__/unavailable`), add the fixture photo from the library through the system photo picker, and require the tile (it says UPLOADING), "1 photo" and "Can't reach the server".
+2. Asks the engine whether anything was uploaded (`scripts/lib/engine-state.mjs <control> none-uploaded`). Nothing may have been: this is what proves the photo was taken offline. A control server that cannot be read fails this check; it is never read as "nothing".
+3. Kills the app (`am force-stop`, and checks the process is gone), starts it again without clearing it, and runs **part B** (`g3-b-after-restart.yaml`): the work list, the item, the photo is still there and still UPLOADING. This is also **G4**: the tile is cropped on its UPLOADING badge (the node covers the whole tile) and compared with `maestro/golden/references/g4-thumbnail-offline.png`, the same fixture photo as the app shows it, at 90 %. A placeholder, a flat grey or an empty tile fails: a flat grey reference was tried against the real tile and scored 0.33 %.
+4. Asks again that nothing was uploaded, then switches the engine on and waits up to 180 s for **exactly one** completed upload (`one-uploaded 180`). The same upload completing twice, a second upload, or an error logged by the engine fails it.
 
-Both would go into the same `scripts/android-emulator-golden.sh` run, after G2, in the same emulator session; the job's 60-minute limit needs a second look once they are in.
+The photo is `maestro/fixtures/roof-photo.jpg`, a gradient with shapes, on purpose: a mostly white photo would make a placeholder look almost right. To renew the reference after a change to how the tile looks, run part B with `takeScreenshot` (same path, same `cropOn`) instead of `assertScreenshot`, look at the picture, and commit it. The reference was made on an API 36 emulator and is compared on API 34 in CI: the first CI run is the real test of that 90 %.
+
+What is **not** covered: the photo picker is the Android 13+ system picker and the flow taps its newest tile (`Photo taken on…`), so a different picker (an older image, a vendor build) is not exercised; the camera (`Take photo`) is not; and "the app asked the engine for the thumbnail with its session" (the `photoRequests` list of the state endpoint) is not asserted, because this tile is drawn from the local copy, which is the point of G4.
+
+Running it by hand on a machine with a phone attached: set `ANDROID_SERIAL=emulator-5554`, start the engine yourself (`node e2e/fake-engine/serve.mjs --host 127.0.0.1 --port 8792 --scenario inspection --allow-origin http://localhost:5173`; a fresh one for every run, because its counters are kept), run Vite with `--host 127.0.0.1` (the default `localhost` binds IPv6 only on Windows and `adb reverse` cannot reach it), and pass the printed control url.
 
 ## Visual layout baselines
 

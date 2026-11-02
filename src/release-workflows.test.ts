@@ -1366,7 +1366,10 @@ describe('native logging stays off outside the simulator job', () => {
     expect(timeoutAt).toBeLessThan(smokeAt);
     // Only installed when neither name is there already, and the library looks for both names.
     expect(steps[timeoutAt]!.run).toMatch(/command -v timeout \|\| command -v gtimeout \|\| brew install coreutils/);
-    expect(readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8')).toMatch(/command -v timeout \|\| command -v gtimeout/);
+    // The library tries both names and accepts only a GNU one (on Windows a bare `timeout` can be System32's pause program).
+    const library = readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8');
+    expect(library).toContain('for candidate in timeout gtimeout');
+    expect(library).toMatch(/\*GNU\* \| \*coreutils\*/);
   });
 
   it('boots and launches through the tested library, and keeps no second, untested copy of those functions in the script', () => {
@@ -1511,13 +1514,17 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
 
   it('runs G2 on the dev-server APK after the launch smoke, in the same emulator session, with no guard that could skip it', () => {
     const lines = String(emuJob.steps[runnerAt]?.with?.script).split('\n').map((l) => l.trim()).filter((l) => l !== '');
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     expect(lines[0]).toContain('scripts/android-emulator-smoke.sh');
     expect(lines[1]).toBe('bash scripts/android-emulator-golden.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8791 "$RUNNER_TEMP/android-smoke/g2"');
-    // A missing APK must fail the job, never skip the flow.
-    expect(lines[1]).not.toMatch(/\[ !? -f|\|\||if /);
+    // G3 and G4 follow G2 in the same session, on their own engine (port 8792, the inspection scenario) whose control url the workflow wrote down.
+    expect(lines[2]).toBe('bash scripts/android-emulator-offline-photo.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8792 "$(cat "$RUNNER_TEMP/android-smoke/g3-control-url")" "$RUNNER_TEMP/android-smoke/g3"');
+    // A missing APK must fail the job, never skip a flow.
+    for (const line of lines.slice(1)) expect(line).not.toMatch(/\[ !? -f|\|\||if /);
     // The fake engine is reached at the emulator's localhost (adb reverse in the golden script), on the port the workflow started it on.
-    expect(String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run)).toContain('--port 8791');
+    const engines = String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run);
+    expect(engines).toContain('--port 8791');
+    expect(engines).toMatch(/--port 8792 --scenario inspection --allow-origin http:\/\/localhost:5173/);
   });
 
   it('both emulator scripts deal with a system "isn\'t responding" dialog instead of failing on it', () => {
@@ -1582,6 +1589,69 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(readFileSync(join(ROOT, 'maestro', 'golden', 'g2-controlled-sign-in.yaml'), 'utf8')).not.toContain('launchApp');
     // No credential, token or account is typed or passed by the script.
     expect(golden).not.toMatch(/PASSWORD|E2E_EMAIL|secrets\./);
+  });
+});
+
+describe('Android emulator golden flows G3 and G4 (offline photo, restart, upload, thumbnail)', () => {
+  const g3 = readFileSync(join(ROOT, 'scripts', 'android-emulator-offline-photo.sh'), 'utf8');
+  const flowA = readFileSync(join(ROOT, 'maestro', 'golden', 'g3-a-offline-photo.yaml'), 'utf8');
+  const flowB = readFileSync(join(ROOT, 'maestro', 'golden', 'g3-b-after-restart.yaml'), 'utf8');
+  // The steps only: a comment may name what a step does not do (this file mentions g2-controlled-sign-in.yaml to say why Maestro never launches the app).
+  const stepsOf = (text: string): string => text.split(/\r?\n/).filter((line) => !line.trim().startsWith('#')).join('\n');
+  const stepsB = stepsOf(flowB);
+
+  it('the engine goes off in part A BEFORE the photo is added, and the script proves nothing reached it before the restart', () => {
+    const off = flowA.indexOf('UNAVAILABLE: "true"');
+    expect(off).toBeGreaterThan(0);
+    expect(off).toBeLessThan(flowA.indexOf('addMedia'));
+    expect(flowA.indexOf('addMedia')).toBeLessThan(flowA.indexOf('Add from library'));
+    // Two none-uploaded checks (after A, after B) both come before the engine is switched on and before the one-uploaded wait.
+    const none = [...g3.matchAll(/engine-state\.mjs" "\$CONTROL_URL" none-uploaded/g)].map((m) => m.index ?? -1);
+    expect(none).toHaveLength(2);
+    const on = g3.indexOf('set_engine false\nnode');
+    expect(on).toBeGreaterThan(none[1] ?? Infinity);
+    expect(g3.indexOf('one-uploaded 420 15')).toBeGreaterThan(on); // the wait covers the app's retry backoff, then watches for a second copy
+  });
+
+  it('kills the app between the parts and starts it again, and part B sees the work list first (a restart really happened)', () => {
+    const killAt = g3.indexOf('adb shell am force-stop "$APP_ID"');
+    expect(killAt).toBeGreaterThan(0);
+    // The real invocations (the lines that run Maestro), not the header comment that names the same files.
+    const lines = g3.split(/\r?\n/);
+    const lineOf = (flow: string): number => lines.findIndex((line) => line.includes('maestro --device') && line.includes(flow));
+    const kill = lines.findIndex((line) => line.startsWith('adb shell am force-stop'));
+    expect(lineOf('g3-a-offline-photo.yaml')).toBeGreaterThan(0);
+    expect(kill).toBeGreaterThan(lineOf('g3-a-offline-photo.yaml'));
+    expect(lineOf('g3-b-after-restart.yaml')).toBeGreaterThan(kill);
+    expect(g3.indexOf('pidof "$APP_ID"', killAt)).toBeGreaterThan(killAt); // it checks the process is gone
+    // Part B does not clear the app and does not sign in again: what it sees was kept by the app itself.
+    expect(g3.slice(killAt)).not.toContain('pm clear');
+    expect(stepsB).not.toContain('g2-controlled-sign-in');
+    expect(stepsB).not.toContain('clearState');
+    expect(stepsB).not.toContain('launchApp');
+  });
+
+  it('G4 compares the tile with a reference picture that exists and is a real image, not a flat one', () => {
+    expect(flowB).toContain('assertScreenshot:');
+    const reference = join(ROOT, 'maestro', 'golden', 'references', 'g4-thumbnail-offline.png');
+    const png = readFileSync(reference);
+    expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    // A flat or near-flat picture deflates to almost nothing; the fixture photo is a gradient with shapes.
+    expect(png.length).toBeGreaterThan(5000);
+    // Tied to the tile it was taken from (168 x 173 px at 1080 x 2400, the Pixel 6 profile CI uses): a screenshot of a whole screen is far bigger.
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    expect([width, height]).toEqual([168, 173]);
+    // The fixture the flow adds is the picture the reference shows.
+    expect(flowA).toContain('../fixtures/roof-photo.jpg');
+    expect(readFileSync(join(ROOT, 'maestro', 'fixtures', 'roof-photo.jpg')).subarray(0, 3).toString('hex')).toBe('ffd8ff');
+  });
+
+  it('never types a credential, and gets the engine address from its arguments', () => {
+    expect(g3.startsWith('#!/usr/bin/env bash')).toBe(true);
+    for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'hide_error_dialogs 1', 'dismiss_not_responding']) expect(g3, needle).toContain(needle);
+    expect(g3).not.toContain('10.0.2.2');
+    expect(g3).not.toMatch(/PASSWORD|E2E_EMAIL|secrets\./);
   });
 });
 

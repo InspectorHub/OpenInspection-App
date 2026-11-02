@@ -113,6 +113,17 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
     expect(r.seconds).toBeLessThan(25); // it would be 30 s or more if the bound did nothing; the margin is for a loaded machine
   });
 
+  it('a hung call that IGNORES SIGTERM is killed by timeout -k and is still read as "stopped by the limit" (status 137, not 124)', () => {
+    // Without the 137 case the boot below would take the "bootstatus ended by itself" branch after 30 s instead of the give-up branch.
+    const hungBoot = run(boot, { BOOTSTATUS_HANG: '20', SMOKE_BOOT_LIMIT: '1', IGNORE_TERM: '1' });
+    expect(hungBoot.out).toContain('RESULT=booted');
+    expect(hungBoot.out).toContain('was still running after 1 s and was stopped');
+    expect(hungBoot.out).toContain('bootstatus gave up (attempt 1 of 3)');
+    const hungProbe = run(boot, { SPAWN_HANG_FIRST: '1', SMOKE_PROBE_LIMIT: '1', SMOKE_ANSWER_QUICK: '60', IGNORE_TERM: '1' });
+    expect(hungProbe.out).toContain('RESULT=booted');
+    expect(hungProbe.out).toContain('a launchctl probe was still running after 1 s and was stopped');
+  });
+
   it('a bootstatus that does not end by itself is stopped at its limit and treated as given up, not waited for forever', () => {
     const r = run(boot, { BOOTSTATUS_HANG: '20', SMOKE_BOOT_LIMIT: '1' });
     expect(r.out).toContain('RESULT=booted');
@@ -203,11 +214,12 @@ describe.skipIf(!bashAvailable)('wait_for_app (a check that the app is STILL run
   });
 
   it('an app that is really gone is still reported gone, once the time is up (a crash is not hidden by the retries)', () => {
-    const r = run(wait(2), { APP_UP_AT_LAUNCH: '0' });
+    const r = run(wait(5), { APP_UP_AT_LAUNCH: '0' });
     expect(r.out).toContain('RESULT=gone');
-    // It did not give up at the first probe: it kept asking until the window was over (a 2 s window on the clock is 1 to 2 real seconds). How many
-    // probes that took depends on the machine, so they are not counted.
-    expect(r.seconds).toBeGreaterThanOrEqual(1);
+    // It did not give up at the first probe: it asked again after the pause (a 5 s window leaves room for a second probe even when the first
+    // one is slow), and it only said "gone" once the window was over.
+    expect(r.calls.filter((c) => c.includes('launchctl list')).length).toBeGreaterThanOrEqual(2);
+    expect(r.seconds).toBeGreaterThanOrEqual(3);
   });
 });
 

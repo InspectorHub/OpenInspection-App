@@ -29,6 +29,9 @@ const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
  * entries are rebuilt from the known keys only, and the label comes from the map that was already cleaned at read time, never from the
  * part. Both situations are the same rule, and it holds whichever library version is installed.
  *
+ * What is NOT rebuilt, and passes through as it is: a row that is not an object with a string `id`, any manifest key other than
+ * `inspections`, and a manifest bigger than the read limit (it is not read at all). The importer's own validation decides about those.
+ *
  * The zip is only rewritten when an entry actually differs: the manifest alone is read first (a filtered unzip, a few kilobytes), so
  * the common case, an honest part with the right labels, costs nothing and inflates nothing. When it does rewrite, nothing but the
  * manifest changes: every other entry is carried over byte for byte (photos are stored, not compressed again). The most that can be

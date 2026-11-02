@@ -1,0 +1,58 @@
+# G3 part A (regression strategy, section 3): sign in, download today's work, open the item, switch the engine OFF, add a photo from the
+# library. The photo must sit on the device, waiting to upload. Part B (g3-b-after-restart.yaml) runs after the script has killed the app.
+#
+#   maestro --device <serial> test -e SERVER_URL=http://localhost:8791 -e CONTROL_URL=http://127.0.0.1:<port> maestro/golden/g3-a-offline-photo.yaml
+#
+# The engine must run with `--scenario inspection` (inspection insp-7, "77 Test Photo Lane" is visible to the signed-in inspector).
+# Start from a clean, already-running app, as for G2 (scripts/android-emulator-offline-photo.sh does that).
+appId: io.inspectorhub.app
+---
+- runFlow:
+    file: g2-controlled-sign-in.yaml
+    env:
+      SERVER_URL: ${SERVER_URL}
+- tapOn: "Back to work list"
+# The first sync after sign-in can still be running; the app then says so and the button needs another press a moment later.
+- retry:
+    maxRetries: 4
+    commands:
+      - tapOn: "Download today's work"
+      - extendedWaitUntil:
+          visible: "Updated 1 inspection."
+          timeout: 20000
+- tapOn: "Open 77 Test Photo Lane"
+- extendedWaitUntil:
+    visible: "ITEMS"
+    timeout: 30000
+- tapOn: "ITEMS"
+- tapOn: "A Roof cover"
+- assertVisible: "No photos yet"
+# From here on the engine does not answer. The photo is taken while offline.
+- runScript:
+    file: scripts/engine-unavailable.js
+    env:
+      CONTROL_URL: ${CONTROL_URL}
+      UNAVAILABLE: "true"
+- addMedia:
+    files:
+      - ../fixtures/roof-photo.jpg
+- tapOn: "Add photo"
+- tapOn: "Add from library"
+# The system photo picker (Android 13+). The fixture was added just now, so the newest tile is ours.
+- extendedWaitUntil:
+    visible: "Photo taken on.*"
+    timeout: 30000
+- tapOn:
+    text: "Photo taken on.*"
+    index: 0
+# The picker confirms a selection with "Done" on the image seen (Android 16); another version may label it "Add", or return at once with no
+# button at all. Either way the next step is a hard wait for the tile.
+- tapOn:
+    text: "Done|Add"
+    optional: true
+# Added while the engine is off: the tile shows the picture at once and says it is still on its way. Nothing was lost on the way in.
+- extendedWaitUntil:
+    visible: "UPLOADING"
+    timeout: 30000
+- assertVisible: "1 photo"
+- assertVisible: "Can't reach the server"

@@ -71,12 +71,16 @@ const USERDATA = join(workDir, 'userdata');
 mkdirSync(USERDATA);
 const started = []; // only pids this script started
 const withTimeout = (promise, ms, what) => Promise.race([promise, new Promise((_, reject) => { setTimeout(() => reject(new Error(`timed out after ${String(ms / 1000)} s: ${what}`)), ms).unref(); })]);
+// Absolute paths, like the registry guard's reg.exe: a bare name is also looked up in the current directory.
+const SYSTEM32 = join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32');
+const TASKLIST_EXE = join(SYSTEM32, 'tasklist.exe');
+const TASKKILL_EXE = join(SYSTEM32, 'taskkill.exe');
 // When tasklist cannot tell, the pid counts as alive: a leaked process is reported, never hidden.
-const pidAlive = (pid) => { try { return execFileSync('tasklist.exe', ['/FI', `PID eq ${String(pid)}`, '/FO', 'CSV', '/NH'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).toString().includes(`"${String(pid)}"`); } catch { return true; } };
+const pidAlive = (pid) => { try { return execFileSync(TASKLIST_EXE, ['/FI', `PID eq ${String(pid)}`, '/FO', 'CSV', '/NH'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).toString().includes(`"${String(pid)}"`); } catch { return true; } };
 /** Stops every process this script started (with its children), synchronously, and returns the pids that are STILL running afterwards. */
 function killStarted() {
   const pids = started.filter((pid) => Number.isInteger(pid));
-  for (const pid of [...pids].reverse()) { try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch { /* already exited, or refused: the check below says which */ } }
+  for (const pid of [...pids].reverse()) { try { execFileSync(TASKKILL_EXE, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch { /* already exited, or refused: the check below says which */ } }
   return pids.filter(pidAlive);
 }
 // If anything hangs for good, end the process: the guard's exit handler then stops the app and restores the registry.

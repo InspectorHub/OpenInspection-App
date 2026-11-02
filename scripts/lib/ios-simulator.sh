@@ -23,12 +23,23 @@ summary_line() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$*" >> "$GITHUB_STEP
 
 # GNU timeout (coreutils) bounds every call to the simulator that could hang. macOS has none by default: Homebrew's coreutils provides
 # `gtimeout` (CI installs it, see .github/workflows/ci.yml). It starts PROGRAMS, so what it runs must be one (not a shell function).
-TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+# `timeout` is looked for first, but only a GNU one counts: under Git Bash on Windows a bare `timeout` can be System32's pause program.
+TIMEOUT_BIN=""
+for candidate in timeout gtimeout; do
+  found="$(command -v "$candidate" || true)"
+  # The answer is read into a variable, not piped into head/grep: under pipefail an early-exiting reader can fail a pipeline by SIGPIPE.
+  [ -n "$found" ] || continue
+  version="$("$found" --version 2>/dev/null || true)"
+  case "$version" in *GNU* | *coreutils*) TIMEOUT_BIN="$found"; break ;; esac
+done
 [ -n "$TIMEOUT_BIN" ] || { fail "GNU timeout is needed (on macOS: brew install coreutils)"; return 1; }
 
 # Every call below that could hang runs as `"$TIMEOUT_BIN" -k 2 <seconds> <program...>`: status 124 when it was still running at the deadline
-# (SIGTERM, then SIGKILL two seconds later), and its output is taken by command substitution: no temp files, no extra processes (each one
+# (SIGTERM), and 137 when it ignored that and was killed two seconds later (SIGKILL; both mean "stopped by the limit", see timed_out_status), and its output is taken by command substitution: no temp files, no extra processes (each one
 # costs tens of milliseconds under Git Bash, where the tests run).
+
+# timed_out_status <status>: true when a `timeout -k` status says the limit stopped the command (124, or 137 after the SIGKILL).
+timed_out_status() { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
 
 # probe_launchctl <udid>: `launchctl list` inside the simulator, bounded (SMOKE_PROBE_LIMIT). The list goes to PROBE_OUT; the status says
 # whether it ran (non-zero when it failed or hung).
@@ -38,7 +49,7 @@ probe_launchctl() {
   took=$((SECONDS - started))
   # A probe is slow when the simulator is busy (an app handling a URL, a boot): run 41397218349 had one that took long enough for a 20 s limit
   # to stop it, and a stopped probe was read as "the app is not running". Slow ones are written down so the next log shows how slow.
-  if [ "$rc" -eq 124 ]; then
+  if timed_out_status "$rc"; then
     echo "::warning::a launchctl probe was still running after $limit s and was stopped (this says nothing about the app)"
   elif [ "$took" -ge 5 ]; then
     echo "note: a launchctl probe took $took s"
@@ -115,9 +126,9 @@ simulator_answers() {
 bootstatus_bounded() {
   local udid="$1" limit="$2" rc=0
   BOOTSTATUS_OUT="$("$TIMEOUT_BIN" -k 2 "$limit" xcrun simctl bootstatus "$udid" -b 2>&1)" || rc=$?
-  if [ "$rc" -eq 124 ]; then BOOTSTATUS_OUT="$BOOTSTATUS_OUT"$'\n'"bootstatus was still running after ${limit} s and was stopped"; fi
+  if timed_out_status "$rc"; then BOOTSTATUS_OUT="$BOOTSTATUS_OUT"$'\n'"bootstatus was still running after ${limit} s and was stopped"; fi
   printf '%s\n' "$BOOTSTATUS_OUT" | tail -3
-  [ "$rc" -eq 124 ] && return 124
+  timed_out_status "$rc" && return 124
   return 0
 }
 
