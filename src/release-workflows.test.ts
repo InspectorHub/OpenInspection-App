@@ -1495,6 +1495,27 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run)).toContain('--port 8791');
   });
 
+  it('both emulator scripts deal with a system "isn\'t responding" dialog instead of failing on it', () => {
+    // CI run 41367506059: "Pixel Launcher isn't responding" sat in front of a healthy app and the launch smoke read that dialog 15 times.
+    const smoke = readFileSync(join(ROOT, 'scripts', 'android-emulator-smoke.sh'), 'utf8');
+    const helper = readFileSync(join(ROOT, 'scripts', 'lib', 'dismiss-not-responding.sh'), 'utf8');
+    // The helper only ever taps the Wait button, found by its resource id (the label is localised).
+    expect(helper).toContain('android:id/aerr_wait');
+    expect(helper).not.toContain('aerr_close');
+    for (const [name, text] of [['smoke', smoke], ['golden', golden]] as const) {
+      expect(text, name).toContain('lib/dismiss-not-responding.sh');
+      expect(text, name).toContain('dismiss_not_responding');
+    }
+    // In the smoke loop the dialog is checked BEFORE the app's own text, and the loop goes round again after a tap.
+    const loop = smoke.slice(smoke.indexOf('until [ "$attempts" -ge 15 ]'));
+    expect(loop.indexOf('dismiss_not_responding')).toBeGreaterThan(0);
+    expect(loop.indexOf('dismiss_not_responding')).toBeLessThan(loop.indexOf('Choose your server'));
+    expect(loop).toMatch(/dismiss_not_responding "\$OUT\/ui\.xml"; then[\s\S]*?continue/);
+    // The golden flow checks once BEFORE Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
+    expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeGreaterThan(0);
+    expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeLessThan(golden.indexOf('maestro --device'));
+  });
+
   it('both emulator scripts count only a crash of the APP process, not a FATAL EXCEPTION logged by the test tooling', () => {
     // CI run 41321526977 went red on a FATAL EXCEPTION whose process was UiAutomation (the accessibility channel behind
     // uiautomator dump) while the app sat on its first screen. A crash of the app names the package on its Process: line.

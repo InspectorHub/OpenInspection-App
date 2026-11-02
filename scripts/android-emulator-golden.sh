@@ -17,6 +17,8 @@ ENGINE_ORIGIN="${2:?usage: android-emulator-golden.sh <dev-server apk> <engine o
 OUT="${3:-${SMOKE_OUT:-$PWD/android-golden-out}}"
 FLOW="maestro/golden/g2-controlled-sign-in.yaml"
 mkdir -p "$OUT"
+# shellcheck source=lib/dismiss-not-responding.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/dismiss-not-responding.sh"
 
 fail() { echo "::error::$*"; return 1; }
 on_error() {
@@ -58,6 +60,12 @@ waited=0
 until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
 [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app process did not start within 60 s"
 echo "ok: the app is running, starting $FLOW against $ENGINE_ORIGIN"
+
+# A system "isn't responding" dialog in front of the app would make the flow fail on something that is not the app (CI run 41367506059).
+# Look once before Maestro starts and press Wait; not while it runs, because Maestro and uiautomator would share one UiAutomation channel.
+adb shell uiautomator dump /sdcard/ui-preflight.xml > /dev/null 2>&1 || true
+adb pull /sdcard/ui-preflight.xml "$OUT/ui-preflight.xml" > /dev/null 2>&1 || true
+dismiss_not_responding "$OUT/ui-preflight.xml" || true
 
 # Maestro exits non-zero when the flow fails; `set -e` and the ERR trap then keep the evidence.
 maestro --device "$serial" test -e "SERVER_URL=$ENGINE_ORIGIN" --format junit --output "$OUT/maestro-g2.xml" --debug-output "$OUT/maestro-debug" "$FLOW"

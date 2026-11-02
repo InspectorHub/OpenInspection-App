@@ -13,6 +13,8 @@ APK="${1:?usage: android-emulator-smoke.sh <path to app-debug.apk> [output direc
 OUT="${2:-${SMOKE_OUT:-$PWD/android-smoke-out}}"
 SETTLE_SECONDS="${SMOKE_SETTLE_SECONDS:-15}"
 mkdir -p "$OUT"
+# shellcheck source=lib/dismiss-not-responding.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/dismiss-not-responding.sh"
 
 fail() { echo "::error::$*"; return 1; }
 on_error() {
@@ -55,6 +57,8 @@ until [ "$attempts" -ge 15 ]; do
   attempts=$((attempts + 1))
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null || true
   adb pull /sdcard/ui.xml "$OUT/ui.xml" > /dev/null
+  # A system "isn't responding" dialog can sit in front of a healthy app (CI run 41367506059): press Wait and look again.
+  if dismiss_not_responding "$OUT/ui.xml"; then sleep 2; continue; fi
   if grep -q "Choose your server" "$OUT/ui.xml"; then break; fi
   sleep 2
 done
