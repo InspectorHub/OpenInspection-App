@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -1527,5 +1527,17 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(readFileSync(join(ROOT, 'maestro', 'golden', 'g2-controlled-sign-in.yaml'), 'utf8')).not.toContain('launchApp');
     // No credential, token or account is typed or passed by the script.
     expect(golden).not.toMatch(/PASSWORD|E2E_EMAIL|secrets\./);
+  });
+});
+
+describe('the packaged Windows registry smoke is manual only', () => {
+  it('is mentioned by no workflow file (it rewrites a registry key and must never run on a schedule or in CI)', () => {
+    const dir = join(ROOT, '.github', 'workflows');
+    const files = readdirSync(dir).filter((name) => /\.ya?ml$/.test(name));
+    expect(files.length).toBeGreaterThan(3);
+    for (const name of files) {
+      const text = readFileSync(join(dir, name), 'utf8');
+      expect(text, name).not.toMatch(/windows-packaged-import-smoke|registry-guard/);
+    }
   });
 });

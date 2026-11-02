@@ -151,6 +151,34 @@ The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt 
 
 The desktop shell serves local renderer files from `https://localhost`. Its page, script, and Worker responses share one strict CSP, including in development: neither `unsafe-eval` nor `wasm-unsafe-eval` is allowed. An earlier plan relaxed the Worker policy for a bundled WASM HEIC decoder. The 2026-10-27 revision moved decoding to a main-process system helper and removed that relaxation entirely. A future bundled decoder (L2) must revisit this decision together with the CSP tests.
 
+### Packaged Windows import smoke (manual; changes the registry, then restores it)
+
+`scripts/windows-packaged-import-smoke.mjs` drives the **packaged** (unpacked) Windows build through the import path: it signs in to the repo's fake engine (`e2e/fake-engine/serve.mjs`) over HTTPS, then imports a small package and a package of about 22 MiB of incompressible data through Settings > Import package. For each import the fake engine records the received byte count, `Content-Length` and SHA-256, and the script requires them to equal the file and the app to show "All N inspections were imported." It also records every `404` the renderer logs, with its URL.
+
+What it does **not** prove: a signed installer or NSIS behaviour, auto-update, any other OS, a real network or a real CA-signed certificate (the exe is started with `--ignore-certificate-errors` to accept the fake engine's self-signed one), and a real OpenInspection server (the peer is the fake engine, which only measures bytes).
+
+**Build the unpacked directory** (unsigned, no installer; about 20 s once `dist-electron/` is built by `npm run build:electron` and `npm run build:heic-helper`):
+
+```powershell
+npx electron-builder --config electron/builder/electron-builder.config.mjs --publish never --dir -c.directories.output=D:\tmp\win-smoke\release
+```
+
+**Run it** (one heavy process at a time; it needs a free CDP port, 9333 by default):
+
+```powershell
+node scripts/windows-packaged-import-smoke.mjs --app D:\tmp\win-smoke\release\win-unpacked\InspectorHub.exe --allow-registry-change --out D:\tmp\win-smoke\run1
+```
+
+Both `--app` and `--allow-registry-change` are required, or it refuses. `--out` receives `results.json`, `smoke.log`, `shots/` and the registry backup. Exit code 0 is a pass, 1 a failed check, 3 a registry key that could not be restored identically.
+
+**Side effects.**
+
+- **The registry.** Every launch of the packaged exe calls `app.setAsDefaultProtocolClient('io.inspectorhub.app')`, which rewrites `HKCU\Software\Classes\io.inspectorhub.app\shell\open\command` of an installed copy of the app to point at the exe that ran. The script runs everything inside `withRegistryGuard` (`scripts/lib/registry-guard.mjs`): it exports the key, runs, then always (also when the run throws) deletes and re-imports the key and exports it again to compare with the backup. A mismatch prints the differing lines and exits with 3; the backup is `<out>\registry-backup\backup-0.reg`, which you can `reg import` by hand. Only `io.inspectorhub.app` and a test-only scratch key are accepted by the guard. Its unit test touches only the scratch key.
+- **The default browser.** Signing in calls `shell.openExternal`, which opens your default browser on the fake engine's self-signed authorisation page. The page is not used (the script completes the callback itself by relaunching the exe with the same profile and the callback URL); close that tab.
+- **Profile and files.** The exe gets a fresh `--user-data-dir` under the OS temp directory, never `%APPDATA%\InspectorHub`; that directory and the generated packages are removed at the end. Only the processes the script started are killed.
+
+The owner's installed app and its data must be left exactly as they are: the script refuses an `--app` under `%LOCALAPPDATA%\Programs`, and you should still check the key after a run with `reg query "HKCU\Software\Classes\io.inspectorhub.app\shell\open\command" /ve`. This is manual only; no workflow runs it (a test in `src/release-workflows.test.ts` fails if one mentions it).
+
 ### HEIC photos on Windows
 
 HEIC import relies on Microsoft's Windows HEIF Image Extensions and HEVC Video Extensions. The app ships no HEVC decoder: `native/win-heic-helper/` builds a small native WIC helper, which is individually signed in Azure-signed builds. The main process checks the helper's SHA-256 against the value recorded in the packaged app before starting it. If Windows cannot create the required WIC decoder, the app rejects that photo with a short explanation and links to the Microsoft Store extension guidance; exporting the photo as JPEG on the phone is another option. The renderer has no bundled WASM decoder, which is why its CSP does not allow WASM execution. HDR PQ/HLG is not tone-mapped.
