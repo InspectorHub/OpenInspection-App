@@ -33,7 +33,7 @@ try {
       await page.goto(`${origin}e2e-electron/fixtures/blocking.html?reason=${reason}`);
       await page.getByRole('heading', { level: 1 }).waitFor();
       if (reason === 'key-unreadable') {
-        await page.getByText('This Windows account cannot unlock the data stored on this computer').waitFor();
+        await page.getByText('This Windows account cannot unlock the data stored on this computer.').waitFor();
       } else if (reason === 'encryption-unavailable') {
         await page.getByText('Database encryption is unavailable on this computer. Your data has not been changed.').waitFor();
         await page.getByRole('button', { name: 'Open data folder' }).click();

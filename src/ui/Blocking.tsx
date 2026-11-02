@@ -70,7 +70,7 @@ function DesktopOpenFailed({ reason, bridge }: { reason?: OpenReason; bridge: De
   const [message, setMessage] = useState<string | null>(null);
   const isUnreadable = reason === 'key-unreadable';
   const copy = reason === 'key-unreadable'
-    ? 'This Windows account cannot unlock the data stored on this computer'
+    ? 'This Windows account cannot unlock the data stored on this computer.'
     : reason === 'encryption-unavailable'
       ? 'Database encryption is unavailable on this computer. Your data has not been changed.'
       : reason === 'corrupt'

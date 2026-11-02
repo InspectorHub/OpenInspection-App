@@ -110,7 +110,7 @@ describe('the Playwright config and the spec', () => {
   });
 
   it('covers the five screens in light and dark, wide and narrow, and says it is a layout check only', () => {
-    for (const stem of ["'work-list'", "'settings'", "'export'", "'editor'", 'screen.name']) expect(spec, stem).toContain(stem);
+    for (const stem of ["'work-list'", "'settings'", "'settings-bottom'", "'export'", "'editor'", 'screen.name']) expect(spec, stem).toContain(stem);
     for (const name of ['blocking-key-unreadable', 'blocking-encryption-unavailable', 'blocking-corrupt', 'blocking-db-key-lost']) expect(spec, name).toContain(name);
     expect(spec).toContain("const THEMES = ['light', 'dark'] as const");
     expect(spec).toMatch(/key: 'wide', width: 1280/);
@@ -118,6 +118,9 @@ describe('the Playwright config and the spec', () => {
     expect(spec).toContain('LAYOUT regression only');
     // Text that changes between runs is frozen before every screenshot, or the comparison would fail on a different day.
     expect(spec).toContain('freezeChangingText');
+    // Settings is shot a second time scrolled to the bottom, so the controls under "Your data" (Export, Import) are in an image too.
+    expect(spec).toContain("captureMatrix(restarted, 'settings-bottom', setNative, 'bottom')");
+    expect(spec).toContain('Your data');
     // The spec only compares; it never decides to update.
     expect(spec).not.toContain('updateSnapshots');
   });

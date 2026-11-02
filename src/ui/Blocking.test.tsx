@@ -13,7 +13,7 @@ describe('OpenFailed', () => {
     const setAsideUnreadable = vi.fn(async () => undefined);
     window.oiDesktop = { apiVersion: 1, db: { setAsideUnreadable } } as never;
     render(<OpenFailed reason="key-unreadable" />);
-    expect(screen.getByText('This Windows account cannot unlock the data stored on this computer')).toBeInTheDocument();
+    expect(screen.getByText('This Windows account cannot unlock the data stored on this computer.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Quit' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Set the old data aside and start fresh' }));
     expect(setAsideUnreadable).not.toHaveBeenCalled();

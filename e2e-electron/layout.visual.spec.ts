@@ -51,12 +51,13 @@ async function freezeChangingText(page: Page): Promise<void> {
 }
 
 /** Takes the screen in every theme and width. `name` is the baseline's stem, for example `settings`. */
-async function captureMatrix(page: Page, name: string, setNative?: (theme: Theme) => Promise<void>): Promise<void> {
+async function captureMatrix(page: Page, name: string, setNative?: (theme: Theme) => Promise<void>, position: 'top' | 'bottom' = 'top'): Promise<void> {
   for (const theme of THEMES) {
     await applyTheme(page, theme, setNative);
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await page.evaluate(() => window.scrollTo(0, 0));
+      // 'bottom' shows the end of a long page (Settings: the "Your data" controls). The scroll comes after the resize, which resets it.
+      await page.evaluate((to) => window.scrollTo(0, to === 'bottom' ? document.documentElement.scrollHeight : 0), position);
       await freezeChangingText(page);
       await expect(page).toHaveScreenshot(`${name}-${theme}-${viewport.key}.png`, SHOT);
     }
@@ -91,6 +92,9 @@ test.describe('app screens in the desktop window', () => {
     await restarted.getByRole('button', { name: 'Settings' }).click();
     await expect(restarted.getByRole('heading', { name: 'Desktop app' })).toBeVisible();
     await captureMatrix(restarted, 'settings', setNative);
+    // The same page scrolled to its end, where "Your data" holds Export unsent data and Import package.
+    await restarted.getByText('Your data', { exact: true }).scrollIntoViewIfNeeded();
+    await captureMatrix(restarted, 'settings-bottom', setNative, 'bottom');
 
     // The export dialog, opened from Settings. Nothing is waiting on this device, so it shows the one-line "Nothing to export" answer.
     await restarted.getByRole('button', { name: 'Export unsent data' }).click();
