@@ -62,7 +62,9 @@ describe('standalone fake engine', () => {
     const listed = async (origin: string) => ((await (await fetch(`${origin}/api/inspections?limit=50`)).json()) as { data: Array<{ id: string }> }).data.map((row) => row.id);
     const withScenario = (await start(['--scenario', 'inspection'])).origin;
     expect(await listed(withScenario)).toEqual(['insp-7']);
-    for (const path of ['results?scope=_default', 'report-data']) expect((await fetch(`${withScenario}/api/inspections/insp-7/${path}`)).status).toBe(200);
+    for (const path of ['results?scope=_default', 'report-data', 'tags']) expect((await fetch(`${withScenario}/api/inspections/insp-7/${path}`)).status).toBe(200);
+    // The per-inspection tag map is an object of itemId -> tags (empty here), not a list: the app's tag sync only accepts that shape.
+    expect(await (await fetch(`${withScenario}/api/inspections/insp-7/tags`)).json()).toEqual({ success: true, data: {} });
     await stop();
     expect(await listed((await start()).origin)).toEqual([]);
   });

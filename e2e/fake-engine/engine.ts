@@ -168,6 +168,8 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       return;
     }
     if (request.method === 'GET' && route === '/api/tags') { json({ success: true, data: [] }); return; }
+    // The per-inspection tag map (itemId -> tags) the app downloads with an inspection; empty here. Without it the app logged a 404 on every download.
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/tags') { json({ success: true, data: {} }); return; }
     if (request.method === 'GET' && route === '/api/recommendations') { json({ success: true, data: [] }); return; }
     if (request.method === 'GET' && route === '/api/contractor-types') { json({ success: true, data: [] }); return; }
     if (request.method === 'GET' && route === '/api/admin/defect-categories') { json({ success: true, data: [] }); return; }
