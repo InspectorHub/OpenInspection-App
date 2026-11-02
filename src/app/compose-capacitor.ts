@@ -11,6 +11,7 @@ import { createRealFiles } from '../platform/files-capacitor';
 import { createPreferencesKeyValue } from '../platform/kv-capacitor';
 import { createRealNetwork } from '../platform/network-capacitor';
 import { createRealNotificationPermission } from '../platform/notifications-capacitor';
+import { createRealGallery } from '../platform/photo-gallery-capacitor';
 import type { SecureStore } from '../platform/secure-store';
 import { createRealSecureStore } from '../platform/secure-store-capacitor';
 import { createRealUploaderPlugin } from '../platform/uploader-capacitor';
@@ -68,6 +69,8 @@ export async function composeReal(adapters: RealAdapters = realAdapters): Promis
     notifications: createRealNotificationPermission(toClientPlatform(Capacitor.getPlatform())),
     openExternal: (url) => Browser.open({ url }),
     sharer: createRealSharer(),
+    // Null in a browser: the default (nothing can be saved, nothing offers to) stays.
+    photoGallery: createRealGallery() ?? undefined,
     closeDb: adapters.closeDb,
   });
 }

@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^8.0.1",
+    "@capacitor-community/media": "^9.1.0",
     "@capacitor-community/sqlite": "^8.1.1",
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",

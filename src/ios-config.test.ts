@@ -26,7 +26,8 @@ function urlSchemes(plist: Map<string, PlistValue>): string[] {
 /** Problems with the declared usage descriptions; empty means the plist passes. */
 function usageProblems(plist: Map<string, PlistValue>): string[] {
   const problems: string[] = [];
-  for (const key of ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription']) {
+  // NSPhotoLibraryAddUsageDescription: the "Save photos I take to my gallery" setting writes to the library (add only, never reads it).
+  for (const key of ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription', 'NSPhotoLibraryAddUsageDescription']) {
     const v = plist.get(key);
     if (typeof v !== 'string' || v.trim() === '') problems.push(`missing or empty ${key}`);
   }
@@ -36,13 +37,14 @@ function usageProblems(plist: Map<string, PlistValue>): string[] {
   return problems;
 }
 
-// Nothing in src/, ios/ or the plugins' iOS sources saves to the photo library, records audio or
-// calls the background-fetch APIs (0 hits, recorded in the commit message). The uploader plugin does
+// The app saves to the photo library only through the "Save photos I take to my gallery" setting (the media plugin, add only: its
+// description is required above, and the plugin reads no required-reason API: it uses PHAsset.creationDate, not a file timestamp). Nothing
+// in src/, ios/ or the plugins' iOS sources records audio or calls the background-fetch APIs (0 hits). The uploader plugin does
 // create a background URLSession (URLSessionConfiguration.background(withIdentifier:)), which needs
 // no UIBackgroundModes entry; its README treats the "fetch" mode as optional, only for waking the
 // app on completion, and no handleEventsForBackgroundURLSession handler exists anywhere. So none of
 // these keys may exist; a mode is added only together with code that uses it.
-const UNUSED_KEYS = ['NSPhotoLibraryAddUsageDescription', 'NSMicrophoneUsageDescription', 'UIBackgroundModes'];
+const UNUSED_KEYS = ['NSMicrophoneUsageDescription', 'UIBackgroundModes'];
 const UNUSED_PREFIXES = ['NSLocation', 'NSContacts', 'NSBluetooth'];
 
 function unusedCapabilityKeys(plist: Map<string, PlistValue>): string[] {
