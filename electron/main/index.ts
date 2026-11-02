@@ -210,7 +210,8 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       showItemInFolder: (path) => shell.showItemInFolder(path),
     });
     const galleryHost = createGalleryHost({
-      fs: { mkdir: (path, options) => fs.mkdir(path, options), writeNew: (path, data) => fs.writeFile(path, data, { flag: 'wx' }) },
+      // unlink, not rm: it removes one file and refuses a folder.
+      fs: { mkdir: (path, options) => fs.mkdir(path, options), writeNew: (path, data) => fs.writeFile(path, data, { flag: 'wx' }), size: async (path) => (await fs.stat(path)).size, remove: (path) => fs.unlink(path) },
       picturesDir: app.getPath('pictures'),
     });
     uploaderHost = createUploaderHost({ transport: createUploadTransport(), resolveMediaFile: createMediaFileResolver({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache') }),

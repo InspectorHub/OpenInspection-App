@@ -242,13 +242,18 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       lost('row_mismatch', 'NONE');
       return fail(MESSAGES.photoNotPrepared);
     }
-    if (created) {
-      try {
-        await deps.copyToGallery?.(rec);
-      } catch (error) {
-        // A copy for the gallery is a convenience: whatever goes wrong with it, the photo is uploaded as usual.
-        deps.onError?.(error);
-      }
+    if (created && deps.copyToGallery !== undefined) {
+      // Started now, NOT waited for: on iOS the first save asks the person for permission and waits for the answer, and neither the document
+      // entry below nor the upload may wait for that. The copy reads the photo as it is stored, which is what it is handed here.
+      // A copy for the gallery is a convenience: whatever goes wrong with it, the photo is uploaded as usual.
+      const copy = deps.copyToGallery;
+      void (async () => {
+        try {
+          await copy(rec);
+        } catch (error) {
+          deps.onError?.(error);
+        }
+      })();
     }
     // Write-ahead: the entry goes into the document before the upload starts (see the head of this file). A row that was
     // already queued has its entry from the editor; a defect photo has none by design. When the entry cannot be written

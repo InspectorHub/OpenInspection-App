@@ -10,18 +10,28 @@ type Photo = Extract<PendingMediaRecord, { kind: 'photo' }>;
 const FK = '_default:s1:i1';
 
 describe('the copy for the gallery, made by the uploader', () => {
-  it('is requested once, after the row exists and before the upload starts', async () => {
+  it('is requested once, for the row that was just stored', async () => {
     const w = await createUploaderWorld();
-    const seen: Array<{ row: boolean; uploads: number }> = [];
+    const seen: Array<{ pendingId: string; row: boolean }> = [];
     const factory = createUploaderFactory({
       ...w.deps,
       copyToGallery: async (rec) => {
-        seen.push({ row: (await w.world.store.getRow(rec.pendingId)) !== null, uploads: w.nativeCalls.length });
+        seen.push({ pendingId: rec.pendingId, row: (await w.world.store.getRow(rec.pendingId)) !== null });
       },
     });
     const result = await factory(INSPECTION, null).upload(photoRecord('p1'));
     expect(result.ok).toBe(true);
-    expect(seen).toEqual([{ row: true, uploads: 0 }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toEqual([{ pendingId: 'p1', row: true }]);
+  });
+
+  it('is not waited for: a copy that never finishes (the iOS permission prompt, unanswered) does not hold up the entry or the upload', async () => {
+    const w = await createUploaderWorld();
+    const factory = createUploaderFactory({ ...w.deps, copyToGallery: () => new Promise<void>(() => undefined) });
+    const result = await factory(INSPECTION, null).upload(photoRecord('p1'));
+    expect(result.ok).toBe(true);
+    expect(w.nativeCalls).toEqual(['p1']);
+    expect(photosOf(w.doc, FK)).toHaveLength(1);
   });
 
   it('is asked for the photo as it will be stored, so the copy is the same bytes', async () => {
@@ -29,6 +39,7 @@ describe('the copy for the gallery, made by the uploader', () => {
     const bytes: number[] = [];
     const factory = createUploaderFactory({ ...w.deps, copyToGallery: async (rec: Photo) => { bytes.push(rec.blob.size); } });
     await factory(INSPECTION, null).upload(photoRecord('p1'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(bytes).toEqual([photoRecord('p1').blob.size]);
   });
 
@@ -39,6 +50,7 @@ describe('the copy for the gallery, made by the uploader', () => {
     expect(result.ok).toBe(true);
     expect(w.nativeCalls).toEqual(['p1']);
     expect(photosOf(w.doc, FK)).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(w.errors).toHaveLength(1);
   });
 
@@ -49,6 +61,7 @@ describe('the copy for the gallery, made by the uploader', () => {
     await w.world.store.put(photoRecord('queued'));
     const [queued] = await w.world.store.list(INSPECTION);
     await createUploaderFactory({ ...w.deps, ...copy })(INSPECTION, null).upload(queued as PendingMediaRecord);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(copies).toBe(0);
 
     const refusing = createUploaderFactory({ ...w.deps, ...copy, store: { ...w.world.store, put: () => Promise.reject(new MediaError('TOO_LARGE')) } });
