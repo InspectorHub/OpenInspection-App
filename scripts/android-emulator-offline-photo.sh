@@ -24,9 +24,33 @@ mkdir -p "$OUT"
 . "$HERE/lib/android-start-app.sh"
 
 fail() { echo "::error::$*"; return 1; }
+# What the app's WebView prints (console, uncaught errors), recorded through DevTools for the whole run: logcat has none of it in this
+# build, and a flow that fails after "the photo was picked" needs the page's own words (CI runs 41432932375 and 41458862876).
+console_pid=""
+stop_console() {
+  [ -n "$console_pid" ] || return 0
+  kill "$console_pid" 2>/dev/null || true
+  # Bounded: a recorder stuck on a dead socket must never hold the job (it exits by itself on SIGTERM; this is the belt to those braces).
+  local waited
+  for waited in 1 2 3 4 5 6 7 8; do
+    kill -0 "$console_pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -9 "$console_pid" 2>/dev/null || true
+  wait "$console_pid" 2>/dev/null || true
+  console_pid=""
+}
+trap stop_console EXIT
 on_error() {
   local status=$?
   echo "::error::android-emulator-offline-photo failed (exit $status)"
+  # Before the recorder stops: what the page shows now.
+  timeout 30 node "$HERE/lib/webview-console.mjs" snapshot "$OUT/webview-snapshot.txt" || true
+  stop_console
+  if [ -s "$OUT/webview-console.jsonl" ]; then
+    echo "--- the WebView's console (last 40 of $(wc -l < "$OUT/webview-console.jsonl" | tr -d ' ') lines; full: webview-console.jsonl) ---"
+    tail -40 "$OUT/webview-console.jsonl" || true
+  fi
   adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
   adb exec-out screencap -p > "$OUT/screen-at-failure.png" 2>/dev/null || true
   adb shell uiautomator dump /sdcard/ui-failure.xml > /dev/null 2>&1 || true
@@ -47,6 +71,8 @@ adb wait-for-device
 serial="${ANDROID_SERIAL:-$(adb devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')}"
 [ -n "$serial" ] || fail "no emulator is attached"
 echo "device: $serial"
+# The recorder's own adb calls go to the same device as the flow's.
+export ANDROID_SERIAL="$serial"
 
 engine_port="${ENGINE_ORIGIN##*:}"
 # The sign-in goes through Chrome. Same best effort as android-emulator-golden.sh, repeated here so this script does not depend on G2 having run
@@ -59,6 +85,8 @@ adb reverse "tcp:$engine_port" "tcp:$engine_port"
 adb install -r "$APK"
 adb logcat -c
 adb shell settings put global hide_error_dialogs 1 || true
+node "$HERE/lib/webview-console.mjs" collect "$OUT/webview-console.jsonl" &
+console_pid=$!
 
 # Switch the engine ON before anything starts: an earlier run on the same engine may have left it off. Written down, not assumed.
 set_engine() { # true = switched off
@@ -130,4 +158,10 @@ if grep -A3 "FATAL EXCEPTION" "$OUT/logcat.txt" | grep -q "Process: $APP_ID"; th
 fi
 if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then echo "note: a FATAL EXCEPTION of another process is in logcat.txt (not the app); ignored"; fi
 echo "ok: no crash in logcat"
+stop_console
+if [ -f "$OUT/webview-console.jsonl" ]; then
+  echo "the WebView console: $(grep -c '"level":"error"' "$OUT/webview-console.jsonl" || true) error line(s) in $(wc -l < "$OUT/webview-console.jsonl" | tr -d ' ') (webview-console.jsonl)"
+else
+  echo "::warning::the WebView console recorder wrote no file"
+fi
 echo "android-emulator-offline-photo: G3 and G4 passed; evidence is in $OUT"

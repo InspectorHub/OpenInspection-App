@@ -4,6 +4,21 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 
+import type { paths } from '../../src/api/schema';
+
+/**
+ * The success body the engine's contract promises for a route: the JSON of its 2xx answer in src/api/schema.d.ts, which `npm run api:types`
+ * generates from the engine's contract. `contract<'/api/x', 'get'>()({ ... })` returns its argument unchanged and fails the type-check when the
+ * argument is not what the contract says, so a change of the contract (a field added, renamed, made required) cannot pass here unseen.
+ * Only the SHAPE is checked at compile time; e2e/fake-engine/contract.test.ts checks the real values against the contract's schemas.
+ */
+type SuccessBody<Operation> = Operation extends { responses: infer R }
+  ? { [Status in keyof R & (200 | 201)]: R[Status] extends { content: { 'application/json': infer Body } } ? Body : never }[keyof R & (200 | 201)]
+  : never;
+function contract<Path extends keyof paths, Method extends keyof paths[Path]>(): (body: SuccessBody<paths[Path][Method]>) => SuccessBody<paths[Path][Method]> {
+  return (body) => body;
+}
+
 export interface RendererEngine {
   url: string;
   setCompatibility(value: { minSupported?: string | null; recommended?: string | null; downloadUrl?: string | null }): void;
@@ -133,7 +148,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     requests.push(`${request.method ?? 'GET'} ${route}`);
     const json = (body: unknown, status = 200) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
     if (request.method === 'GET' && route === '/api/client/compat') {
-      json({ success: true, data: { ...compatibility, serverContractVersion: 2, accountUrl: null } });
+      json(contract<'/api/client/compat', 'get'>()({ success: true, data: { ...compatibility, serverContractVersion: 2 } }));
       return;
     }
     if (request.method === 'GET' && route === '/oauth/authorize') {
@@ -160,28 +175,48 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       return;
     }
     if (request.method === 'GET' && route === '/api/client/session') {
-      json({ success: true, data: { userId: 'renderer-user', tenantId: 'renderer-tenant', role: 'inspector', offlineMaxDays: 30, serverNowMs: Date.now() } });
+      json(contract<'/api/client/session', 'get'>()({ success: true, data: { userId: 'renderer-user', tenantId: 'renderer-tenant', role: 'inspector', offlineMaxDays: 30, tenantName: null, serverNowMs: Date.now() } }));
       return;
     }
     if (request.method === 'GET' && route === '/api/session/context') {
-      json({ success: true, data: { user: { role: 'inspector', timezone: 'America/New_York', locale: 'en-US', dateFormat: 'us', timeFormat: '12h' }, branding: { tenantSlug: 'renderer-test', defaultTimezone: 'America/New_York', defaultLocale: 'en-US', dateFormat: 'us', timeFormat: '12h' }, videoProvider: 'r2', collabEditing: false } });
+      json(contract<'/api/session/context', 'get'>()({ success: true, data: {
+        user: {
+          sessionMarker: 'renderer-session', name: 'Renderer User', email: 'renderer@example.test', role: 'inspector', initials: 'RU',
+          // What an inspector without extra rights is given.
+          capabilities: { publish: true, scheduleOthers: false, inspectionFees: false, companyFinance: false, manageContacts: false, viewCommunication: false, templateCreate: false, templateEdit: false, templateDelete: false, templateImport: false, deleteInspection: false, editReports: true, viewAllInspections: false },
+          timezone: 'America/New_York', locale: 'en-US', dateFormat: 'us', timeFormat: '12h',
+        },
+        branding: {
+          companyName: 'Renderer Test', primaryColor: '#6366f1', logoUrl: null, defaultProfileId: 'default', isSaas: false, portalBaseUrl: null,
+          tenantSlug: 'renderer-test', tenantStatus: 'active', currentUserSlug: null, bookingHost: null, privacyUrl: null, termsUrl: null,
+          defaultTimezone: 'America/New_York', holidayRegion: null, defaultLocale: 'en-US', currency: 'USD', archiveRevokesAccess: false, dateFormat: 'us', timeFormat: '12h',
+        },
+        deployment: { mode: 'standalone', hasBilling: false, hasSeatQuota: false, mcpEnabled: false, connectedAppsEnabled: false, videoBackendManaged: false, hasManagedCompliance: false, hasAssistedMigration: false },
+        seatUsage: null, videoProvider: 'r2', outboundCoolingWindow: null, collabEditing: false, unreadMessages: 0,
+      } }));
       return;
     }
-    if (request.method === 'GET' && route === '/api/tags') { json({ success: true, data: [] }); return; }
+    if (request.method === 'GET' && route === '/api/tags') { json(contract<'/api/tags', 'get'>()({ success: true, data: [] })); return; }
     // The per-inspection tag map (itemId -> tags) the app downloads with an inspection; empty here. Without it the app logged a 404 on every download.
-    if (request.method === 'GET' && route === '/api/inspections/insp-7/tags') { json({ success: true, data: {} }); return; }
-    if (request.method === 'GET' && route === '/api/recommendations') { json({ success: true, data: [] }); return; }
-    if (request.method === 'GET' && route === '/api/contractor-types') { json({ success: true, data: [] }); return; }
-    if (request.method === 'GET' && route === '/api/admin/defect-categories') { json({ success: true, data: [] }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/tags') { json(contract<'/api/inspections/{id}/tags', 'get'>()({ success: true, data: {} })); return; }
+    if (request.method === 'GET' && route === '/api/recommendations') { json(contract<'/api/recommendations', 'get'>()({ success: true, data: [] })); return; }
+    if (request.method === 'GET' && route === '/api/contractor-types') { json(contract<'/api/contractor-types', 'get'>()({ success: true, data: [] })); return; }
+    if (request.method === 'GET' && route === '/api/admin/defect-categories') { json(contract<'/api/admin/defect-categories', 'get'>()({ success: true, data: [] })); return; }
     if (request.method === 'GET' && route === '/api/inspections/insp-7') {
-      json({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyType: 'single_family', propertyAddress: '77 Test Photo Lane', reportStatus: 'in_progress', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } } } });
+      const inspection = contract<'/api/inspections/{id}', 'get'>()({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, templateId: null, createdAt: '2026-10-31T10:00:00Z', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } }, primaryReportId: null } });
+      // The app reads these two (src/field/editor-data.ts) and the contract does not list them for this route: kept, and named here so they are
+      // not mistaken for documented fields. See docs/fake-engine-contract.md.
+      json({ ...inspection, data: { ...inspection.data, inspection: { ...inspection.data.inspection, propertyType: 'single_family', reportStatus: 'in_progress' } } });
       return;
     }
-    if (request.method === 'GET' && route === '/api/inspections/templates') { json({ success: true, data: [], meta: { page: 1, totalPages: 1 } }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/templates') { json(contract<'/api/inspections/templates', 'get'>()({ success: true, data: [], meta: { page: 1, totalPages: 1, total: 0, pageSize: 20 } })); return; }
     // The two reads the offline editor needs besides the inspection row itself (a download without them is "not downloaded").
-    if (request.method === 'GET' && route === '/api/inspections/insp-7/results') { json({ success: true, data: { results: {} } }); return; }
-    if (request.method === 'GET' && route === '/api/inspections/insp-7/report-data') { json({ success: true, data: { sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }], ratingLevels: [] } }); return; }
-    if (request.method === 'GET' && route === '/api/inspections/insp-7/media') { json({ success: true, data: [] }); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/results') { json(contract<'/api/inspections/{id}/results', 'get'>()({ success: true, data: { results: {}, resultId: null } })); return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/report-data') { { const reportData = contract<'/api/inspections/{id}/report-data', 'get'>()({ success: true, data: { inspection: { id: 'insp-7', propertyAddress: '77 Test Photo Lane', date: '2026-11-01T10:00:00Z', status: 'scheduled', inspectorName: null }, styleProfile: { id: 'default', name: 'Default', schemaVersion: 1, colour: null, badgeLayout: 'strip', photoColumns: 2, tokens: {} }, inspectorCredentials: [], stats: { total: 1, satisfactory: 0, monitor: 0, defect: 0 }, sections: [{ id: 'sec_roof', title: 'Roof', defectCount: 0, items: [{ id: 'itm_cover', label: 'Roof cover', rating: null, ratingColor: '', ratingLabel: null, severityBucket: 'other', notes: null, photos: [] }] }], ratingLevels: [] } });
+      // `type` is not in the contract's report-data item, and the app needs it: buildSchema (src/field/loader-schema.ts) takes these sections
+      // INSTEAD of the template's, and the editor shows the rating row only for type 'rich'. Kept, and named: docs/fake-engine-contract.md.
+      json({ ...reportData, data: { ...reportData.data, sections: reportData.data.sections.map((section) => ({ ...section, items: section.items.map((item) => ({ ...item, type: 'rich' })) })) } }); }; return; }
+    if (request.method === 'GET' && route === '/api/inspections/insp-7/media') { json(contract<'/api/inspections/{id}/media', 'get'>()({ success: true, data: { attached: [], pool: [] } })); return; }
     if (request.method === 'GET' && route === '/api/inspections/insp-7/photo') {
       // Like the real route: the Bearer session is required (an <img> cannot send it), and with no image service the
       // original bytes come back whatever `w` says.
@@ -206,7 +241,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
         if (image !== undefined && image.length > 10 * 1024 * 1024) { json({ success: false }, 413); return; }
         if (image === undefined || image.length === 0 || !uploads.has(sourceKey)) { json({ success: false }, 400); return; }
         covers.push({ sourceKey, crop: parts?.get('crop')?.toString('utf8') ?? '', bytes: image.length });
-        json({ success: true, data: { coverImageKey: `renderer-tenant/inspections/insp-7/covers/${covers.length}.jpg` } });
+        json(contract<'/api/inspections/{id}/cover', 'post'>()({ success: true, data: { coverImageKey: `renderer-tenant/inspections/insp-7/covers/${covers.length}.jpg` } }));
       });
       return;
     }
@@ -218,7 +253,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
         const key = `renderer-tenant/inspections/insp-7/photos/${body.pendingId}.${extension}`;
         const token = `renderer123.${Math.random().toString(36).slice(2)}`;
         uploadTokens.set(token, key);
-        json({ success: true, data: { url: `${origin}/api/public/uploads/photo?token=${token}`, key } });
+        json(contract<'/api/inspections/{id}/media/upload-url', 'post'>()({ success: true, data: { url: `${origin}/api/public/uploads/photo?token=${token}`, key, expiresAt: Date.now() + 3_600_000 } }));
       });
       return;
     }
@@ -254,7 +289,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       return;
     }
     if (request.method === 'POST' && route === '/api/inspections/insp-7/collab/ticket') {
-      json({ success: true, data: { ticket: 'renderer-collab-ticket-1234' } });
+      json(contract<'/api/inspections/{id}/collab/ticket', 'post'>()({ success: true, data: { ticket: 'renderer-collab-ticket-1234', expiresIn: 60, features: [] } }));
       return;
     }
     if (request.method === 'POST' && route === '/api/client/import') {
@@ -270,7 +305,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
         const { readPackageSummary } = await import('@inspectorhub/offline-package');
         const { counts } = readPackageSummary(new Uint8Array(zip.buffer, zip.byteOffset, zip.byteLength));
         imports.push({ contentLength: Number(declared), byteLength: zip.length, sha256: createHash('sha256').update(zip).digest('hex'), elapsedMs, inspections: counts.inspections });
-        json({ success: true, data: { inspections: counts.inspections, photos: counts.photos, outbox: { applied: counts.writes, skipped: 0, failed: [] }, yjs: { changed: counts.inspections, unchanged: 0 } } });
+        json(contract<'/api/client/import', 'post'>()({ success: true, data: { inspections: counts.inspections, photos: counts.photos, outbox: { applied: counts.writes, skipped: 0, failed: [] }, yjs: { changed: counts.inspections, unchanged: 0 } } }));
       }).catch((error: unknown) => {
         // A connection destroyed mid-body is an aborted attempt; anything else (an unreadable package included) is recorded, not hidden.
         const text = error instanceof Error ? `${(error as NodeJS.ErrnoException).code ?? ''} ${error.message}` : String(error);
@@ -283,13 +318,13 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       void readBody(request).then((raw) => {
         const body = JSON.parse(raw.toString('utf8')) as { ids?: unknown };
         const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string') : [];
-        json({ success: true, data: { visible: options.showInspection ? ids : [] } });
+        json(contract<'/api/client/inspections/visible', 'post'>()({ success: true, data: { visible: options.showInspection ? ids : [] } }));
       });
       return;
     }
     if (route === '/api/inspections') {
       // The list the work-list download reads: the seeded inspection when the scenario shows it, so a fresh device can download it.
-      json({ success: true, data: options.showInspection ? [{ id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', propertyAddress: '77 Test Photo Lane' }] : [], meta: { nextCursor: null } });
+      json(contract<'/api/inspections', 'get'>()({ success: true, data: options.showInspection ? [{ id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, inspectorId: 'renderer-user', templateId: null, createdAt: '2026-10-31T10:00:00Z' }] : [], meta: { nextCursor: null } }));
       return;
     }
     json({ error: 'not-found' }, 404);

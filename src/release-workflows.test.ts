@@ -1633,6 +1633,18 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(g3.indexOf('one-uploaded 420 15')).toBeGreaterThan(on); // the wait covers the app's retry backoff, then watches for a second copy
   });
 
+  it('records the WebView console for the whole run: started before the app, a page snapshot on failure, stopped on failure and on exit', () => {
+    const started = g3.indexOf('webview-console.mjs" collect "$OUT/webview-console.jsonl" &');
+    expect(started).toBeGreaterThan(g3.indexOf('adb install -r "$APK"'));
+    expect(started).toBeLessThan(g3.indexOf('start_app "Choose your server"'));
+    expect(g3).toContain('trap stop_console EXIT');
+    const onError = g3.slice(g3.indexOf('on_error() {'), g3.indexOf('trap on_error ERR'));
+    // The snapshot is taken while the recorder still runs, then the recorder is stopped and its tail is printed into the job log.
+    expect(onError.indexOf('webview-console.mjs" snapshot')).toBeGreaterThan(0);
+    expect(onError.indexOf('stop_console')).toBeGreaterThan(onError.indexOf('webview-console.mjs" snapshot'));
+    expect(onError.indexOf('tail -40 "$OUT/webview-console.jsonl"')).toBeGreaterThan(onError.indexOf('stop_console'));
+  });
+
   it('kills the app between the parts and starts it again, and part B sees the work list first (a restart really happened)', () => {
     const killAt = g3.indexOf('adb shell am force-stop "$APP_ID"');
     expect(killAt).toBeGreaterThan(0);
@@ -1729,5 +1741,21 @@ describe('the packaged Windows registry smoke is manual only', () => {
     // The check comes before the guard is entered and before any child process is spawned.
     expect(text.indexOf('Refusing to run in CI')).toBeLessThan(text.indexOf('withRegistryGuard(['));
     expect(text.indexOf('Refusing to run in CI')).toBeLessThan(text.indexOf('spawn(process.execPath'));
+  });
+});
+
+describe('CI verify job: the fake engine is checked against the engine contract', () => {
+  const verify = job(ci.wf, 'verify');
+  const step = verify.steps.find((s) => (s.run ?? '').startsWith('npx vitest run'));
+
+  it('runs the unit tests with the contract URL and REQUIRE_ENGINE_CONTRACT, so a missing contract fails instead of skipping', () => {
+    expect(step).toBeDefined();
+    expect(step?.env?.REQUIRE_ENGINE_CONTRACT).toBe('1');
+    expect(step?.env?.OPENINSPECTION_CONTRACT).toBe('${{ env.ENGINE_CONTRACT_URL }}');
+    // control: the type-generation step reads the same URL, so the two checks cannot look at different contracts
+    expect(verify.steps.some((s) => (s.run ?? '').includes('api:types:check') && (s.run ?? '').includes('$ENGINE_CONTRACT_URL'))).toBe(true);
+    // control: the Windows shards do not set it (they would skip the check, which is fine there: verify is the one that requires it)
+    const win = job(ci.wf, 'windows').steps.find((s) => (s.run ?? '').startsWith('npx vitest run'));
+    expect(win?.env?.REQUIRE_ENGINE_CONTRACT).toBeUndefined();
   });
 });

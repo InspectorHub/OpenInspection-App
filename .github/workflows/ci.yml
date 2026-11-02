@@ -22,7 +22,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx vitest run
+      - name: Unit tests, and the fake engine's answers against the engine contract
+        # The fake engine (e2e/fake-engine) must answer as the real engine's contract says, or the golden flows go green against an engine
+        # that no longer exists. With REQUIRE_ENGINE_CONTRACT a missing or unreadable contract fails the step instead of skipping the check.
+        env:
+          OPENINSPECTION_CONTRACT: ${{ env.ENGINE_CONTRACT_URL }}
+          REQUIRE_ENGINE_CONTRACT: '1'
+        run: npx vitest run
       - run: npm run build
       - name: Release bundle has no development-only UI
         run: npm run check:bundle
