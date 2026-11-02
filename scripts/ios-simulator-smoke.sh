@@ -46,6 +46,21 @@ plutil -lint "$APP_PATH/Info.plist"
 plutil -lint "$APP_PATH/PrivacyInfo.xcprivacy"
 echo "ok: Info.plist and the privacy manifest are valid and the manifest is inside the app"
 
+# ---- 1b. what "Save photos I take to my gallery" needs, read from the BUILT app (not from the source files) --------
+# The simulator has no camera and the release build has no Diagnostics screen, so a photo cannot be taken and saved here.
+# What can be proved on the built bundle: (1) the text iOS shows when the app first adds a photo to the library is in
+# Info.plist (without it the system ends the app at the first save), and (2) the media plugin that does the save is in the
+# list of native plugins Capacitor registers at launch (a plugin that is in package.json but not in that list answers every
+# call with "not implemented", and the person's photos would never be copied).
+ADD_TEXT="$(plutil -extract NSPhotoLibraryAddUsageDescription raw -o - "$APP_PATH/Info.plist" 2>/dev/null || true)"
+[ -n "$ADD_TEXT" ] || fail "the built Info.plist has no NSPhotoLibraryAddUsageDescription (the first save to the photo library would end the app)"
+echo "ok: the built Info.plist explains why the app adds photos to the library"
+registered_plugin() { jq -e --arg name "$1" '(.packageClassList // []) | index($name) != null' "$APP_PATH/capacitor.config.json" >/dev/null 2>&1; }
+# Control first: a name nobody registered must not be found, otherwise the check below could never fail.
+if registered_plugin "NoSuchPluginForTheControl"; then fail "the plugin-list check found a plugin that does not exist"; fi
+registered_plugin "MediaPlugin" || fail "MediaPlugin is not in packageClassList of the built app's capacitor.config.json (saving to the gallery would answer 'not implemented')"
+echo "ok: MediaPlugin is registered in the built app"
+
 # ---- the directories that must be excluded from backup, read from the Swift source --------------
 [ -f "$SWIFT_SOURCE" ] || fail "missing $SWIFT_SOURCE"
 BACKUP_DIRS="$(sed -n 's/.*relativeDirectories: *\[String\] *= *\[\(.*\)\].*/\1/p' "$SWIFT_SOURCE" | tr -d '" ' | tr ',' ' ')"

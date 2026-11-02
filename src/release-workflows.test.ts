@@ -1357,6 +1357,17 @@ describe('native logging stays off outside the simulator job', () => {
     expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
   });
 
+  it('the smoke script reads the gallery prerequisites from the BUILT app, with a control that must fail', () => {
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+    expect(script).toContain('plutil -extract NSPhotoLibraryAddUsageDescription raw');
+    expect(script).toContain('"$APP_PATH/Info.plist"');
+    expect(script).toContain('"$APP_PATH/capacitor.config.json"');
+    expect(script).toContain('registered_plugin "MediaPlugin"');
+    // the control comes first and is expected NOT to be found
+    expect(script.indexOf('registered_plugin "NoSuchPluginForTheControl"')).toBeGreaterThan(-1);
+    expect(script.indexOf('registered_plugin "NoSuchPluginForTheControl"')).toBeLessThan(script.indexOf('registered_plugin "MediaPlugin"'));
+  });
+
   it('the iOS job makes sure GNU timeout exists before the smoke script runs (macOS has none; the library bounds every simulator call with it)', () => {
     const steps = ci.wf.jobs['ios-simulator']!.steps;
     const smokeAt = steps.findIndex((s) => (s.run ?? '').includes('ios-simulator-smoke.sh'));

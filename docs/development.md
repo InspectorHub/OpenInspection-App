@@ -285,7 +285,7 @@ The smoke script (`scripts/ios-simulator-smoke.sh`, `SMOKE_DEVICES=iphone|ipad|b
 opening the sign-in callback URL (`io.inspectorhub.app:/oauth/callback?...`) with `xcrun simctl openurl` does not end the process; that every
 directory listed in `BackupExclusion.relativeDirectories` carries the backup-exclusion attribute (an untouched directory is the control that
 must not carry it); that the app's console contains plugin-call lines (proof the capture can see the app) and no `storage open failed` line;
-and it saves one screenshot per device. It signs in to nothing and contacts no server.
+and it saves one screenshot per device. It also reads two things for "Save photos I take to my gallery" from the BUILT app: `NSPhotoLibraryAddUsageDescription` in its `Info.plist`, and `MediaPlugin` in the `packageClassList` of the `capacitor.config.json` inside the bundle (a name nobody registered is the control). It does not take or save a photo: the simulator has no camera and the release build has no Diagnostics screen, so the permission prompt and a real save are checked on an iPhone. It signs in to nothing and contacts no server.
 
 Four things this job taught, each of which looked like a green run while the app was broken or the check was blind:
 
