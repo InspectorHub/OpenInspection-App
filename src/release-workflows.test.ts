@@ -1353,6 +1353,23 @@ describe('native logging stays off outside the simulator job', () => {
     }
     expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
   });
+
+  it('a simulator that fails to boot is retried once and blamed for itself, not the app', () => {
+    // CI runs 41363127461 (iPad) and 41365341593 (iPhone) ended with `Status=4294967295, isTerminal=YES` from bootstatus: the runner's
+    // simulator gave up while booting. bootstatus still exited 0, so the script went on and failed later with "the app is not running".
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+    expect(script).toContain('boot_simulator()');
+    expect(script).toContain('Status=4294967295');
+    expect(script).toContain('for attempt in 1 2');
+    // The boot output is captured and checked, not only printed.
+    expect(script).toMatch(/out="\$\(xcrun simctl bootstatus "\$udid" -b 2>&1\)"/);
+    // A failed boot is shut down before the retry, and the final failure says it is the simulator.
+    expect(script).toContain('xcrun simctl shutdown "$udid"');
+    expect(script).toContain('the simulator did not boot after 2 attempts');
+    // smoke_device boots through the helper; the bare two-line boot is gone.
+    expect(script).toMatch(/smoke_device\(\) \{[\s\S]*?boot_simulator "\$label" "\$udid"/);
+    expect(script).not.toMatch(/xcrun simctl boot "\$udid" 2>\/dev\/null \|\| true\n  xcrun simctl bootstatus "\$udid" -b\n/);
+  });
 });
 
 describe('Android emulator smoke workflow', () => {

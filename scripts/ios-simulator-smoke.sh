@@ -99,12 +99,31 @@ save_app_log() {
   fi
 }
 
+# Boots one simulator and waits for it. `bootstatus -b` can end with `Status=4294967295, isTerminal=YES`, the simulator giving up
+# while it boots (CI runs 41363127461 for the iPad and 41365341593 for the iPhone), and it still exits 0: the script then went on
+# and failed later with "the app is not running", which blames the app for a runner problem. So its output is read, a failed boot
+# is shut down and tried once more, and a second failure says plainly that it is the simulator.
+boot_simulator() {
+  local label="$1" udid="$2" attempt out
+  for attempt in 1 2; do
+    xcrun simctl boot "$udid" 2>/dev/null || true
+    out="$(xcrun simctl bootstatus "$udid" -b 2>&1)" || true
+    printf '%s\n' "$out" | tail -3
+    if ! printf '%s' "$out" | grep -q 'Status=4294967295'; then
+      return 0
+    fi
+    echo "::warning::$label: the simulator reported a failed boot (attempt $attempt of 2); shutting it down"
+    xcrun simctl shutdown "$udid" 2>/dev/null || true
+    sleep 5
+  done
+  fail "$label: the simulator did not boot after 2 attempts (bootstatus ended with Status=4294967295); this is the runner's simulator, not the app"
+}
+
 smoke_device() {
   local label="$1" udid="$2"
   CURRENT_UDID="$udid"
   echo "=== $label ($udid) ==="
-  xcrun simctl boot "$udid" 2>/dev/null || true
-  xcrun simctl bootstatus "$udid" -b
+  boot_simulator "$label" "$udid"
   xcrun simctl install "$udid" "$APP_PATH"
   # The app's JavaScript console reaches the native side through Swift print() on stdout, not the unified log that
   # `log show` reads. Redirected to a FILE, stdout is block-buffered and stays empty until the buffer fills (runs 41266804318
