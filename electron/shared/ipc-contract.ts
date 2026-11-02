@@ -99,7 +99,7 @@ export interface DesktopBridge {
   app: { onActiveChange(listener: (active: boolean) => void): () => void };
   dialogs: { saveExport(fileUri: string, suggestedName: string): Promise<'saved' | 'cancelled'> };
   /**
-   * A COPY of a photo taken in the app, put into the Pictures\InspectorHub folder. The renderer names the file by a fixed pattern
+   * A COPY of a photo taken in the app, put into the InspectorHub folder of the system Pictures folder (the same on Windows and macOS). The renderer names the file by a fixed pattern
    * (`GALLERY_FILE_NAME`) and never a path; the main process decides the folder. It never deletes anything.
    */
   gallery: { save(name: string, data: Uint8Array): Promise<'saved'> };

@@ -48,6 +48,7 @@ describe('the Android manifest permissions', () => {
       'android.permission.SCHEDULE_EXACT_ALARM',
       'android.permission.USE_BIOMETRIC',
       'android.permission.USE_FINGERPRINT',
+      'android.permission.WRITE_EXTERNAL_STORAGE',
     ]);
     expect(manifest).toMatch(/xmlns:tools="http:\/\/schemas\.android\.com\/tools"/);
   });

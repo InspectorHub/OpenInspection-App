@@ -64,6 +64,9 @@
          READ_EXTERNAL_STORAGE arrives through the upload library and is removed too: uploads only read files the app keeps in its own
          private directory, which never needs it, and from Android 13 it has no effect. A real upload on Android 10 without it worked. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <!-- The file-sharer plugin (photo copies to Pictures on Android 10 and later, through MediaStore) declares this for Android 9 and
+         earlier, where it writes the file directly. The app never asks for it and uses the media plugin there, so it is not declared. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="remove" />

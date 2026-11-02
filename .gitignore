@@ -22,3 +22,4 @@ ios/App/App/capacitor.config.json
 ios/App/App/config.xml
 ios/DerivedData/
 *.tsbuildinfo
+.vitest/

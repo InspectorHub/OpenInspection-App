@@ -33,7 +33,10 @@ function closed(error: unknown): IpcError {
 }
 
 /**
- * Puts a copy of a photo into Pictures\InspectorHub. The name was checked at the boundary and is checked again here: the folder is fixed
+ * Puts a copy of a photo into the InspectorHub folder of the person's Pictures folder (Windows: Pictures\InspectorHub; macOS: ~/Pictures/InspectorHub;
+ * `app.getPath('pictures')` names it on each, and nothing here is specific to one system: the folder is joined, never typed with a separator).
+ * On macOS, a build distributed through the Mac App Store runs in the sandbox and needs the com.apple.security.assets.pictures.read-write
+ * entitlement for this; a build signed for direct distribution does not. The name was checked at the boundary and is checked again here: the folder is fixed
  * and the name has no separator.
  *
  * - An existing file is never replaced. A second save of the same photo finds the same bytes (the same size) and counts as saved; a file of

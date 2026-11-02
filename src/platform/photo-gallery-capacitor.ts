@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { Media } from '@capacitor-community/media';
+import { FileSharer } from '@capgo/capacitor-file-sharer';
 import { bytesToBase64 } from './base64';
 import type { GallerySaveResult, PhotoGallery } from './photo-gallery';
 
@@ -14,9 +15,60 @@ export interface MediaPluginLike {
   getAlbumsPath(): Promise<{ path: string }>;
 }
 
+/** The part of the @capgo/capacitor-file-sharer plugin the app uses (its Android save writes through MediaStore). */
+export interface FileSharerLike {
+  save(options: {
+    filename: string;
+    base64Data: string;
+    contentType: string;
+    android: { saveDirectory: 'pictures'; relativePath: string };
+  }): Promise<unknown>;
+}
+
 export interface CapacitorGalleryOptions {
   platform: 'android' | 'ios';
   media: MediaPluginLike;
+  /** Saves into the shared Pictures folder through MediaStore. Used on Android 10 and later; absent, nothing changes. */
+  fileSharer?: FileSharerLike;
+  /** The Android major version (10, 11, ...), or null when it is not known. Below 10 or unknown, the media plugin is used. */
+  androidMajor?: number | null | (() => Promise<number | null>);
+}
+
+/** The first Android version whose MediaStore takes a RELATIVE_PATH, and so a photo can go to Pictures without any storage permission. */
+export const MEDIASTORE_MIN_ANDROID = 10;
+
+/**
+ * The Android major version out of the WebView's user agent ("... Linux; Android 10; ALP-AL00 ..."), or null. A user agent that carries
+ * no version is "unknown", which takes the media plugin: it works everywhere. Not enough on its own: see `androidMajorFromNavigator`.
+ */
+export function androidMajorFromUserAgent(userAgent: string): number | null {
+  const match = /\bAndroid (\d{1,2})(?:[.;)\s]|$)/.exec(userAgent);
+  if (match?.[1] === undefined) return null;
+  const major = Number(match[1]);
+  return major >= 2 ? major : null;
+}
+
+/** The part of `navigator` the version lookup reads. */
+export interface NavigatorLike {
+  userAgent: string;
+  userAgentData?: { getHighEntropyValues(hints: string[]): Promise<{ platformVersion?: string }> };
+}
+
+/**
+ * The Android major version of this phone, or null. The WebView's user agent is being frozen to "Android 10; K" (Google's user-agent
+ * reduction for WebView), so it is only the second choice: the User-Agent Client Hints `platformVersion` ("10.0.0", "14.0.0") is asked
+ * first. A phone that answers neither is "unknown", which takes the media plugin: it works on every version.
+ */
+export async function androidMajorFromNavigator(nav: NavigatorLike): Promise<number | null> {
+  try {
+    const hints = await nav.userAgentData?.getHighEntropyValues(['platformVersion']);
+    const match = /^(\d{1,2})(?:\.|$)/.exec(hints?.platformVersion ?? '');
+    const major = match?.[1] === undefined ? 0 : Number(match[1]);
+    if (major >= 2) return major;
+  } catch {
+    // Not offered here: the user agent is the next choice.
+  }
+  return androidMajorFromUserAgent(nav.userAgent);
 }
 
 /**
@@ -50,13 +102,28 @@ export function albumFileName(name: string): string {
   return name.replace(/\.[A-Za-z0-9]+$/, '').replace(/[^A-Za-z0-9_-]/g, '');
 }
 
+/** A name the file system and the media index take as it is: letters, digits, dot, dash, underscore, and an extension. */
+export function safeFileName(name: string): string {
+  // No leading dot: Android treats such a file as hidden, and a gallery would not list it.
+  const cleaned = name.replace(/[^A-Za-z0-9._-]/g, '').replace(/^\.+/, '');
+  return /\.[A-Za-z0-9]{2,5}$/.test(cleaned) ? cleaned : `${cleaned || 'photo'}.jpg`;
+}
+
 /**
- * The phone's photo library through @capacitor-community/media. Saving is best effort and never throws.
+ * The phone's photo library. Saving is best effort and never throws.
  *
+ * Android 10 and later: the photo goes to the shared Pictures folder, Pictures/InspectorHub, through MediaStore (@capgo/capacitor-file-sharer,
+ * MPL-2.0). Measured on a Huawei ALP-AL00, Android 10 (2026-11-02): the file lands in /sdcard/Pictures/InspectorHub, the index lists it with
+ * that relative path, the phone's gallery shows an album "InspectorHub", no permission is asked, and a normal UNINSTALL of the app leaves the
+ * photo where it is (the index drops the owner). That is why it is used where it can be.
+ *
+ * Android 9 and earlier, or a version that cannot be read: @capacitor-community/media. Its Android albums are folders in the app's own media
+ * folder, so there the copies are deleted with the app. The file sharer cannot do better on those versions (below Android 10 it writes the
+ * file directly and needs a storage permission nobody asks for). The details of the media plugin on Android:
  * Android: into its own album "InspectorHub". WHERE that is, read from the plugin's source: its "albums path" is the app's own external
  * media folder (`getExternalMediaDirs()[0]`, /storage/emulated/0/Android/media/<package>), the album is a folder in it, and after copying
  * the file the plugin sends the (deprecated) media-scanner broadcast. It is NOT Pictures/InspectorHub.
- * Measured on a Huawei ALP-AL00, Android 10 (2026-11-02): the photo is in the system media index at once (bucket "InspectorHub") and the
+ * Measured with that plugin on a Huawei ALP-AL00, Android 10 (2026-11-02): the photo is in the system media index at once (bucket "InspectorHub") and the
  * phone's gallery lists it as the album "InspectorHub" (under "Other albums" in Huawei's gallery); a normal UNINSTALL of the app deletes the
  * folder and the copies with it (the index keeps stale rows for files that are gone). So on Android the copy outlives signing out and
  * clearing local data, NOT uninstalling the app. Other Android versions and makers are not measured.
@@ -67,7 +134,18 @@ export function albumFileName(name: string): string {
  * iOS: no album, so the photo goes to Recents and the system asks for the "add only" permission, not for access to the whole library.
  */
 export function createCapacitorGallery(options: CapacitorGalleryOptions): PhotoGallery {
-  const { platform, media } = options;
+  const { platform, media, fileSharer } = options;
+  /** Looked up once, at the first save, and kept: it cannot change while the app runs. */
+  let useMediaStore: Promise<boolean> | undefined;
+  function shouldUseMediaStore(): Promise<boolean> {
+    if (platform !== 'android' || fileSharer === undefined) return Promise.resolve(false);
+    useMediaStore ??= (async () => {
+      const wanted = options.androidMajor;
+      const major = typeof wanted === 'function' ? await wanted().catch(() => null) : (wanted ?? null);
+      return (major ?? 0) >= MEDIASTORE_MIN_ANDROID;
+    })();
+    return useMediaStore;
+  }
   let album: Promise<string> | undefined;
 
   async function find(): Promise<string | undefined> {
@@ -113,14 +191,37 @@ export function createCapacitorGallery(options: CapacitorGalleryOptions): PhotoG
     }
   }
 
+  /** The shared Pictures/InspectorHub folder through MediaStore. Rejects when the plugin is not in this build (UNIMPLEMENTED). */
+  async function saveToPictures(base64: string, contentType: string, name: string): Promise<void> {
+    await fileSharer?.save({
+      filename: safeFileName(name),
+      base64Data: base64,
+      contentType,
+      android: { saveDirectory: 'pictures', relativePath: `Pictures/${GALLERY_ALBUM_NAME}` },
+    });
+  }
+
   return {
     available: () => true,
     async save(blob, info): Promise<GallerySaveResult> {
       try {
         const bytes = new Uint8Array(await blob.arrayBuffer());
-        const dataUrl = `data:${blob.type || 'image/jpeg'};base64,${bytesToBase64(bytes)}`;
+        const base64 = bytesToBase64(bytes);
+        const contentType = blob.type || 'image/jpeg';
+        // Built only where it is used: the whole photo again as a string is a lot of memory for a path that does not need it.
+        const dataUrl = (): string => `data:${contentType};base64,${base64}`;
+        if (await shouldUseMediaStore()) {
+          try {
+            await saveToPictures(base64, contentType, info.name);
+            return 'saved';
+          } catch (error) {
+            // A build without the plugin (it says UNIMPLEMENTED) still saves, through the media plugin. Any other failure is the answer:
+            // trying a second place could leave two copies.
+            if ((error as { code?: unknown } | null)?.code !== 'UNIMPLEMENTED') throw error;
+          }
+        }
         try {
-          await attempt(dataUrl, info.name);
+          await attempt(dataUrl(), info.name);
         } catch (error) {
           // Seen on a phone (Huawei, Android 10): the system's media index still listed the album after its folder was deleted, so the
           // plugin handed back that folder's path and then refused it: "Album identifier does not exist". The folder is made again and
@@ -128,7 +229,7 @@ export function createCapacitorGallery(options: CapacitorGalleryOptions): PhotoG
           if (platform !== 'android' || !ALBUM_GONE.test(messageOf(error))) throw error;
           album = undefined;
           await media.createAlbum({ name: GALLERY_ALBUM_NAME }).catch(() => undefined);
-          await attempt(dataUrl, info.name);
+          await attempt(dataUrl(), info.name);
         }
         return 'saved';
       } catch (error) {
@@ -145,5 +246,5 @@ export function createRealGallery(): PhotoGallery | null {
   if (!Capacitor.isNativePlatform()) return null;
   const platform = Capacitor.getPlatform();
   if (platform !== 'android' && platform !== 'ios') return null;
-  return createCapacitorGallery({ platform, media: Media });
+  return createCapacitorGallery({ platform, media: Media, fileSharer: FileSharer, androidMajor: () => androidMajorFromNavigator(navigator as unknown as NavigatorLike) });
 }

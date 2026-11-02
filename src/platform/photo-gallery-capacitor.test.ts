@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { albumFileName, createCapacitorGallery, GALLERY_ALBUM_NAME, type MediaPluginLike } from './photo-gallery-capacitor';
+import { albumFileName, androidMajorFromNavigator, androidMajorFromUserAgent, createCapacitorGallery, GALLERY_ALBUM_NAME, safeFileName, type FileSharerLike, type MediaPluginLike } from './photo-gallery-capacitor';
 
 /** A stand-in for the plugin that remembers what it was asked and can be told to refuse. */
 function fakeMedia(options: { albums?: Array<{ identifier: string; name: string }>; albumsPath?: string; saveError?: Error; createError?: Error; hideCreated?: boolean } = {}) {
@@ -204,5 +204,155 @@ describe('albumFileName', () => {
     ['../../evil name.jpg', 'evilname'],
   ])('%s becomes %s', (name, expected) => {
     expect(albumFileName(name)).toBe(expected);
+  });
+});
+
+/** A stand-in for @capgo/capacitor-file-sharer that remembers what it was asked. */
+function fakeSharer(options: { error?: unknown } = {}) {
+  const saved: Array<Parameters<FileSharerLike['save']>[0]> = [];
+  const sharer: FileSharerLike = {
+    save: (o) => {
+      if (options.error !== undefined) return Promise.reject(options.error);
+      saved.push(o);
+      return Promise.resolve({ uri: 'content://media/external_primary/images/media/1' });
+    },
+  };
+  return { sharer, saved };
+}
+
+describe('Android 10 and later: the shared Pictures folder through MediaStore (file sharer)', () => {
+  it('saves into Pictures/InspectorHub with the bytes and type of the photo, and never touches the media plugin (no album, no lookup)', async () => {
+    const media = fakeMedia();
+    const sharer = fakeSharer();
+    const gallery = createCapacitorGallery({ platform: 'android', media: media.media, fileSharer: sharer.sharer, androidMajor: 10 });
+    expect(gallery.available()).toBe(true);
+    expect(await gallery.save(JPEG, INFO)).toBe('saved');
+    expect(media.calls).toEqual([]);
+    expect(sharer.saved).toHaveLength(1);
+    const [only] = sharer.saved;
+    expect(only?.filename).toBe(INFO.name);
+    expect(only?.contentType).toBe('image/jpeg');
+    expect(only?.android).toEqual({ saveDirectory: 'pictures', relativePath: 'Pictures/InspectorHub' });
+    expect(only?.base64Data).toBe(btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1, 2, 3)));
+  });
+
+  it.each([10, 11, 14, 16])('Android %i uses it', async (major) => {
+    const media = fakeMedia();
+    const sharer = fakeSharer();
+    await createCapacitorGallery({ platform: 'android', media: media.media, fileSharer: sharer.sharer, androidMajor: major }).save(JPEG, INFO);
+    expect(sharer.saved).toHaveLength(1);
+    expect(media.calls).toEqual([]);
+  });
+
+  it.each([[9], [8], [7], [null], [undefined]])('Android %s (older, or not known) uses the media plugin instead and the file sharer is not called', async (major) => {
+    const media = fakeMedia();
+    const sharer = fakeSharer();
+    expect(await createCapacitorGallery({ platform: 'android', media: media.media, fileSharer: sharer.sharer, androidMajor: major }).save(JPEG, INFO)).toBe('saved');
+    expect(sharer.saved).toEqual([]);
+    expect(media.saved).toHaveLength(1);
+  });
+
+  it('a failure of the file sharer is "failed" and is NOT retried through the media plugin (two places could leave two copies)', async () => {
+    const media = fakeMedia();
+    const sharer = fakeSharer({ error: Object.assign(new Error('Unable to save the file'), { code: 'ERR_FILE_SAVE_FAILED' }) });
+    expect(await createCapacitorGallery({ platform: 'android', media: media.media, fileSharer: sharer.sharer, androidMajor: 12 }).save(JPEG, INFO)).toBe('failed');
+    expect(media.calls).toEqual([]);
+  });
+
+  it('a build without the plugin (UNIMPLEMENTED) still saves, through the media plugin', async () => {
+    const media = fakeMedia();
+    const sharer = fakeSharer({ error: Object.assign(new Error('"FileSharer" plugin is not implemented on android'), { code: 'UNIMPLEMENTED' }) });
+    expect(await createCapacitorGallery({ platform: 'android', media: media.media, fileSharer: sharer.sharer, androidMajor: 12 }).save(JPEG, INFO)).toBe('saved');
+    expect(media.saved).toHaveLength(1);
+  });
+
+  it('iOS never uses it, whatever is passed (on iOS its save opens a share sheet)', async () => {
+    const media = fakeMedia();
+    const sharer = fakeSharer();
+    expect(await createCapacitorGallery({ platform: 'ios', media: media.media, fileSharer: sharer.sharer, androidMajor: 17 }).save(JPEG, INFO)).toBe('saved');
+    expect(sharer.saved).toEqual([]);
+    expect(media.saved).toHaveLength(1);
+  });
+
+  it('the version can be a function, asked once at the first save (and a lookup that fails means "unknown": the media plugin)', async () => {
+    const media = fakeMedia();
+    const sharer = fakeSharer();
+    let asked = 0;
+    const gallery = createCapacitorGallery({ platform: 'android', media: media.media, fileSharer: sharer.sharer, androidMajor: () => { asked += 1; return Promise.resolve(13); } });
+    await gallery.save(JPEG, INFO);
+    await gallery.save(JPEG, INFO);
+    expect(asked).toBe(1);
+    expect(sharer.saved).toHaveLength(2);
+    const broken = fakeMedia();
+    const unused = fakeSharer();
+    await createCapacitorGallery({ platform: 'android', media: broken.media, fileSharer: unused.sharer, androidMajor: () => Promise.reject(new Error('no')) }).save(JPEG, INFO);
+    expect(unused.saved).toEqual([]);
+    expect(broken.saved).toHaveLength(1);
+  });
+
+  it('a refusal reported by the file sharer is "denied", not "failed"', async () => {
+    const sharer = fakeSharer({ error: Object.assign(new Error('Access to photos not allowed by user'), { code: 'accessDenied' }) });
+    expect(await createCapacitorGallery({ platform: 'android', media: fakeMedia().media, fileSharer: sharer.sharer, androidMajor: 12 }).save(JPEG, INFO)).toBe('denied');
+  });
+
+  it('save never throws, whatever the plugin rejects with', async () => {
+    for (const error of [new Error('x'), 'plain text', { code: 'ERR' }, null]) {
+      const gallery = createCapacitorGallery({ platform: 'android', media: fakeMedia().media, fileSharer: fakeSharer({ error }).sharer, androidMajor: 11 });
+      await expect(gallery.save(JPEG, INFO)).resolves.toBe('failed');
+    }
+  });
+});
+
+describe('androidMajorFromUserAgent', () => {
+  it.each([
+    ['Mozilla/5.0 (Linux; Android 10; ALP-AL00 Build/HUAWEIALP-AL00; wv) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', 10],
+    ['Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36', 16],
+    ['Mozilla/5.0 (Linux; Android 9; SM-G960F) AppleWebKit/537.36', 9],
+    ['Mozilla/5.0 (Linux; Android 7.1.1; Nexus 6) AppleWebKit/537.36', 7],
+    ['Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36', 14],
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)', null],
+    ['', null],
+    ['Android', null],
+    ['Mozilla/5.0 (Linux; U; Android 1.6; en-us)', null],
+  ])('%s -> %s', (agent, expected) => {
+    expect(androidMajorFromUserAgent(agent)).toBe(expected);
+  });
+});
+
+describe('safeFileName', () => {
+  it.each([
+    ['InspectorHub-20261102-101500-ab12cd34.jpg', 'InspectorHub-20261102-101500-ab12cd34.jpg'],
+    ['a b/c.jpg', 'abc.jpg'],
+    ['../../x.png', 'x.png'],
+    ['.hidden.jpg', 'hidden.jpg'],
+    ['noextension', 'noextension.jpg'],
+    ['', 'photo.jpg'],
+  ])('%s -> %s', (name, expected) => {
+    expect(safeFileName(name)).toBe(expected);
+  });
+});
+
+describe('androidMajorFromNavigator (the user agent is being frozen to "Android 10; K", so the client hints come first)', () => {
+  const FROZEN = 'Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/125.0.0.0 Mobile Safari/537.36';
+  const hints = (platformVersion: string | undefined) => ({ getHighEntropyValues: () => Promise.resolve(platformVersion === undefined ? {} : { platformVersion }) });
+
+  it('takes the real version from the hints when the user agent is frozen (an Android 9 phone is 9, not 10)', async () => {
+    expect(await androidMajorFromNavigator({ userAgent: FROZEN, userAgentData: hints('9.0.0') })).toBe(9);
+    expect(await androidMajorFromNavigator({ userAgent: FROZEN, userAgentData: hints('14.0.0') })).toBe(14);
+    expect(await androidMajorFromNavigator({ userAgent: FROZEN, userAgentData: hints('16') })).toBe(16);
+  });
+
+  it.each([
+    ['no hints at all', undefined],
+    ['hints without a version', hints(undefined)],
+    ['an unusable version', hints('')],
+    ['a version of 0.0.0 (as a desktop browser reports)', hints('0.0.0')],
+    ['hints that throw', { getHighEntropyValues: () => Promise.reject(new Error('blocked')) }],
+  ])('falls back to the user agent: %s', async (_name, userAgentData) => {
+    expect(await androidMajorFromNavigator({ userAgent: 'Mozilla/5.0 (Linux; Android 11; X) AppleWebKit/537.36', ...(userAgentData === undefined ? {} : { userAgentData }) })).toBe(11);
+  });
+
+  it('is null when neither says', async () => {
+    expect(await androidMajorFromNavigator({ userAgent: 'Mozilla/5.0 (iPhone)' })).toBeNull();
   });
 });
