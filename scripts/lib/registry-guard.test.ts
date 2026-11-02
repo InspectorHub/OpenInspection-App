@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
-  ABORT_SIGNALS, APP_KEY, SCRATCH_KEY, SCRATCH_KEY_2, VERIFY_FAILED_EXIT_CODE, installAbortHandlers, keyExists, keyExistsWith, looksLikeLeftover, withRegistryGuard,
+  ABORT_SIGNALS, APP_KEY, SCRATCH_KEY, SCRATCH_KEY_2, VERIFY_FAILED_EXIT_CODE, defaultLockDir, installAbortHandlers, keyExists, keyExistsWith, looksLikeLeftover, manualRestoreCommand, withRegistryGuard,
 } from './registry-guard.mjs';
 
 // These tests touch ONLY the scratch key. The real io.inspectorhub.app key is never read, written or exported.
@@ -299,6 +299,17 @@ describe('installAbortHandlers', () => {
     expect(exits).toEqual([]);
   });
 
+  it('a restore that FAILED on the exit path sets the exit code to 3, whatever the process was exiting with; a good one leaves it alone', () => {
+    const bad = make();
+    installAbortHandlers({ proc: bad.proc, restore: () => 1 });
+    bad.proc.emit('exit', 0);
+    expect((bad.proc as unknown as { exitCode?: number }).exitCode).toBe(VERIFY_FAILED_EXIT_CODE);
+    const good = make();
+    installAbortHandlers({ proc: good.proc, restore: () => 0 });
+    good.proc.emit('exit', 1);
+    expect((good.proc as unknown as { exitCode?: number }).exitCode).toBeUndefined();
+  });
+
   it('handles every signal in the list, and removes every handler it added', () => {
     const { proc, calls } = make();
     const uninstall = installAbortHandlers({ proc, restore: (why: string) => { calls.push(why); return 0; } });
@@ -313,16 +324,36 @@ describe('installAbortHandlers', () => {
 });
 
 describe('looksLikeLeftover (the open command the smoke script refuses to back up)', () => {
+  const TMP = 'C:\\Users\\x\\AppData\\Local\\Temp';
   it.each([
     ['an unpacked build left behind', '"D:\\tmp\\win-smoke\\release\\win-unpacked\\InspectorHub.exe" "%1"', true],
     ['a smoke work directory', '"C:\\Users\\x\\AppData\\Local\\Temp\\oi-win-smoke-ab12\\InspectorHub.exe" "%1"', true],
-    ['any other temp directory', '"C:\\Users\\x\\AppData\\Local\\Temp\\other\\a.exe" "%1"', true],
+    ['anything under this machine\'s temp directory', '"C:\\Users\\x\\AppData\\Local\\Temp\\other\\a.exe" "%1"', true],
+    ['the same with other case and forward slashes', '"c:/users/X/appdata/local/temp/other/a.exe" "%1"', true],
+    ['a copy under a folder called tmp that is not a win-unpacked build', '"D:\\tmp\\x\\InspectorHub.exe" "%1"', true],
     ['the case of the path is not a difference', '"d:\\TMP\\WIN-UNPACKED\\inspectorhub.exe" "%1"', true],
     ['control: the real installed app', '"C:\\Users\\important-new\\AppData\\Local\\Programs\\openinspection-app\\InspectorHub.exe" "%1"', false],
+    ['control: a Windows account that is itself called Temp (its temp directory is elsewhere)', '"C:\\Users\\Temp\\AppData\\Local\\Programs\\openinspection-app\\InspectorHub.exe" "%1"', false],
     ['control: a path that merely contains the letters', '"C:\\Program Files\\Temporal\\InspectorHub.exe" "%1"', false],
+    ['control: the temp directory name as a prefix of another folder', '"C:\\Users\\x\\AppData\\Local\\Temporary\\InspectorHub.exe" "%1"', false],
     ['control: no command at all', null, false],
   ] as const)('%s', (_name, command, expected) => {
-    expect(looksLikeLeftover(command)).toBe(expected);
+    expect(looksLikeLeftover(command, TMP)).toBe(expected);
+  });
+});
+
+// Pure logic: runs on any platform.
+describe('the lock directory and the manual commands', () => {
+  it('locks live in a fixed per-user directory, not in the temp directory (which follows TEMP/TMP and is emptied by cleaners)', () => {
+    expect(defaultLockDir({ LOCALAPPDATA: 'X:\\Users\\a\\AppData\\Local' })).toBe(join('X:\\Users\\a\\AppData\\Local', 'InspectorHub', 'registry-guard'));
+    expect(defaultLockDir({ LOCALAPPDATA: 'X:\\L', TEMP: 'Y:\\other', TMP: 'Z:\\another' })).not.toContain('other');
+    expect(defaultLockDir({})).toMatch(/InspectorHub[\\/]registry-guard$/);
+  });
+
+  it('the restore by hand is two lines, each pasteable on its own, and one line for a key that did not exist', () => {
+    const lines = manualRestoreCommand('HKCU\\K', 'D:\\b\\backup-0.reg', true).split('\n').map((l) => l.trim());
+    expect(lines).toEqual(['reg delete "HKCU\\K" /f', 'reg import "D:\\b\\backup-0.reg"']);
+    expect(manualRestoreCommand('HKCU\\K', 'D:\\b\\backup-0.reg', false)).toBe('reg delete "HKCU\\K" /f');
   });
 });
 
@@ -381,5 +412,117 @@ describe.skipIf(process.platform !== 'win32')('a run over several keys', () => {
     // ...and its lock is gone, so it can be guarded again, while the key that failed still refuses.
     await expect(withRegistryGuard([KEYS[fine]!], () => 'free', { backupDir: tmp(), lockDir, ...quiet })).resolves.toBe('free');
     await expect(withRegistryGuard([KEYS[failing]!], () => 'blocked', { backupDir: tmp(), lockDir, ...quiet })).rejects.toThrow(/in progress|WITHOUT a verified restore/);
+  });
+
+  describe('what the review of the guard found', () => {
+    const LOCK_1 = 'oi-registry-guard-hkcu-software-classes-io-inspectorhub-smoke-scratch.lock';
+    const LOCK_2 = 'oi-registry-guard-hkcu-software-classes-io-inspectorhub-smoke-scratch-two.lock';
+    const fakeProc = () => {
+      const exits: number[] = [];
+      return Object.assign(new EventEmitter(), { exit: (code: number) => { exits.push(code); }, exits });
+    };
+
+    it('a key listed twice (or in two cases) is refused by name before anything is locked or touched', async () => {
+      deleteBoth();
+      set(SCRATCH_KEY, 'one original');
+      const before = dumpOf(SCRATCH_KEY);
+      const lockDir = tmp();
+      let ran = false;
+      await expect(withRegistryGuard([SCRATCH_KEY, SCRATCH_KEY.toUpperCase()], () => { ran = true; }, { backupDir: tmp(), lockDir, ...quiet })).rejects.toThrow(/listed twice/);
+      expect(ran).toBe(false);
+      expect(readdirSync(lockDir)).toEqual([]);
+      expect(dumpOf(SCRATCH_KEY)).toBe(before);
+    });
+
+    it('a stop while the backups are being taken frees the locks at once: no key was changed, so the next run must not be refused', async () => {
+      deleteBoth();
+      set(SCRATCH_KEY, 'one original');
+      set(SCRATCH_KEY_2, 'two original');
+      const before = KEYS.map(dumpOf);
+      const lockDir = tmp();
+      const proc = fakeProc();
+      let lockFilesWhenStopped: string[] = ['(not looked at)'];
+      let stopped = false;
+      await withRegistryGuard(KEYS, () => undefined, {
+        backupDir: tmp(), lockDir, proc,
+        // The stop comes when BOTH locks are held but only the first key has been backed up: a restore of what is backed up would free only one.
+        log: (message: string) => {
+          if (!stopped && message.includes('backed up to')) { stopped = true; proc.emit('SIGINT'); lockFilesWhenStopped = readdirSync(lockDir); }
+        },
+      });
+      expect(proc.exits).toEqual([130]);
+      expect(lockFilesWhenStopped).toEqual([]); // freed by the stop itself, not by the normal flow that came after it in this fake
+      expect(KEYS.map(dumpOf)).toEqual(before);
+    });
+
+    it('a stop in the middle of a run over two keys, one of which cannot be restored: the good one is back and unlocked, the bad one keeps its lock, exit 3', async () => {
+      deleteBoth();
+      set(SCRATCH_KEY, 'one original');
+      set(SCRATCH_KEY_2, 'two original');
+      const before = KEYS.map(dumpOf);
+      const lockDir = tmp();
+      const proc = fakeProc();
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let changed: () => void = () => undefined;
+      const hasChanged = new Promise<void>((resolve) => { changed = resolve; });
+      const run = withRegistryGuard(KEYS, async () => { changeBoth(); changed(); await gate; }, { backupDir: tmp(), lockDir, ...quiet, proc, afterBackup: tamper(0) });
+      await hasChanged;
+      proc.emit('SIGINT');
+      // Synchronous, as for a process that is about to exit:
+      expect(dumpOf(SCRATCH_KEY_2)).toBe(before[1]);
+      expect(readdirSync(lockDir)).toEqual([LOCK_1]);
+      expect(proc.exits).toEqual([VERIFY_FAILED_EXIT_CODE]);
+      release();
+      await expect(run).rejects.toThrow(/restore failed/);
+    });
+
+    it('the error names EVERY key that failed, with its own message, and says which diff lines belong to which key', async () => {
+      deleteBoth();
+      set(SCRATCH_KEY, 'one original');
+      set(SCRATCH_KEY_2, 'two original');
+      const err = await withRegistryGuard(KEYS, changeBoth, {
+        backupDir: tmp(), lockDir: tmp(), ...quiet, afterBackup: (saved: { file: string }[]) => { tamper(0)(saved); tamper(1)(saved); },
+      }).then(() => undefined, (e: unknown) => e as { message: string; diff: string[]; diffByKey: Record<string, string[]> });
+      expect(err).toBeDefined();
+      for (const key of KEYS) {
+        expect(err!.message).toContain(key);
+        expect(err!.diffByKey[key]!.some((line) => line.includes('TAMPERED'))).toBe(true);
+      }
+      expect(err!.diff.length).toBe(KEYS.reduce((n, key) => n + err!.diffByKey[key]!.length, 0));
+    });
+
+    it('an empty lock file (a run cut off while it created it) is refused with a message that says it is unreadable, and leaves everything alone', async () => {
+      deleteBoth();
+      set(SCRATCH_KEY, 'one original');
+      const before = dumpOf(SCRATCH_KEY);
+      const lockDir = tmp();
+      writeFileSync(join(lockDir, LOCK_1), '');
+      let ran = false;
+      const err = await withRegistryGuard([SCRATCH_KEY], () => { ran = true; }, { backupDir: tmp(), lockDir, ...quiet }).then(() => undefined, (e: unknown) => e as { exitCode: number; message: string });
+      expect(ran).toBe(false);
+      expect(err?.exitCode).toBe(VERIFY_FAILED_EXIT_CODE);
+      expect(err?.message).toContain('empty or unreadable');
+      expect(existsSync(join(lockDir, LOCK_1))).toBe(true);
+      expect(dumpOf(SCRATCH_KEY)).toBe(before);
+    });
+
+    it('a lock whose pid is alive (it may be a reused pid of a dead run) still says where the backup is and how to restore it', async () => {
+      deleteBoth();
+      set(SCRATCH_KEY, 'one original');
+      const lockDir = tmp();
+      const backupFile = join(tmp(), 'backup-0.reg');
+      writeFileSync(join(lockDir, LOCK_1), JSON.stringify({ key: SCRATCH_KEY, pid: process.pid, startedAt: '2026-11-01T00:00:00.000Z', backupDir: join(backupFile, '..'), backups: [{ file: backupFile, existedBefore: true }] }));
+      const err = await withRegistryGuard([SCRATCH_KEY], () => undefined, { backupDir: tmp(), lockDir, ...quiet }).then(() => undefined, (e: unknown) => e as { message: string });
+      expect(err?.message).toContain('in progress');
+      expect(err?.message).toContain('reused by an unrelated program');
+      expect(err?.message).toContain(`reg import "${backupFile}"`);
+      expect(err?.message).toContain(`reg delete "${SCRATCH_KEY}" /f`);
+    });
+
+    it('control: both locks have their own file name (the key name is part of it)', () => {
+      expect(LOCK_1).not.toBe(LOCK_2);
+      expect(LOCK_2.startsWith(LOCK_1.replace(/\.lock$/, ''))).toBe(true);
+    });
   });
 });

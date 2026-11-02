@@ -21,7 +21,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 import { expect } from '@playwright/test';
-import { APP_KEY, RegistryGuardError, looksLikeLeftover, withRegistryGuard } from './lib/registry-guard.mjs';
+import { APP_KEY, REG_EXE, RegistryGuardError, looksLikeLeftover, withRegistryGuard } from './lib/registry-guard.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { makePackage } = await import(new URL('../src/offline/test-support/import-fixtures.ts', import.meta.url).href);
@@ -54,7 +54,7 @@ const sha = (b) => createHash('sha256').update(b).digest('hex');
 const COMMAND_KEY = `${APP_KEY}\\shell\\open\\command`;
 function readOpenCommand() {
   try {
-    const text = execFileSync('reg.exe', ['query', COMMAND_KEY, '/ve'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }).toString();
+    const text = execFileSync(REG_EXE, ['query', COMMAND_KEY, '/ve'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }).toString();
     return (/REG_SZ\s+(.*)\r?$/m.exec(text)?.[1] ?? text).trim();
   } catch { return null; }
 }

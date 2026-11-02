@@ -16,8 +16,8 @@
 //    the original and backed up over it. The lock is removed only after a verified restore.
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 export const APP_KEY = 'HKCU\\Software\\Classes\\io.inspectorhub.app';
 export const SCRATCH_KEY = 'HKCU\\Software\\Classes\\io.inspectorhub.smoke-scratch';
@@ -44,7 +44,7 @@ export function assertAllowedKey(key) {
 }
 
 // An absolute path: on Windows a bare name is also looked up in the current directory, and a planted reg.exe there would run.
-const REG_EXE = join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', 'reg.exe');
+export const REG_EXE = join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', 'reg.exe');
 
 function reg(args) {
   return execFileSync(REG_EXE, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -124,16 +124,29 @@ export function verifyRestored(key, file, existedBefore = true, expectedBuffer =
  * Whether an open command points at a build or temp path: the leftover of an earlier smoke run, or of starting the packaged exe by hand.
  * Backing such a key up would take the modified state for the original, so the smoke script refuses to start on it.
  */
-export function looksLikeLeftover(command) {
-  return typeof command === 'string' && /win-unpacked|oi-win-smoke|[\\/]temp[\\/]/i.test(command);
+export function looksLikeLeftover(command, tmp = tmpdir()) {
+  if (typeof command !== 'string') return false;
+  if (/win-unpacked|oi-win-smoke|[\\/]tmp[\\/]/i.test(command)) return true;
+  // Under this machine's own temp directory, whatever it is called here (a profile folder named Temp elsewhere is not it).
+  const slashes = (text) => String(text).replace(/\//g, '\\').toLowerCase();
+  const root = slashes(tmp).replace(/\\+$/, '');
+  return root !== '' && slashes(command).includes(`${root}\\`);
 }
 
 /** The commands that put a key back by hand from its backup file (printed whenever a backup is taken). */
 export function manualRestoreCommand(key, file, existedBefore) {
-  return existedBefore ? `reg delete "${key}" /f   then   reg import "${file}"` : `reg delete "${key}" /f`;
+  return existedBefore ? `reg delete "${key}" /f\n  reg import "${file}"` : `reg delete "${key}" /f`;
 }
 
 // ---- the lock: one guarded run per key, and a run that died leaves proof of it behind -------------------------------------------
+
+/**
+ * Where the locks live: a fixed per-user directory, NOT the temp directory. A temp directory follows TEMP/TMP (which differ between shells and
+ * sandboxes) and is emptied by cleaners, and the lock is the only thing that stops a run from backing up a key a killed run left modified.
+ */
+export function defaultLockDir(env = process.env) {
+  return join(env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'InspectorHub', 'registry-guard');
+}
 
 function lockPathFor(lockDir, key) {
   return join(lockDir, `oi-registry-guard-${key.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.lock`);
@@ -149,6 +162,7 @@ function pidAlive(pid) {
 }
 
 function acquireLock(path, info) {
+  mkdirSync(dirname(path), { recursive: true });
   try {
     const fd = openSync(path, 'wx');
     try { writeSync(fd, JSON.stringify(info)); } finally { closeSync(fd); }
@@ -158,10 +172,22 @@ function acquireLock(path, info) {
   }
   let held = {};
   try { held = JSON.parse(readFileSync(path, 'utf8')); } catch { /* unreadable: treated like a lock of a dead run */ }
-  if (Number.isInteger(held.pid) && pidAlive(held.pid)) {
-    throw new RegistryGuardError(`another guarded run of ${info.key} is in progress (pid ${String(held.pid)}, started ${String(held.startedAt)}); lock file ${path}`);
+  if (!Number.isInteger(held.pid)) {
+    throw new RegistryGuardError(
+      `the lock file ${path} is empty or unreadable (a run was cut off while it was creating it), so nothing says whether ${info.key} was modified or where a backup is. `
+      + 'Look at the key; if it is wrong, restore it from a backup you trust. Then delete the lock file and run again.',
+      { exitCode: VERIFY_FAILED_EXIT_CODE },
+    );
   }
   const how = (held.backups ?? []).map((b) => manualRestoreCommand(held.key ?? info.key, b.file, b.existedBefore)).join('\n  ');
+  if (pidAlive(held.pid)) {
+    // A process id can be reused by an unrelated program, so this may be a dead run that left the key modified: say how to restore it too.
+    throw new RegistryGuardError(
+      `another guarded run of ${info.key} seems to be in progress (pid ${String(held.pid)}, started ${String(held.startedAt)}; lock file ${path}). `
+      + `If no such run is going (a process id can be reused by an unrelated program), the run that left this lock died and ${info.key} may still be modified: its backup is in ${String(held.backupDir)}${how === '' ? '' : `. To restore it by hand:\n  ${how}`}\n`
+      + 'then delete the lock file and run again.',
+    );
+  }
   throw new RegistryGuardError(
     `a previous guarded run of ${info.key} (pid ${String(held.pid)}, started ${String(held.startedAt)}) ended WITHOUT a verified restore, so the key may still be modified `
     + `and is NOT backed up again. Its backup is in ${String(held.backupDir)}. Restore it by hand${how === '' ? '' : `:\n  ${how}`}\nthen delete ${path} and run again.`,
@@ -187,7 +213,8 @@ export function installAbortHandlers({ proc = process, restore }) {
     try { return restore(why); } catch { return 1; }
   };
   const handlers = ABORT_SIGNALS.map((signal) => [signal, () => { const problems = run(signal); proc.exit(problems > 0 ? VERIFY_FAILED_EXIT_CODE : signal === 'SIGINT' ? 130 : 143); }]);
-  const onExit = () => { run('exit'); };
+  // A restore that failed here (the watchdog's process.exit(1), a process.exit(0) somewhere) must not exit 0 or 1: the key may be modified.
+  const onExit = () => { if (run('exit') > 0) proc.exitCode = VERIFY_FAILED_EXIT_CODE; };
   for (const [signal, handler] of handlers) proc.on(signal, handler);
   proc.on('exit', onExit);
   return () => {
@@ -217,8 +244,10 @@ function restoreAll(saved, log) {
  * started, called before the restore of an abort), lockDir, env, proc (seams for tests), afterBackup (a test seam that lets a test
  * tamper with the backup files to prove a bad restore is caught).
  */
-export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAbort, log = (m) => console.log(m), lockDir = tmpdir(), env = process.env, proc = process } = {}) {
+export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAbort, log = (m) => console.log(m), env = process.env, lockDir = defaultLockDir(env), proc = process } = {}) {
   for (const key of keys) assertAllowedKey(key);
+  const lowered = keys.map((key) => key.toLowerCase());
+  if (new Set(lowered).size !== lowered.length) throw new RegistryGuardError(`a key is listed twice (keys are compared without regard to case): ${keys.join(', ')}`);
   if (keys.some((key) => key.toLowerCase() === APP_KEY.toLowerCase()) && (env.CI !== undefined || env.GITHUB_ACTIONS !== undefined)) {
     throw new RegistryGuardError(`refusing to touch ${APP_KEY} in CI: this is a manual test of a machine's real app registration`);
   }
@@ -228,10 +257,29 @@ export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAb
   }
 
   const locks = [];
+  const saved = [];
+  // True from the moment the guarded function may have changed a key. Until then an abort has nothing to restore, only locks to free.
+  let started = false;
   const releaseAll = () => { for (const path of locks) releaseLock(path); };
   // A key whose restore did not verify keeps its lock (the next run on THAT key must refuse); the keys that did verify are free again.
   const releaseVerified = (results) => { results.forEach((r, i) => { if (r.ok) releaseLock(locks[i]); }); };
-  const saved = [];
+  // Installed BEFORE the first lock: a Ctrl+C during the backups must not leave a lock behind that makes the next run refuse for a key
+  // nothing ever changed.
+  const uninstall = installAbortHandlers({
+    proc,
+    restore: (why) => {
+      if (!started) {
+        log(`registry guard: ${why} before the run started: no key was changed, releasing the locks`);
+        releaseAll();
+        return 0;
+      }
+      log(`registry guard: ${why}: stopping what the run started and restoring before exit`);
+      try { onAbort?.(); } catch { /* the restore matters more than the cleanup */ }
+      const results = restoreAll(saved, log);
+      releaseVerified(results);
+      return results.filter((r) => !r.ok).length;
+    },
+  });
   try {
     for (const key of keys) {
       const path = lockPathFor(lockDir, key);
@@ -249,27 +297,18 @@ export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAb
       }
       saved.push({ key, file, existedBefore, expected });
       log(`registry guard: ${key} ${existedBefore ? `backed up to ${file}` : 'does not exist (it will be deleted again afterwards)'}`);
-      log(`registry guard: if this run is ever killed outright, restore by hand with:   ${manualRestoreCommand(key, file, existedBefore)}`);
+      log(`registry guard: if this run is ever killed outright, restore by hand with:\n  ${manualRestoreCommand(key, file, existedBefore)}`);
     });
+    const startedAt = new Date().toISOString();
+    saved.forEach(({ key, file, existedBefore }, i) => writeLock(locks[i], { key, pid: process.pid, startedAt, backupDir: dir, backups: [{ file, existedBefore }] }));
+    afterBackup?.(saved);
   } catch (error) {
     // Nothing the guarded function does has run yet: the keys are as they were, so the locks go.
+    uninstall();
     releaseAll();
     throw error;
   }
-  const startedAt = new Date().toISOString();
-  saved.forEach(({ key, file, existedBefore }, i) => writeLock(locks[i], { key, pid: process.pid, startedAt, backupDir: dir, backups: [{ file, existedBefore }] }));
-
-  afterBackup?.(saved);
-  const uninstall = installAbortHandlers({
-    proc,
-    restore: (why) => {
-      log(`registry guard: ${why}: stopping what the run started and restoring before exit`);
-      try { onAbort?.(); } catch { /* the restore matters more than the cleanup */ }
-      const results = restoreAll(saved, log);
-      releaseVerified(results);
-      return results.filter((r) => !r.ok).length;
-    },
-  });
+  started = true;
   let failure;
   let result;
   try {
@@ -281,13 +320,15 @@ export async function withRegistryGuard(keys, fn, { backupDir, afterBackup, onAb
   uninstall();
   // A lock is only removed after a verified restore: a failed one must stop the next run from backing up a modified key as the original.
   releaseVerified(results);
-  const problems = results.filter((r) => !r.ok).map((r) => r.error);
-  if (problems.length > 0) {
-    const first = problems[0];
-    throw new RegistryGuardError(`registry restore failed (${first.message})${failure ? `; the guarded run also failed: ${failure.message}` : ''}`, {
-      exitCode: VERIFY_FAILED_EXIT_CODE,
-      diff: problems.flatMap((p) => p.diff ?? []),
-    });
+  const failed = results.map((r, i) => ({ r, key: saved[i].key })).filter((x) => !x.r.ok);
+  if (failed.length > 0) {
+    // Every failed key is named, with its own message; `diff` is all their lines together and `diffByKey` says which line belongs to which key.
+    const error = new RegistryGuardError(
+      `registry restore failed for ${failed.map((f) => f.key).join(', ')} (${failed.map((f) => `${f.key}: ${f.r.error.message}`).join('; ')})${failure ? `; the guarded run also failed: ${failure.message}` : ''}`,
+      { exitCode: VERIFY_FAILED_EXIT_CODE, diff: failed.flatMap((f) => f.r.error.diff ?? []) },
+    );
+    error.diffByKey = Object.fromEntries(failed.map((f) => [f.key, f.r.error.diff ?? []]));
+    throw error;
   }
   if (failure) throw failure;
   return result;
