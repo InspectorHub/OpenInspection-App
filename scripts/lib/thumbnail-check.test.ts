@@ -73,6 +73,46 @@ describe('judgePicture', () => {
   });
 });
 
+describe('judgePicture with a reference to be like', () => {
+  const reference = fixture('picture');
+
+  /** A picture that is as colourful as the photo (a gradient, a shape) but with other colours: blues and greens where the photo has purple, red and yellow. */
+  function otherPicture(width: number, height: number): PNG {
+    const out = new PNG({ width, height });
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const at = (y * width + x) * 4;
+        const inside = (x - width / 2) ** 2 + (y - height / 2) ** 2 < (width / 3) ** 2;
+        out.data[at] = inside ? 20 : 0;
+        out.data[at + 1] = inside ? 200 : Math.round((255 * x) / width);
+        out.data[at + 2] = inside ? 240 : Math.round((255 * y) / height);
+        out.data[at + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  it('the photo is like itself, and like a crop of it of another size (distance a few, the limit 60)', () => {
+    expect(judgePicture(reference, reference)).toMatchObject({ ok: true, distance: 0 });
+    const v = judgePicture(crop(reference, 168, 171), reference);
+    expect(v.ok).toBe(true);
+    expect(v.distance).toBeLessThan(10);
+  });
+
+  it('another picture that is just as colourful passes without a reference and FAILS with one (control for what --like adds)', () => {
+    const other = otherPicture(168, 173);
+    expect(judgePicture(other).ok).toBe(true);
+    const v = judgePicture(other, reference);
+    expect(v.ok).toBe(false);
+    expect(v.problems.join(' ')).toContain('another picture');
+    expect(v.distance).toBeGreaterThan(60);
+  });
+
+  it('a placeholder still fails with a reference, for its own reasons', () => {
+    expect(judgePicture(fixture('empty-tile'), reference).ok).toBe(false);
+  });
+});
+
 describe('the command line', () => {
   it('exits 0 for a picture and 1 for an empty tile, saying what it saw', () => {
     const good = cli(join(__dirname, 'fixtures', 'thumbnail-picture.png'));
@@ -81,6 +121,23 @@ describe('the command line', () => {
     const bad = cli(join(__dirname, 'fixtures', 'thumbnail-empty-tile.png'));
     expect(bad.status).toBe(1);
     expect(bad.stderr).toContain('::error::the tile is not a picture');
+  });
+
+  it('--like: the photo passes against its own reference, another coloured picture fails, and a missing or incomplete --like is refused', () => {
+    const picture = join(__dirname, 'fixtures', 'thumbnail-picture.png');
+    expect(cli(picture, '--like', picture).status).toBe(0);
+    expect(cli('--like', picture, picture).status).toBe(0); // the order of the arguments does not matter
+    const blue = new PNG({ width: 168, height: 173 });
+    for (let at = 0; at < blue.data.length; at += 4) {
+      const pixel = at / 4;
+      blue.data[at] = 0; blue.data[at + 1] = (pixel * 7) % 256; blue.data[at + 2] = 200 + ((pixel * 3) % 56); blue.data[at + 3] = 255;
+    }
+    const other = save('blue.png', blue);
+    const r = cli(other, '--like', picture);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('another picture');
+    expect(cli(picture, '--like').status).toBe(2);
+    expect(cli(picture, '--like', join(dir, 'missing.png')).status).toBe(1);
   });
 
   it('a file that is not a PNG, or does not exist, is exit 1 (never a pass), and no argument is a usage error (exit 2)', () => {

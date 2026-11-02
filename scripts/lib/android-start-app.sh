@@ -32,11 +32,16 @@ start_app() {
   for attempt in $(seq 1 "$attempts"); do
     adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"
     waited=0
-    until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
+    until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge "${START_PID_SECONDS:-60}" ]; do sleep 2; waited=$((waited + 2)); done
     if [ -z "$(adb shell pidof "$APP_ID" | tr -d '\r')" ]; then
-      echo "::warning::the app process did not start within 60 s (attempt $attempt of $attempts)"
+      echo "::warning::the app process did not start within ${START_PID_SECONDS:-60} s (attempt $attempt of $attempts)"
     elif wait_for_screen_text "$pattern" "${START_SCREEN_SECONDS:-90}"; then
-      [ "$attempt" -eq 1 ] || echo "::warning::the app needed $attempt launches before it showed its first screen (see first-screen-attempt-*.png)"
+      echo "start_app: \"$pattern\" after $attempt launch(es)" >> "$OUT/start-attempts.txt"
+      if [ "$attempt" -gt 1 ]; then
+        echo "::warning::the app needed $attempt launches before it showed its first screen (see first-screen-attempt-*.png)"
+        # In the job summary too, where a green run that needed a relaunch is not lost among the annotations.
+        [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "- The app needed $attempt launches before it showed \"$pattern\" (a relaunch hides a flake; see first-screen-attempt-*.png)" >> "$GITHUB_STEP_SUMMARY"
+      fi
       return 0
     else
       echo "::warning::the app did not show \"$pattern\" within ${START_SCREEN_SECONDS:-90} s (attempt $attempt of $attempts)"

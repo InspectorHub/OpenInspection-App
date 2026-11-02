@@ -4,7 +4,8 @@
 #   UI_SEQUENCE  comma-separated kinds of screen the Nth `uiautomator dump` sees: dialog | app | blank (the last one repeats)
 #   XML_DIR      a directory holding dialog.xml, app.xml and blank.xml
 #   LOGCAT_TEXT  what `logcat -d` prints
-#   DUMP_FAILS_AFTER  the Nth `uiautomator dump` and every later one fails and writes nothing (default: they all work)
+#   PIDOF_EMPTY  set: the app has no process (`pidof` prints nothing)
+#   DUMP_FAILS_AFTER the Nth `uiautomator dump` and every later one fails and writes nothing (default: they all work)
 set -u
 echo "adb $*" >> "$STATE/calls.log"
 cmd="${1:-}"
@@ -29,7 +30,7 @@ case "$cmd" in
           ro.build.version.sdk) printf '34\r\n' ;;
         esac
         ;;
-      pidof) printf '1234\r\n' ;;
+      pidof) [ -n "${PIDOF_EMPTY:-}" ] || printf '1234\r\n' ;;
       rm) rm -f "$STATE/dev${!#}" ;;
       uiautomator)
         # Maestro and uiautomator would share one UiAutomation channel (that crashed it before): a dump while the Maestro stand-in runs is refused.

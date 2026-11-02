@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -72,6 +72,29 @@ describe.skipIf(!bashAvailable)('start_app', () => {
     expect(r.out).toContain('::warning::the app needed 2 launches');
     expect(r.files).toContain('first-screen-attempt-1.png');
     expect(r.files).toContain('first-screen-attempt-1.xml');
+  });
+
+  it('an app with no process at all is warned about and started again, and the run fails when it never gets one (the pid wait is bounded)', () => {
+    const r = run('Choose your server', 'app', { PIDOF_EMPTY: '1', START_PID_SECONDS: '4' }, '2');
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain('::warning::the app process did not start within 4 s (attempt 1 of 2)');
+    expect(r.out).toContain('::warning::the app process did not start within 4 s (attempt 2 of 2)');
+    expect(launches(r.calls)).toBe(2);
+    expect(r.out).toContain('::error::the app did not show "Choose your server" in 2 launches');
+    // It did not go and look at the screen of an app that has no process.
+    expect(r.calls.filter((c) => c.includes('uiautomator dump'))).toHaveLength(0);
+  });
+
+  it('writes down how many launches it took, and puts a relaunch in the job summary (a green run that needed one is not lost among the annotations)', () => {
+    const summary = join(mkdtempSync(join(tmpdir(), 'android-start-app-summary-')), 'summary.md');
+    dirs.push(join(summary, '..'));
+    const once = run('Choose your server', 'app', { GITHUB_STEP_SUMMARY: summary.replaceAll('\\', '/') });
+    expect(once.status).toBe(0);
+    expect(existsSync(summary)).toBe(false);
+    const twice = run('Choose your server', 'blank,app', { GITHUB_STEP_SUMMARY: summary.replaceAll('\\', '/') });
+    expect(twice.status).toBe(0);
+    expect(readFileSync(summary, 'utf8')).toContain('The app needed 2 launches');
+    expect(twice.files).toContain('start-attempts.txt');
   });
 
   it('gives up after the given number of launches, with an error and a non-zero status (control: it does not pass on a screen that never comes)', () => {

@@ -1,6 +1,9 @@
 // G4: is this crop of the screen a PICTURE, or an empty tile, a placeholder or a flat colour?
 //
-//   node scripts/lib/thumbnail-check.mjs <png>        exits 0 for a picture, 1 for anything else, 2 for a usage error
+//   node scripts/lib/thumbnail-check.mjs <png> [--like <reference png>]
+//       exits 0 for a picture, 1 for anything else, 2 for a usage error. With --like the picture must also have about the colours of the
+//       reference (the mean colour of the judged region, within LIKE_MAX_DISTANCE), so that another coloured picture, a logo or a gradient
+//       placeholder, is not taken for the photo. The reference may be a crop of another size.
 //
 // Why not compare it with a reference image: CI run 41415156795 and the one after it showed that the crop of the same tile is 168 x 173 px on
 // one emulator image and 168 x 171 on another, and Maestro's assertScreenshot refuses two images of different size. What is asked here
@@ -21,12 +24,15 @@ export const COLOURED_SPREAD = 40;
 /** What a picture must reach. A photo of anything with colour is far above both; the tiles that are not pictures are far below. */
 export const MIN_SIGNIFICANT_COLOURS = 8;
 export const MIN_COLOURED_FRACTION = 0.5;
+/** With a reference: the longest distance (in RGB, 0 to 441) between the mean colours of the two judged regions. Crops of one photo differ by a few. */
+export const LIKE_MAX_DISTANCE = 60;
 
 /**
  * @param {{ width: number, height: number, data: Uint8Array | Buffer }} image RGBA, as pngjs decodes it
- * @returns {{ ok: boolean, significantColours: number, colouredFraction: number, pixels: number, problems: string[] }}
+ * @param {{ width: number, height: number, data: Uint8Array | Buffer }} [like] a picture the tile must resemble in colour
+ * @returns {{ ok: boolean, significantColours: number, colouredFraction: number, pixels: number, distance: number | null, problems: string[] }}
  */
-export function judgePicture(image) {
+export function judgePicture(image, like) {
   const { width, height, data } = image;
   const x0 = Math.floor(width * REGION.left);
   const x1 = Math.ceil(width * REGION.right);
@@ -35,6 +41,9 @@ export function judgePicture(image) {
   const counts = new Map();
   let pixels = 0;
   let coloured = 0;
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
   for (let y = y0; y < y1; y += 1) {
     for (let x = x0; x < x1; x += 1) {
       const at = (y * width + x) * 4;
@@ -44,6 +53,9 @@ export function judgePicture(image) {
       const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
       counts.set(key, (counts.get(key) ?? 0) + 1);
       if (Math.max(r, g, b) - Math.min(r, g, b) > COLOURED_SPREAD) coloured += 1;
+      sumR += r;
+      sumG += g;
+      sumB += b;
       pixels += 1;
     }
   }
@@ -53,14 +65,55 @@ export function judgePicture(image) {
   const colouredFraction = pixels === 0 ? 0 : coloured / pixels;
   if (significantColours < MIN_SIGNIFICANT_COLOURS) problems.push(`${String(significantColours)} distinct colours (a picture has at least ${String(MIN_SIGNIFICANT_COLOURS)})`);
   if (colouredFraction < MIN_COLOURED_FRACTION) problems.push(`${(colouredFraction * 100).toFixed(1)}% of the pixels are coloured (a picture has at least ${String(MIN_COLOURED_FRACTION * 100)}%)`);
-  return { ok: problems.length === 0, significantColours, colouredFraction, pixels, problems };
+  let distance = null;
+  if (like !== undefined && pixels > 0) {
+    const other = meanColour(like);
+    distance = Math.hypot(sumR / pixels - other[0], sumG / pixels - other[1], sumB / pixels - other[2]);
+    if (distance > LIKE_MAX_DISTANCE) problems.push(`its mean colour is ${distance.toFixed(0)} away from the reference's (at most ${String(LIKE_MAX_DISTANCE)}): another picture`);
+  }
+  return { ok: problems.length === 0, significantColours, colouredFraction, pixels, distance, problems };
+}
+
+/** The mean colour of the judged region of an image. */
+export function meanColour(image) {
+  const { width, height, data } = image;
+  const x0 = Math.floor(width * REGION.left);
+  const x1 = Math.ceil(width * REGION.right);
+  const y0 = Math.floor(height * REGION.top);
+  const y1 = Math.ceil(height * REGION.bottom);
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let n = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const at = (y * width + x) * 4;
+      r += data[at] ?? 0;
+      g += data[at + 1] ?? 0;
+      b += data[at + 2] ?? 0;
+      n += 1;
+    }
+  }
+  return n === 0 ? [0, 0, 0] : [r / n, g / n, b / n];
 }
 
 function main(argv) {
-  const [file] = argv;
-  if (!file) {
-    console.error('usage: thumbnail-check.mjs <png>');
+  const likeAt = argv.indexOf('--like');
+  const likeFile = likeAt >= 0 ? argv[likeAt + 1] : undefined;
+  // The file is the first argument that is neither "--like" nor the value after it.
+  const file = argv.find((_, at) => likeAt < 0 || (at !== likeAt && at !== likeAt + 1));
+  if (!file || (likeAt >= 0 && !likeFile)) {
+    console.error('usage: thumbnail-check.mjs <png> [--like <reference png>]');
     return 2;
+  }
+  let like;
+  if (likeFile !== undefined) {
+    try {
+      like = PNG.sync.read(readFileSync(likeFile));
+    } catch (error) {
+      console.error(`::error::the reference ${likeFile} cannot be read as a PNG: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
   }
   let image;
   try {
@@ -69,8 +122,8 @@ function main(argv) {
     console.error(`::error::${file} cannot be read as a PNG: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
-  const verdict = judgePicture(image);
-  const line = `${String(image.width)}x${String(image.height)} px, ${String(verdict.significantColours)} significant colours, ${(verdict.colouredFraction * 100).toFixed(1)}% coloured`;
+  const verdict = judgePicture(image, like);
+  const line = `${String(image.width)}x${String(image.height)} px, ${String(verdict.significantColours)} significant colours, ${(verdict.colouredFraction * 100).toFixed(1)}% coloured${verdict.distance === null ? '' : `, mean colour ${verdict.distance.toFixed(0)} from the reference`}`;
   if (verdict.ok) {
     console.log(`ok: the tile is a picture (${line})`);
     return 0;

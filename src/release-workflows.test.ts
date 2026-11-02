@@ -1613,7 +1613,7 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(pushed).toBeGreaterThan(0);
     expect(queried).toBeGreaterThan(pushed);
     expect(startedA).toBeGreaterThan(queried);
-    expect(g3).toContain('fail "the media index does not list roof-photo.jpg after 60 s"');
+    expect(g3).toContain('fail "the media index does not list roof-photo.jpg ($fixture_size bytes) after 60 s"');
     // Two none-uploaded checks (after A, after B) both come before the engine is switched on and before the one-uploaded wait.
     const none = [...g3.matchAll(/engine-state\.mjs" "\$CONTROL_URL" none-uploaded/g)].map((m) => m.index ?? -1);
     expect(none).toHaveLength(2);
@@ -1667,6 +1667,12 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     const on = g3.indexOf('set_engine false' + String.fromCharCode(10) + 'node');
     expect(g3).toContain('--test-output-dir "$OUT/maestro-b-files"');
     expect(g3).toContain('fail "part B took no screenshot of the tile');
+    // The tile must be like the fixture photo (not just any coloured picture), and an earlier run's screenshot must not stand in for this one's.
+    expect(g3).toContain('thumbnail-check.mjs" "$OUT/g4-thumbnail-offline.png" --like "$HERE/lib/fixtures/thumbnail-picture.png"');
+    expect(g3.indexOf('rm -rf "$OUT/maestro-b-files"')).toBeLessThan(g3.indexOf('--test-output-dir "$OUT/maestro-b-files"'));
+    // The media index is read into a variable and must show this file at this size (a pipe into grep -q can fail by SIGPIPE under pipefail).
+    expect(g3).toContain('_size=$fixture_size');
+    expect(g3).not.toMatch(/content query.*\| *grep/);
     expect(check).toBeGreaterThan(partB);
     expect(on).toBeGreaterThan(check);
     // The fixture the flow picks is a photo with colour, not a mostly white one (that one would look almost like a placeholder).

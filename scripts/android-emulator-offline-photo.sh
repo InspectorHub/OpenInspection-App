@@ -2,7 +2,8 @@
 # Golden flows G3 and G4 on an already-running emulator (CI starts it with android-emulator-runner).
 #   G3: sign in, download today's work, switch the engine OFF, add a photo from the library, kill the app, start it again: the photo is
 #       still there, still waiting. Then switch the engine ON and the photo uploads, once.
-#   G4: after the restart, with the engine still off, the photo's tile looks like the photo (compared with a reference), not a placeholder.
+#   G4: after the restart, with the engine still off, the photo's tile looks like THAT photo (colours judged and matched to the fixture's, see
+#       scripts/lib/thumbnail-check.mjs), not a placeholder or another picture.
 # The flows are maestro/golden/g3-a-offline-photo.yaml and g3-b-after-restart.yaml; the engine questions go through scripts/lib/engine-state.mjs.
 # Usage: scripts/android-emulator-offline-photo.sh <dev-server APK> <fake engine origin as the app sees it> <control server url> [output directory]
 #
@@ -71,13 +72,22 @@ set_engine false
 # script does not go on until the index itself lists the file (a query, not a sleep).
 adb push maestro/fixtures/roof-photo.jpg /sdcard/Pictures/roof-photo.jpg
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Pictures/roof-photo.jpg > /dev/null
+# The row must be the file just pushed: this name AND this size. An old row of the same name from an earlier run, or another file with the
+# name, does not count. The output is read into a variable, not piped into grep: under pipefail an early-exiting grep can fail a pipeline
+# by SIGPIPE and the loop would call an indexed file "not indexed".
+fixture_size="$(wc -c < maestro/fixtures/roof-photo.jpg | tr -d ' ')"
 indexed=0
 for _ in $(seq 1 30); do
-  if adb shell content query --uri content://media/external/images/media --projection _display_name | grep -q 'roof-photo.jpg'; then indexed=1; break; fi
+  rows="$(adb shell "content query --uri content://media/external/images/media --where \"_display_name='roof-photo.jpg'\" --projection _display_name:_size" || true)"
+  case "$rows" in *"_size=$fixture_size"*) indexed=1; break ;; esac
   sleep 2
 done
-[ "$indexed" = 1 ] || fail "the media index does not list roof-photo.jpg after 60 s"
+[ "$indexed" = 1 ] || fail "the media index does not list roof-photo.jpg ($fixture_size bytes) after 60 s"
 echo "ok: roof-photo.jpg is in the media index"
+# The picker takes the newest tile. Say so when it is not the only picture on the device.
+images="$(adb shell "content query --uri content://media/external/images/media --projection _id" || true)"
+image_count="$(grep -c '^Row:' <<< "$images" || true)"
+[ "${image_count:-0}" -le 1 ] || echo "::warning::$image_count pictures are in the media index; the picker takes the newest tile, which must be roof-photo.jpg"
 
 # --- G3 part A: sign in, download, engine off, add the photo ---
 adb shell pm clear "$APP_ID"
@@ -94,13 +104,15 @@ adb shell am force-stop "$APP_ID"
 [ -z "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app is still running after force-stop"
 # After the restart the work list is first, or the app's own offer to show upload progress, which is asked while a photo is waiting.
 start_app "Work list|Show upload progress"
+# An earlier run on the same output directory must not satisfy the check below.
+rm -rf "$OUT/maestro-b-files" "$OUT/g4-thumbnail-offline.png"
 timeout 900 maestro --device "$serial" test --format junit --output "$OUT/maestro-g3-b.xml" --debug-output "$OUT/maestro-debug-b" --test-output-dir "$OUT/maestro-b-files" maestro/golden/g3-b-after-restart.yaml
 echo "ok: part B passed (the photo and its thumbnail survived the restart, engine still off)"
 # G4: the screenshot of the tile that part B took. It must exist (a flow that took none proves nothing) and be a picture.
-tile="$(find "$OUT/maestro-b-files" -name 'g4-thumbnail-offline.png' | head -1)"
+tile="$(find "$OUT/maestro-b-files" -name 'g4-thumbnail-offline.png' -print -quit 2>/dev/null || true)"
 [ -n "$tile" ] || fail "part B took no screenshot of the tile (no g4-thumbnail-offline.png under $OUT/maestro-b-files)"
 cp "$tile" "$OUT/g4-thumbnail-offline.png"
-node "$HERE/lib/thumbnail-check.mjs" "$OUT/g4-thumbnail-offline.png"
+node "$HERE/lib/thumbnail-check.mjs" "$OUT/g4-thumbnail-offline.png" --like "$HERE/lib/fixtures/thumbnail-picture.png"
 node "$HERE/lib/engine-state.mjs" "$CONTROL_URL" none-uploaded
 
 # --- the engine comes back: the photo is uploaded, once ---
