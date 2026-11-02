@@ -5,6 +5,7 @@ import { defectTargetOf } from '../../media/defect-target';
 import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import type { MediaStore } from '../../media/store';
 import type { Db } from '../../platform/db';
+import { addressOf } from '../../offline/cached-address';
 import { loadTenantName } from '../../offline/lock-state';
 import { accountKey, listOutbox, outboxCountsByInspection, sameAccount, type Account } from '../../offline/outbox';
 import { readPackageRows, readPackageStates, type RefreshErrorCode } from '../../offline/package-targets';
@@ -14,7 +15,7 @@ import type { ReconcileOutcome } from '../../offline/reconciler';
 import { DEFAULT_REGISTRY, isLocalId } from '../../offline/registry';
 import type { UnattributableRow } from '../../offline/user-actions';
 import { OUTBOX_ERROR_CODES, type OutboxErrorCode } from '../../platform/schema';
-import { groupOf, shortTitle, stripBidi, type GroupKey } from './format';
+import { groupOf, shortTitle, type GroupKey } from './format';
 
 /** What the work list reads from the stack. A pick, so a test can stand in for any part. */
 export type WorkListStack = Pick<OfflineStack, 'db' | 'account' | 'status' | 'markListPainted' | 'replayer' | 'refresher' | 'reconciler' | 'uploader' | 'userActions' | 'store' | 'lastPlan'>;
@@ -28,8 +29,6 @@ export interface SnapshotSource {
   reconciler: Pick<ReconcilerHandle, 'last'>;
   lastPlan(): ReconcilePlan | null;
 }
-
-export const TITLE_MAX = 120;
 
 export type Blocked = 'none' | 'quarantined' | 'purging';
 
@@ -109,29 +108,6 @@ export type TitleMemo = Map<string, { fetchedAt: number; title: string | null }>
 
 function isOutboxErrorCode(value: unknown): value is OutboxErrorCode {
   return typeof value === 'string' && (OUTBOX_ERROR_CODES as readonly string[]).includes(value);
-}
-
-function truncate(text: string): string {
-  const letters = Array.from(text);
-  return letters.length > TITLE_MAX ? `${letters.slice(0, TITLE_MAX - 1).join('')}…` : text;
-}
-
-/** The address out of a cached `/api/inspections/{id}` body, or null for anything that is not the expected shape. */
-function addressOf(body: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(body);
-    if (typeof parsed !== 'object' || parsed === null || !('data' in parsed)) return null;
-    const data = parsed.data;
-    if (typeof data !== 'object' || data === null || !('inspection' in data)) return null;
-    const inspection = data.inspection;
-    if (typeof inspection !== 'object' || inspection === null || !('propertyAddress' in inspection)) return null;
-    const address = inspection.propertyAddress;
-    if (typeof address !== 'string') return null;
-    const clean = stripBidi(address).trim();
-    return clean.length === 0 ? null : truncate(clean);
-  } catch {
-    return null;
-  }
 }
 
 /**

@@ -46,6 +46,7 @@ export const filesCheck: CheckDef = {
       await removeQuietly(ctx, IMAGE);
       try {
         const data = fillerBytes(THREE_MIB, 0x1234abcd);
+        data.set([0xff, 0xd8, 0xff]);
         const uri = await files.write(FILE, data);
         if (!(await files.exists(FILE))) return fail(def, 'exists=false after write');
         const size = await files.size(FILE);

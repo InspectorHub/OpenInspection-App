@@ -1,6 +1,6 @@
 import type { StackStatus } from '../../app/offline-stack';
-import { Notice } from '../kit';
-import { SERVER_UNREACHABLE_TEXT, SYNC_PAUSED_TEXT } from './copy';
+import { Button, Notice } from '../kit';
+import { EDITS_NOT_SAVED_TEXT, SERVER_UNREACHABLE_TEXT, SYNC_PAUSED_TEXT } from './copy';
 
 /**
  * The grey line about the server contact, or null. A real revocation (the amber sign-in line) wins over it: a person who has to
@@ -22,15 +22,27 @@ function serverLine(status: StackStatus, online: boolean | null): string | null 
  * The grey line sits in a live region that is always in the page and only has its text swapped, because a region that is
  * inserted already holding text is not announced by some screen readers. Empty, it is visually hidden and out of the layout.
  */
-export function StatusStrip({ status, online }: { status: StackStatus; online: boolean | null }) {
+export function StatusStrip({ status, online, onSignInAgain }: { status: StackStatus; online: boolean | null; onSignInAgain?: () => void }) {
   const line = serverLine(status, online);
   const notices = status.auth || status.editsNotSaved || status.collabIssue;
   return (
     <>
       {notices && (
         <div className="flex flex-col gap-2">
-          {status.editsNotSaved && <Notice tone="bad">Some edits may not be saved on this device. Free up storage and restart the app.</Notice>}
-          {status.auth && <Notice tone="watch">Sign in again to keep syncing</Notice>}
+          {status.editsNotSaved && <Notice tone="bad">{EDITS_NOT_SAVED_TEXT}</Notice>}
+          {status.auth && (
+            <Notice tone="watch">
+              <div className="flex flex-col items-start gap-2">
+                <span>Sign in again to keep syncing</span>
+                {/* Only a screen change: the sign-in screen it opens does the work, and a second tap in the same frame sets the same screen. */}
+                {onSignInAgain !== undefined && (
+                  <Button variant="secondary" onClick={onSignInAgain}>
+                    Sign in again
+                  </Button>
+                )}
+              </div>
+            </Notice>
+          )}
           {status.collabIssue && <p className="text-sm text-ih-fg-3">Live collaboration is having trouble. Your changes are still stored on this device.</p>}
         </div>
       )}

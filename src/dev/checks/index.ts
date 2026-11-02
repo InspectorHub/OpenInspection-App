@@ -1,6 +1,7 @@
 import { collabTicket } from './collab-ticket';
 import { dbBlob } from './db-blob';
 import { dbTx } from './db-tx';
+import { desktopKillResume, desktopKillStart, stopDesktopKillSession } from './desktop-kill-resume';
 import { filesCheck } from './files';
 import { lockClock, lockSimulate } from './lock-clock';
 import { permissions } from './permissions';
@@ -14,6 +15,7 @@ import type { CheckDef, ExtraDef } from './types';
 export const CHECKS: readonly CheckDef[] = [dbBlob, dbTx, yjsPersist, filesCheck, lockClock, uploaderPhoto, permissions, collabTicket];
 
 /** Buttons that belong to a check but are never part of "Run all": each needs the operator. */
-export const EXTRAS: readonly ExtraDef[] = [lockSimulate, killStart, killResume, killClean, seedDemo, seedDemoClear];
+export const EXTRAS: readonly ExtraDef[] = [lockSimulate, killStart, killResume, desktopKillStart, desktopKillResume, killClean, seedDemo, seedDemoClear];
 
 export { stopKillSession } from './uploader-kill';
+export { stopDesktopKillSession };

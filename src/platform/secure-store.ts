@@ -1,5 +1,4 @@
-import { KeychainAccess, SecureStorage } from '@aparajita/capacitor-secure-storage';
-import { createPreferencesKeyValue, type KeyValue } from './kv';
+import type { KeyValue } from './kv';
 
 export interface SecureStore {
   get(key: string): Promise<string | null>;
@@ -53,11 +52,4 @@ async function runInit(storage: SecureStorageLike, markers: KeyValue): Promise<S
     set: (key, value) => storage.setItem(key, value),
     remove: (key) => storage.removeItem(key),
   };
-}
-
-/** Thin real-plugin wiring: device-only keychain access, iCloud sync off. */
-export async function createRealSecureStore(): Promise<SecureStore> {
-  await SecureStorage.setSynchronize(false);
-  await SecureStorage.setDefaultKeychainAccess(KeychainAccess.whenUnlockedThisDeviceOnly);
-  return initSecureStore(SecureStorage, createPreferencesKeyValue());
 }

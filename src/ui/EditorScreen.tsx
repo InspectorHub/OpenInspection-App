@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FieldDataSourceProvider, FieldEditor, escapeWillBeHandled, type EditorData, type FieldDataSource, type FieldHostSlots } from '@inspectorhub/field-ui';
 import { clientPolicy } from '../app/client-state';
 import type { AppServices } from '../app/compose';
+import { appDiagnostics } from '../app/diagnostics';
 import { editorPorts } from '../app/editor-ports';
 import type { OfflineStack } from '../app/offline-stack';
 import { useClientState } from '../app/use-client-state';
@@ -12,14 +13,19 @@ import { editorRegistry, type EditorRegistry } from '../field/editor-registry';
 import { createLocalDataSource } from '../field/local-data-source';
 import { MESSAGES } from '../field/messages';
 import { openNetworkFlag } from '../field/network-flag';
+import { createPhotoCache, type PhotoCache } from '../field/photo-cache';
+import { createUploadedCopyReader } from '../field/photo-urls';
 import { loadSessionInfo } from '../field/session-info';
-import { createRealNetwork, type Network } from '../platform/network';
+import type { Network } from '../platform/network';
+import { createGalleryCopier } from '../field/gallery-copy';
 import { useToasts } from './EditorToasts';
+import { editorObserver } from './editor-observer';
+import { EditorStatus } from './EditorStatus';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
 
 /** What the editor screen reads of the app's services. */
-export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState'>;
+export type EditorServices = Pick<AppServices, 'http' | 'tokens' | 'files' | 'clock' | 'platform' | 'appVersion' | 'openExternal' | 'clientState' | 'decodeImage' | 'photoGallery' | 'gallerySetting'>;
 
 export interface EditorScreenProps {
   services: EditorServices;
@@ -30,7 +36,7 @@ export interface EditorScreenProps {
   inspectionId: string;
   /** Leaves the editor for the work list. */
   onExit(): void;
-  /** Link state for the editor's own online checks. Defaults to the device's. */
+  /** Link state for the editor's own online checks. Defaults to the browser's. */
   network?: Network;
   timers?: TimerPort;
   registry?: EditorRegistry;
@@ -47,7 +53,20 @@ export interface EditorScreenProps {
  */
 export const READ_ONLY_NOTICE = 'Some actions are turned off until you update the app. You can still read this inspection.';
 
-const SLOTS: FieldHostSlots = { humanCheck: 'not-required' };
+
+/** Browser link state only; this does not check whether the server is reachable. */
+const browserNetwork: Network = {
+  online: async () => navigator.onLine,
+  onChange: (cb) => {
+    const notify = () => cb(navigator.onLine);
+    window.addEventListener('online', notify);
+    window.addEventListener('offline', notify);
+    return () => {
+      window.removeEventListener('online', notify);
+      window.removeEventListener('offline', notify);
+    };
+  },
+};
 
 type Phase = { kind: 'loading' } | { kind: 'ready'; source: FieldDataSource; data: EditorData } | { kind: 'failed'; message: string };
 
@@ -63,6 +82,9 @@ export function EditorScreen(props: EditorScreenProps) {
   return <EditorSession key={epoch} {...props} onRestart={() => setEpoch((n) => n + 1)} />;
 }
 
+/** The cache folder is swept for orphans once per run of the app, not at every editor open. */
+let orphansSwept = false;
+
 function EditorSession({ services, stack, origin, inspectionId, onExit, onRestart, network, timers = realTimers, registry = editorRegistry }: EditorScreenProps & { onRestart(): void }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const toasts = useToasts(timers);
@@ -74,6 +96,11 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
   notify.current = toasts.push;
   const restart = useRef(onRestart);
   restart.current = onRestart;
+  // One slot object per session, so the editor does not see a new one on every render. The status chip reads its own state.
+  const slots = useMemo<FieldHostSlots>(
+    () => ({ humanCheck: 'not-required', renderStatus: () => <EditorStatus db={stack.db} status={stack.status} network={network} timers={timers} /> }),
+    [stack, network, timers],
+  );
 
   // The back chain sends Escape first. If an editor layer will still answer one, the press is theirs and stays on this page;
   // otherwise it leaves. (A layer that is open but does not answer Escape does not trap the person.)
@@ -85,8 +112,10 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
 
   useEffect(() => {
     let live = true;
+    let photoCache: PhotoCache | undefined;
     const release = registry.register(inspectionId);
-    const flag = openNetworkFlag(network ?? createRealNetwork(), { timers });
+    const flag = openNetworkFlag(network ?? browserNetwork, { timers });
+    const observation = editorObserver.current()?.({ isOnline: flag.isOnline, hasLiveDoc: () => registry.liveDoc(inspectionId) !== null, readOnly: !canEdit });
     const stopEvents = stack.onEditorEvent((event) => {
       if (event.inspectionId === inspectionId && event.kind !== 'unquarantined') leave.current();
     });
@@ -102,20 +131,45 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           gate: ports.api.gate,
           serverTooOld: ports.api.serverTooOld,
         });
+        // Copies of server photos, so a thumbnail whose file left the device still shows (and shows offline once seen).
+        photoCache = createPhotoCache({
+          db: stack.db,
+          files: services.files,
+          api,
+          account: stack.account,
+          network: flag,
+          clock: services.clock,
+          timers,
+          localCopy: createUploadedCopyReader(stack.store, services.files),
+        });
+        if (!live) photoCache.dispose();
+        else if (!orphansSwept) {
+          // Once per run of the app: files a crash left without a row.
+          orphansSwept = true;
+          void photoCache.sweepOrphans();
+        }
         const source: FieldDataSource = createLocalDataSource({
           stack,
           api,
+          photoCache,
+          isClosed: () => !live,
           files: services.files,
+          ...(services.decodeImage === undefined ? {} : { decodeImage: services.decodeImage }),
           network: flag,
           registry,
           session,
           origin,
           canEdit: ports.canEdit,
+          onDiagnostic: appDiagnostics.push,
+          copyToGallery: createGalleryCopier({ setting: services.gallerySetting, gallery: services.photoGallery }),
           platform: services.platform,
           signedAtMs: () => services.clock.now(),
           clock: services.clock,
           timers,
-          notify: (message, variant, options) => notify.current(message, variant, options),
+          notify: (message, variant, options) => {
+            observation?.notified(message, variant);
+            notify.current(message, variant, options);
+          },
           openExternal: services.openExternal,
           onExit: () => leave.current(),
           onReload: () => {
@@ -130,6 +184,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           },
           onRestart: () => restart.current(),
         });
+        observation?.attach(source);
         const data = await source.load(inspectionId);
         if (live) setPhase({ kind: 'ready', source, data });
       } catch (error) {
@@ -138,8 +193,11 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
     })();
     return () => {
       live = false;
+      // Drops downloads still in flight so they cannot write after the editor is left or the account is signed out.
+      photoCache?.dispose();
       stopEvents();
       flag.dispose();
+      observation?.dispose();
       release();
     };
   }, [services, stack, origin, inspectionId, network, timers, registry]);
@@ -171,7 +229,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           <Notice tone="watch">{READ_ONLY_NOTICE}</Notice>
         </div>
       )}
-      <FieldDataSourceProvider dataSource={phase.source} slots={SLOTS}>
+      <FieldDataSourceProvider dataSource={phase.source} slots={slots}>
         <FieldEditor data={phase.data} readOnly={!canEdit} />
       </FieldDataSourceProvider>
       {toasts.view}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for `xcodebuild -exportArchive -exportOptionsPlist`. It is never used as it is: .github/workflows/release-ios.yml copies it
+  to the runner's temp directory and fills in teamID and the profile name with plutil, so neither is stored in the repository.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>teamID</key>
+	<string>FILLED_IN_AT_RUN_TIME</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>io.inspectorhub.app</key>
+		<string>FILLED_IN_AT_RUN_TIME</string>
+	</dict>
+</dict>
+</plist>

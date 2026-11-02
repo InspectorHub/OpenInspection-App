@@ -1,6 +1,6 @@
 import type * as Y from 'yjs';
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
-import { MAX_MEDIA_BYTES, PHOTO_CONTENT_TYPES } from '../media/store';
+import { MAX_MEDIA_BYTES, PHOTO_CONTENT_TYPES } from '../media/media-types';
 import { apiPath, type Api, type ApiOutcome } from './api-client';
 import { bodyData, isSuccess, problemResult } from './commands-shared';
 import { findPhotoIndex, hasPendingBefore } from './doc-photos';

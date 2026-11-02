@@ -41,7 +41,7 @@ describe('on a phone set to Chinese the screens still read English (no locale ha
     await recordVerified(world.db, Date.UTC(2026, 9, 20, 12, 0, 0), 21);
     world.clock.set(Date.UTC(2026, 9, 22, 12, 0, 0));
     const services = { ...world.services, builtAt: '2026-10-20T08:30:00.000Z', appVersion: '1.4.2', openExternal: vi.fn(() => Promise.resolve()) };
-    render(<Settings services={services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
+    render(<Settings services={services} origin={world.server.origin} stack={null} onBack={vi.fn()} onExport={vi.fn()} onImport={vi.fn()} onSignedOut={vi.fn()} onCleared={vi.fn()} timers={createManualTimers()} />);
     await waitFor(() => expect(screen.getByTestId('settings-last-verified')).toHaveTextContent('October 20, 2026'));
     expect(screen.getByTestId('settings-last-verified')).toHaveTextContent('Checked 2 days ago');
     expect(screen.getByTestId('built-on')).toHaveTextContent('October 20, 2026');

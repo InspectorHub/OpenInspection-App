@@ -54,7 +54,7 @@ describe('check-release-bundle', () => {
     expect(check(dir).status).toBe(1);
   });
 
-  it.each(['issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'])('fails on a bundle that carries the test-support name %s, even in a lazy chunk', (name) => {
+  it.each(['issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked', '__oiE2EEditorState'])('fails on a bundle that carries the test-support name %s, even in a lazy chunk', (name) => {
     const dir = fixture({ 'index.html': '<html></html>', 'assets/index-abc.js': 'x("Continue")', 'assets/lazy-def.js': `export{${name} as a}` });
     const result = check(dir);
     expect(result.status).toBe(1);

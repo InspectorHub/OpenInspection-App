@@ -21,9 +21,19 @@ export interface ApiCall {
   json?: unknown;
   /** An upload. The platform sets the multipart content type. */
   form?: FormData;
+  /** A raw upload (a zip), with its `contentType`. Not together with `json` or `form`. */
+  bytes?: Uint8Array;
+  /** The media type of `bytes`: `type/subtype` only. Required with `bytes`; this client sets the header itself. */
+  contentType?: string;
+  /** Hand back the text of an answer that is not JSON (as `text` on the outcome), for a caller that has to show or classify it. */
+  keepText?: boolean;
   /** Sent as `Idempotency-Key`, for the writes that would duplicate a record if repeated. */
   idempotencyKey?: string;
   timeoutMs?: number;
+  /** Read the answer as bytes (a photo): the outcome carries `bytes`, `contentType` and `retryAfterMs`, and `maxBytes` bounds it. */
+  binary?: boolean;
+  /** The longest a binary answer may be; the JSON cap applies when absent. */
+  maxBytes?: number;
 }
 
 /**
@@ -37,7 +47,7 @@ export interface ApiCall {
  */
 export type ApiProblem = 'offline' | 'unknown' | 'auth' | 'locked' | 'upgrade' | 'server_too_old';
 
-export type ApiOutcome = { kind: 'response'; status: number; json: unknown } | { kind: 'problem'; problem: ApiProblem };
+export type ApiOutcome = { kind: 'response'; status: number; json: unknown; bytes?: Uint8Array; contentType?: string | null; retryAfterMs?: number | null; text?: string } | { kind: 'problem'; problem: ApiProblem };
 
 export interface Api {
   send(call: ApiCall): Promise<ApiOutcome>;
@@ -105,6 +115,15 @@ export function templatePath(templateId?: string): string {
   return templateId === undefined ? '/api/inspections/templates' : `/api/inspections/templates/${checkedSegment(templateId)}`;
 }
 
+const MEDIA_TYPE = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
+
+/** A call carries one kind of body; a byte body names its media type, which becomes a header and so must be plain. */
+function assertBodies(call: ApiCall): void {
+  if (call.bytes === undefined) return;
+  if (call.json !== undefined || call.form !== undefined) throw new RangeError('a call carries one body');
+  if (call.contentType === undefined || !MEDIA_TYPE.test(call.contentType)) throw new RangeError('a byte body needs a plain media type');
+}
+
 /** The last line of defence: a path that reaches `send` is under /api/, has no query, no fragment and no segment that resolves away. */
 function assertSendable(path: string): void {
   if (!path.startsWith('/api/') || /[?#]/.test(path)) throw new RangeError('api paths start with /api/ and carry no query');
@@ -142,6 +161,7 @@ export function createApiClient(deps: ApiClientDeps): Api {
 
   async function send(call: ApiCall): Promise<ApiOutcome> {
     assertSendable(call.path);
+    assertBodies(call);
     let refreshed = false;
     for (;;) {
       if (await isTooOld(deps.serverTooOld)) return { kind: 'problem', problem: (await open(deps.gate)) ? 'server_too_old' : 'locked' };
@@ -157,6 +177,7 @@ export function createApiClient(deps: ApiClientDeps): Api {
 
       const headers: Record<string, string> = { ...clientHeaders, Authorization: `Bearer ${token}` };
       if (call.json !== undefined) headers['content-type'] = 'application/json';
+      if (call.bytes !== undefined && call.contentType !== undefined) headers['content-type'] = call.contentType;
       if (call.idempotencyKey !== undefined) headers['Idempotency-Key'] = call.idempotencyKey;
 
       let res: HttpResponse;
@@ -165,9 +186,10 @@ export function createApiClient(deps: ApiClientDeps): Api {
           url: urlOf(call),
           method: call.method,
           headers,
-          ...(call.form !== undefined ? { form: call.form } : call.json !== undefined ? { body: JSON.stringify(call.json) } : {}),
-          timeoutMs: call.timeoutMs ?? (call.form !== undefined ? FORM_TIMEOUT_MS : JSON_TIMEOUT_MS),
-          maxBytes: RESPONSE_MAX_BYTES,
+          ...(call.form !== undefined ? { form: call.form } : call.bytes !== undefined ? { bodyBytes: call.bytes } : call.json !== undefined ? { body: JSON.stringify(call.json) } : {}),
+          timeoutMs: call.timeoutMs ?? (call.form !== undefined || call.bytes !== undefined ? FORM_TIMEOUT_MS : JSON_TIMEOUT_MS),
+          maxBytes: call.binary === true ? (call.maxBytes ?? RESPONSE_MAX_BYTES) : RESPONSE_MAX_BYTES,
+          ...(call.binary === true ? { binary: true } : {}),
         });
       } catch (error) {
         // A read changes nothing, so losing its answer is just being offline. A write that went out may have been applied.
@@ -175,7 +197,11 @@ export function createApiClient(deps: ApiClientDeps): Api {
       }
 
       if (res.status === 426) return { kind: 'problem', problem: 'upgrade' };
-      if (res.status !== 401) return { kind: 'response', status: res.status, json: res.json };
+      if (res.status !== 401) {
+        return call.binary === true
+          ? { kind: 'response', status: res.status, json: undefined, bytes: res.bytes ?? new Uint8Array(), contentType: res.headers.get('content-type'), retryAfterMs: res.retryAfterMs }
+          : { kind: 'response', status: res.status, json: res.json, ...(call.keepText === true && res.json === undefined ? { text: res.text } : {}) };
+      }
       if (refreshed) return { kind: 'problem', problem: 'auth' };
       refreshed = true;
       try {

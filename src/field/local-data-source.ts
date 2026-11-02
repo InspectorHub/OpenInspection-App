@@ -1,8 +1,11 @@
 import type { CollabConnector, CommandData, CommandResult, ExecuteOptions, FieldCommand, FieldDataSource, NotifyOptions, NotifyVariant, SessionInfo } from '@inspectorhub/field-ui';
+import type { PhotoDiagnostic } from '../app/diagnostics';
 import type { NativeUploader } from '../media/native-uploader';
 import type { MediaStore } from '../media/store';
 import { createBlockedGuard, type IsBlocked } from '../offline/blocked';
+import { readPackageRow } from '../offline/package-targets';
 import type { Account } from '../offline/outbox';
+import type { ClientPlatform } from '../app/compose';
 import type { ReconcilerHandle } from '../app/offline-stack';
 import type { WorkPackageRefresher } from '../offline/work-package';
 import type { Clock } from '../platform/clock';
@@ -14,11 +17,13 @@ import type { Api } from './api-client';
 import { createAfterWrite } from './after-write';
 import { wrapCollab } from './collab-wrapper';
 import { createExecutor } from './commands';
+import { fieldPlatformOf } from './field-platform';
 import { createEditorLoader } from './editor-data';
 import type { EditorRegistry } from './editor-registry';
 import { failureOf, MESSAGES } from './messages';
 import { withMediaCleanup } from './media-cleanup';
 import type { NetworkFlag } from './network-flag';
+import type { PhotoCache } from './photo-cache';
 import { createMemoryPhotoIndex, createPhotoUrls, indexUploadedRows, type PhotoIndex } from './photo-urls';
 import type { MediaReconciler } from '../media/reconcile';
 import { hasQueuedWrites, unsentPhotos } from './queued-writes';
@@ -26,7 +31,7 @@ import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
 import { createKeptNotice } from './kept-notice';
 import { takeRejected } from './item-tags-notice';
-import { createStoredBlobReader, createUploaderFactory } from './uploader';
+import { createStoredBlobReader, createUploaderFactory, type UploaderDeps } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
 import { createVideoAdapter, type DeferredResolveVideo } from './video-adapter';
 
@@ -74,7 +79,7 @@ export interface LocalDataSourceDeps {
   /** The Bearer client for the editor's online requests. */
   api: Api;
   files: Pick<Files, 'read'>;
-  network: Pick<NetworkFlag, 'isOnline' | 'onOnlineChange'>;
+  network: Pick<NetworkFlag, 'isOnline' | 'onOnlineChange'> & Partial<Pick<NetworkFlag, 'ready'>>;
   registry: EditorRegistry;
   /** The signed-in user's session snapshot (`loadSessionInfo`). */
   session: SessionInfo;
@@ -87,7 +92,7 @@ export interface LocalDataSourceDeps {
    * the replayer): captured work is always delivered. Omitted: editing is allowed.
    */
   canEdit?(): boolean;
-  platform: 'ios' | 'android';
+  platform: ClientPlatform;
   /** The time stamped on an inspector signature. It MUST be anchored to the server's clock: the device clock can be set to any time. */
   signedAtMs(): number;
   clock: Clock;
@@ -98,6 +103,12 @@ export interface LocalDataSourceDeps {
   openExternal(url: string): Promise<void>;
   /** Leaves the editor screen. */
   onExit(): void;
+  /**
+   * True once the editor that owns this data source has been left. A `load` still running by then (it can wait for the
+   * open-refresh) finishes without showing a notice, consuming the rejected-tags count or touching the photo cache.
+   * Omitted: never closed.
+   */
+  isClosed?(): boolean;
   /** Re-reads the editor data. */
   onReload(): void;
   /** Starts the editor over from a clean mount; leave out when the screen cannot. */
@@ -105,24 +116,47 @@ export interface LocalDataSourceDeps {
   /** Defaults to the stack's blocked guard over its database. */
   isBlocked?: IsBlocked;
   photoIndex?: PhotoIndex;
+  /** Copies of server photos for the thumbnails whose file is no longer on the device. Omitted: only photos stored here are shown. */
+  photoCache?: PhotoCache;
   /** A fresh UUID. Defaults to `crypto.randomUUID`. */
   newId?(): string;
   /** The write succeeded but the cached copy could not be brought up to date. */
   onCacheStale?(inspectionId: string): void;
   /** Receives the failures the modules swallow. Never receives a token or a path. */
   onError?(error: unknown): void;
+  /** Receives the fixed code of a photo that was answered as a plain failure and not kept (`uploader.ts`). Codes only. */
+  onDiagnostic?(code: PhotoDiagnostic): void;
+  /** Makes a copy of a photo just taken for the person's gallery when they asked for one (`uploader.ts`). Never throws. */
+  copyToGallery?: UploaderDeps['copyToGallery'];
   /** The stack's document step for clips: bound to the real one here. */
   resolveVideo?: DeferredResolveVideo;
+  /** Optional host decoder for image formats the browser cannot decode. */
+  decodeImage?: FieldDataSource['media']['decodeImage'];
 }
+
+/** A cached inspection refreshed more recently than this is opened as it is. */
+export const OPEN_REFRESH_MIN_AGE_MS = 60_000;
+/** The longest the editor waits for the refresh that opening it asks for. */
+export const OPEN_REFRESH_MAX_WAIT_MS = 3000;
 
 /** A host that is not a real one: presence is off, so this address is never opened. */
 const PRESENCE_OFF_ORIGIN = 'wss://presence-off.invalid';
+
+/** The server keys of the photos uploaded for an inspection whose rows are still on the device. */
+async function uploadedKeys(store: Pick<MediaStore, 'listRows'>, inspectionId: string): Promise<string[]> {
+  try {
+    const rows = await store.listRows({ inspectionId, states: ['uploaded'], kinds: ['photo'] });
+    return rows.flatMap((row) => (row.state === 'uploaded' && row.uploadedKey !== null ? [row.uploadedKey] : []));
+  } catch {
+    return [];
+  }
+}
 
 export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSource {
   const { stack } = deps;
   const isBlocked = deps.isBlocked ?? createBlockedGuard(stack.db);
   const photoIndex = deps.photoIndex ?? createMemoryPhotoIndex();
-  const photoUrl = createPhotoUrls({ tenantId: stack.account.tenantId, index: photoIndex });
+  const photoUrl = createPhotoUrls({ tenantId: stack.account.tenantId, index: photoIndex, ...(deps.photoCache === undefined ? {} : { cache: deps.photoCache }) });
   const report = (error: unknown): void => {
     try {
       deps.onError?.(error);
@@ -142,6 +176,32 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   const load = createEditorLoader({ db: stack.db, account: stack.account, isBlocked });
   const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers });
+  // The editor opens from the cache, and a cached row can be older than a change made elsewhere (the inspection switched
+  // to per-unit on the web). So the first load of each open refreshes that one inspection when its copy is old and the
+  // device is online, waiting at most a few seconds: a refresh that has not come back by then finishes on its own and
+  // the next open reads it. Every outcome other than "refreshed" opens the cached copy, quietly; the refresher itself
+  // refuses while the app is locked, the account is not signed in, or the inspection is blocked.
+  const afterOpen = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers: deps.timers, timeoutMs: OPEN_REFRESH_MAX_WAIT_MS });
+  const askedOnOpen = new Set<string>();
+  const refreshOnOpen = async (inspectionId: string): Promise<void> => {
+    if (askedOnOpen.has(inspectionId)) return;
+    try {
+      // The connection flag reads "offline" until its first answer arrives (the plugin call is asynchronous, and the flag
+      // gives up on it after a few seconds), so wait for that answer; asking at once would skip the refresh on a slow answer.
+      await deps.network.ready;
+      if (!deps.network.isOnline() || (await isBlocked(inspectionId))) return;
+      const row = await readPackageRow(stack.db, inspectionId);
+      // A copy stamped in the future (the clock moved back) is not "fresh": only an age within [0, min) is.
+      const age = row === null ? 0 : deps.clock.now() - row.refreshed_at;
+      if (row === null || (age >= 0 && age < OPEN_REFRESH_MIN_AGE_MS)) return;
+      // Asked once per open: remembered only when a request is really made, so a skipped check can be made again.
+      if (askedOnOpen.has(inspectionId)) return;
+      askedOnOpen.add(inspectionId);
+      await afterOpen(inspectionId);
+    } catch (error) {
+      report(error);
+    }
+  };
   // `canEdit` guards commands, uploads and media saves. It is also the editor's read-only switch: with it false
   // EditorScreen passes `readOnly` to field-ui (no document writes, write controls hidden), and this guard stays as defence in depth.
   const canEdit = (): boolean => {
@@ -179,6 +239,9 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       isSynced: (inspectionId) => deps.registry.getHandle(inspectionId)?.synced() ?? false,
     }),
     onError: report,
+    isOnline: () => deps.network.isOnline(),
+    ...(deps.onDiagnostic === undefined ? {} : { onDiagnostic: deps.onDiagnostic }),
+    ...(deps.copyToGallery === undefined ? {} : { copyToGallery: deps.copyToGallery }),
     onKept: createKeptNotice({ timers: deps.timers, say: (message) => say(message, 'info') }),
   });
 
@@ -231,7 +294,10 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
 
   return {
     load: async (inspectionId, scope) => {
+      if (scope === undefined) await refreshOnOpen(inspectionId);
       const data = await load(inspectionId, scope);
+      // Left while the refresh above was running: nothing below is wanted by anyone, and some of it cannot be undone.
+      if (scope === undefined && deps.isClosed?.() === true) return data;
       // Tag changes the server refused while no editor was open were undone on the device: say so once, then forget the count.
       if (scope === undefined) {
         try {
@@ -241,7 +307,17 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
         }
       }
       // Photos that are on the server but whose file is still on this device can be shown from it.
-      if (scope === undefined) await indexUploadedRows(photoIndex, stack.store, inspectionId);
+      if (scope === undefined) {
+        if (deps.photoCache === undefined) await indexUploadedRows(photoIndex, stack.store, inspectionId);
+        else {
+          // With a cache the uploaded photos still on the device are copied into it now instead of being indexed by their
+          // file: a file that cleanup deletes later would leave a broken thumbnail, a cache copy does not.
+          await deps.photoCache.warm(inspectionId);
+          const unshown = await deps.photoCache.prime(inspectionId, await uploadedKeys(stack.store, inspectionId));
+          // What the cache cannot hold (a HEIC original) is still shown from its file, as before the cache.
+          if (unshown.length > 0) await indexUploadedRows(photoIndex, stack.store, inspectionId, new Set(unshown));
+        }
+      }
       return data;
     },
     session: () => deps.session,
@@ -278,9 +354,14 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     isOnline: () => deps.network.isOnline(),
     onOnlineChange: (cb) => deps.network.onOnlineChange(cb),
     collab: withMediaCleanup(wrapCollab(stack.connector, deps.registry), { store: stack.store, onError: report }),
-    media: { store: mediaStore, uploader },
+    media: {
+      store: mediaStore,
+      uploader,
+      ...(deps.decodeImage === undefined ? {} : { decodeImage: deps.decodeImage }),
+    },
     urls: {
       photo: photoUrl,
+      ...(deps.photoCache === undefined ? {} : { subscribe: (listener: () => void) => deps.photoCache?.subscribe(listener) ?? (() => undefined) }),
       // The report preview, the PDFs and the video objects are server pages that need the web session; the app has none.
       reportPreview: () => null,
       reportPdf: () => null,
@@ -292,6 +373,6 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       editorPath: (inspectionId) => `/inspections/${encodeURIComponent(inspectionId)}/edit`,
     },
     resources: { ...resources, video: videoAdapter.video },
-    platform: deps.platform,
+    platform: fieldPlatformOf(deps.platform),
   };
 }

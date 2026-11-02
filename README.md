@@ -1,6 +1,6 @@
 # OpenInspection App
 
-The offline-first native client for [OpenInspection](https://github.com/InspectorHub/OpenInspection): a Capacitor app for Android and iOS (Electron for Windows follows). Inspectors capture data in the field without a network and sync when one is available.
+The offline-first native client for [OpenInspection](https://github.com/InspectorHub/OpenInspection): a Capacitor app for Android and iOS, with a Windows pilot built on Electron. Inspectors capture data in the field without a network and sync when one is available.
 
 - App ID: `io.inspectorhub.app`
 - Stack: Vite, React 19, TypeScript, Capacitor 8

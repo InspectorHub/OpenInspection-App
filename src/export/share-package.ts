@@ -1,4 +1,3 @@
-import { Share } from '@capacitor/share';
 import type { ClientPlatform } from '../app/compose';
 import { realTimers, type TimerPort } from '../collab/timers';
 import type { Files } from '../platform/files';
@@ -11,17 +10,6 @@ export interface Sharer {
 }
 
 export type ShareResult = 'shared' | 'cancelled';
-
-/** The sheet's title; no customer data. */
-const SHEET_TITLE = 'Export unsent data';
-
-export function createRealSharer(): Sharer {
-  return {
-    share: async (uri) => {
-      await Share.share({ title: SHEET_TITLE, dialogTitle: SHEET_TITLE, files: [uri] });
-    },
-  };
-}
 
 /**
  * The plugin rejects with a message containing "canceled" when the person closes the sheet (verified against @capacitor/share 8.0.3:
@@ -61,7 +49,7 @@ export interface WriteAndShareDeps {
  * purpose: it is not backed up and the system may clear it, which is where a file full of customer data belongs.
  *
  * When the file is deleted depends on the platform. iOS settles the promise only after the activity completed, so the file is
- * deleted as soon as the sheet returns, whatever it answered. On Android it is kept for `retainMs` (see `EXPORT_RETAIN_MS`) after
+ * deleted as soon as the sheet returns, whatever it answered; so is it on Windows, where the save dialog returns once the file is copied. On Android it is kept for `retainMs` (see `EXPORT_RETAIN_MS`) after
  * the sheet returns, whatever it answered, and then deleted by an in-process timer; every start, foreground return and sign-out also
  * sweeps by age, and the next export sweeps everything. A write that fails removes its partly written file at once, on both.
  *
@@ -97,7 +85,7 @@ export async function writeAndShare(deps: WriteAndShareDeps, name: string, chunk
     await removeNow();
     throw error;
   }
-  if (deps.platform === 'ios') await removeNow();
+  if (deps.platform !== 'android') await removeNow();
   else {
     kept = true;
     try {

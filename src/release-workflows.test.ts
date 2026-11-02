@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -23,6 +23,7 @@ interface Job {
   'timeout-minutes'?: number;
   'runs-on'?: string;
   env?: Record<string, string>;
+  concurrency?: { group?: string; 'cancel-in-progress'?: boolean };
   steps: Step[];
 }
 interface Workflow {
@@ -45,6 +46,7 @@ function load(name: string): Loaded {
 const ci = load('ci');
 const android = load('release-android');
 const ios = load('release-ios');
+const windows = load('release-windows');
 
 const SECRET_REF = /\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/g;
 const secretsIn = (value: unknown): string[] => [...JSON.stringify(value ?? '').matchAll(SECRET_REF)].map((m) => m[1] ?? '');
@@ -67,6 +69,7 @@ const mutate = (wf: Workflow, change: (copy: Workflow) => void): Workflow => {
 
 const ANDROID_SECRETS = ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD'];
 const IOS_SECRETS = ['IOS_DISTRIBUTION_CERT_P12_BASE64', 'IOS_DISTRIBUTION_CERT_PASSWORD', 'APPSTORE_API_PRIVATE_KEY'];
+const WINDOWS_SECRETS = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET'];
 
 /** Every script line a step that holds a secret in its `env` may contain, whole-line. Any other step holding one, or any other line, is a violation. */
 const ANDROID_SECRET_STEP_LINES: Record<string, string[]> = {
@@ -87,8 +90,21 @@ const ANDROID_SECRET_STEP_LINES: Record<string, string[]> = {
     'unsigned/app-release-unsigned.apk',
   ],
 };
-/** iOS hands every secret to an action through `with`; no script step may hold one. */
-const IOS_SECRET_STEP_LINES: Record<string, string[]> = {};
+/** iOS hands the certificate, its password and the API key to actions through `with`. The one script step that may hold them in its env is the preflight, whose script is a single command that reads them and never prints a value. */
+const IOS_PREFLIGHT_STEP = 'Check the Apple credentials are present';
+const IOS_SECRET_STEP_LINES: Record<string, string[]> = {
+  [IOS_PREFLIGHT_STEP]: ['node scripts/ios-release-preflight.mjs'],
+};
+const WINDOWS_SECRET_STEP_LINES: Record<string, string[]> = {
+  'Sign the HEIC helper with Azure Artifact Signing': [
+    "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser",
+    "Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser",
+    "$helper = (Resolve-Path 'dist-electron/native/win-heic-helper.exe').Path",
+    'Invoke-TrustedSigning -Endpoint $env:AZURE_SIGNING_ENDPOINT -CertificateProfileName $env:AZURE_SIGNING_PROFILE -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT -TimestampRfc3161 https://timestamp.acs.microsoft.com -TimestampDigest SHA256 -FileDigest SHA256 -Files $helper',
+  ],
+  'Build the NSIS installer': ['npx electron-builder --win nsis --x64 --config electron/builder/electron-builder.config.mjs --publish never'],
+  'Build the signed unpacked Windows package': ['npx electron-builder --dir --win --x64 --config electron/builder/electron-builder.config.mjs --publish never'],
+};
 
 // ---- the checkers: each returns the list of violations, so a mutated copy can be shown to be rejected ----
 
@@ -98,7 +114,7 @@ function injection(wf: Workflow): string[] {
   for (const [id, j] of Object.entries(wf.jobs)) {
     for (const s of j.steps) {
       if (s.run?.includes('${{') === true) out.push(`${id}/${s.name ?? s.run}: expression in run`);
-      if (s.shell !== undefined && s.shell !== 'bash') out.push(`${id}/${s.name ?? ''}: shell ${s.shell}`);
+      if (s.shell !== undefined && !['bash', 'pwsh'].includes(s.shell)) out.push(`${id}/${s.name ?? ''}: shell ${s.shell}`);
     }
   }
   return out;
@@ -274,16 +290,40 @@ const EXPECTED_STEPS = {
   iosTestflight: [
     'actions/checkout',
     'actions/setup-node',
+    'Check the Apple credentials are present',
     'run: npm ci',
     'run: npm run build',
     'Set the iOS version from package.json and the build number from the run',
     'run: npx cap sync ios',
+    'Require Xcode 26 or newer',
     'Warn when the encryption compliance code is not recorded',
     'Import the distribution certificate | apple-actions/import-codesign-certs',
     'Download the App Store provisioning profile | apple-actions/download-provisioning-profiles',
-    'Archive and export the IPA',
+    'Fill in ExportOptions.plist',
+    'Archive the app',
+    'Export the IPA',
+    'Check the IPA before upload',
     'Upload to TestFlight | apple-actions/upload-testflight-build',
   ],
+  windowsSign: [
+    'actions/checkout',
+    'actions/setup-node',
+    'run: npm ci',
+    'run: npm run build',
+    'run: npm run build:electron',
+    'Build the Windows HEIC helper',
+    'Sign the HEIC helper with Azure Artifact Signing',
+    'Calculate the final helper SHA-256',
+    'actions/upload-artifact',
+    'Build the signed unpacked Windows package',
+    'run: npm run check:electron-package',
+    'Build the NSIS installer',
+    'run: npm run check:electron-package',
+    'Verify Authenticode and record publisher',
+    'Create Windows SHA-256 checksums',
+    'actions/upload-artifact',
+  ],
+  windowsRelease: ['actions/download-artifact', 'Create the draft Release | softprops/action-gh-release'],
 };
 
 /** Per job, the only actions it may use (by owner/repo). A new action fails until this list is edited on purpose. */
@@ -297,6 +337,12 @@ const ALLOWED_USES: Record<string, Record<string, string[]>> = {
   ios: {
     verify: ['actions/checkout', 'actions/setup-node'],
     testflight: ['actions/checkout', 'actions/setup-node', 'apple-actions/import-codesign-certs', 'apple-actions/download-provisioning-profiles', 'apple-actions/upload-testflight-build'],
+  },
+  windows: {
+    verify: ['actions/checkout', 'actions/setup-node', 'actions/upload-artifact'],
+    build: ['actions/checkout', 'actions/setup-node', 'actions/upload-artifact'],
+    sign: ['actions/checkout', 'actions/setup-node', 'actions/upload-artifact'],
+    release: ['actions/download-artifact', 'softprops/action-gh-release'],
   },
 };
 
@@ -357,6 +403,7 @@ function releaseDir(wf: Workflow): string[] {
 describe.each([
   ['release-android', android, ANDROID_SECRETS, ANDROID_SECRET_STEP_LINES, ['sign']],
   ['release-ios', ios, IOS_SECRETS, IOS_SECRET_STEP_LINES, ['testflight']],
+  ['release-windows', windows, WINDOWS_SECRETS, WINDOWS_SECRET_STEP_LINES, ['sign']],
 ] as const)('%s workflow hardening', (_name, { text, wf }, allowed, rules, signing) => {
   it('runs on a pushed v* tag and by hand, and on nothing else', () => {
     expect(Object.keys(wf.on).sort()).toEqual(['push', 'workflow_dispatch']);
@@ -374,14 +421,14 @@ describe.each([
   it('every job has a timeout and runs on a hosted runner, and each ref has its own concurrency group that never cancels a release', () => {
     for (const j of Object.values(wf.jobs)) {
       expect(typeof j['timeout-minutes']).toBe('number');
-      expect(j['runs-on']).toMatch(/^(ubuntu-latest|macos-26)$/);
+      expect(j['runs-on']).toMatch(/^(ubuntu-latest|macos-26|windows-latest)$/);
     }
     expect(wf.concurrency?.group).toContain('${{ github.ref }}');
     expect(wf.concurrency?.['cancel-in-progress']).toBe(false);
   });
 
   it('every action is pinned to a 40-hex commit with its tag in a comment (control: there are actions to check)', () => {
-    const uses = text.split('\n').filter((line) => /^\s*-?\s*uses:/.test(line));
+    const uses = text.split('\n').map((line) => line.replace(/\r$/, '')).filter((line) => /^\s*-?\s*uses:/.test(line));
     expect(uses.length).toBeGreaterThanOrEqual(6);
     for (const line of uses) expect(line, line).toMatch(/uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
     expect(allSteps(wf).filter((s) => s.uses !== undefined)).toHaveLength(uses.length);
@@ -416,20 +463,113 @@ describe.each([
   it('the verify job runs everything the CI verify job runs, holds no secret, and the tag must equal the package.json version', () => {
     const wanted = Object.values(ci.wf.jobs)
       .find((j) => j.steps.some((s) => s.run === 'npm run typecheck'))
-      ?.steps.filter((s) => s.run !== undefined && !s.run.startsWith('npx cap sync'))
+      ?.steps.filter((s) => s.run !== undefined && !s.run.startsWith('npx cap sync') && !s.run.includes('api:types:check'))
       .map((s) => s.run);
     expect(wanted?.length).toBeGreaterThanOrEqual(5);
     const verify = job(wf, 'verify');
     for (const run of wanted ?? []) expect(verify.steps.map((s) => s.run), run).toContain(run);
+    expect(verify.steps.some((s) => s.run?.includes('api:types:check'))).toBe(true);
     expect(secretsIn(verify)).toEqual([]);
     const tag = verify.steps.find((s) => s.run?.includes('GITHUB_REF_NAME'));
     expect(tag?.if).toBe("github.ref_type == 'tag'");
     expect(tag?.run).toContain("require('./package.json').version");
-    expect(tag?.run).toContain('"v$(');
+    expect(tag?.run).toMatch(/v\$\(|v\$version/);
     expect(tag?.run).toContain('exit 1');
     for (const [id, j] of Object.entries(wf.jobs)) {
       if (id !== 'verify') expect(j.needs, id).toBeDefined();
     }
+  });
+});
+
+describe('release workflow job concurrency', () => {
+  it('serializes Android, iOS, and Windows draft creation for the same ref', () => {
+    for (const [workflow, id] of [[android.wf, 'release'], [ios.wf, 'testflight'], [windows.wf, 'release']] as const) {
+      expect(job(workflow, id).concurrency).toEqual({
+        group: 'release-assets-${{ github.ref }}',
+        'cancel-in-progress': false,
+      });
+    }
+  });
+});
+
+describe('Windows workflow hardening', () => {
+  it('records the hosted Windows runner HEIF and HEVC extension inventory before building the helper', () => {
+    const steps = job(ci.wf, 'windows').steps;
+    const inventoryIndex = steps.findIndex((s) => s.name === 'Record Windows HEIF and HEVC codec inventory');
+    const helperIndex = steps.findIndex((s) => (s.run ?? '').includes('build:heic-helper'));
+    expect(inventoryIndex).toBeGreaterThanOrEqual(0);
+    expect(inventoryIndex).toBeLessThan(helperIndex);
+    const inventory = steps[inventoryIndex]?.run ?? '';
+    expect(inventory).toContain('Get-AppxPackage');
+    expect(inventory).toContain('Microsoft.HEIFImageExtension');
+    expect(inventory).toContain('Microsoft.HEVCVideoExtension');
+    expect(inventory).toContain('Get-AppxPackage -ErrorAction Stop');
+    expect(inventory).toContain('Query scope:');
+    expect(inventory).toContain('GITHUB_STEP_SUMMARY');
+  });
+
+  it('builds the real HEIC helper before packaging in CI and release verify', () => {
+    const ciWindows = job(ci.wf, 'windows');
+    const verify = job(windows.wf, 'verify');
+    const assertHelperBeforePack = (steps: Step[], context: string) => {
+      const helper = steps.findIndex((s) => (s.run ?? '').includes('build:heic-helper'));
+      const pack = steps.findIndex((s) => (s.run ?? '').includes('electron-builder --dir'));
+      expect(helper, `${context}: helper build step`).toBeGreaterThanOrEqual(0);
+      expect(pack, `${context}: package step`).toBeGreaterThan(helper);
+    };
+    assertHelperBeforePack(ciWindows.steps, 'CI');
+    assertHelperBeforePack(verify.steps, 'release verify');
+    assertHelperBeforePack(job(windows.wf, 'sign').steps, 'release sign');
+    expect(ciWindows.steps.some((s) => (s.run ?? '').includes('check:electron-bundle'))).toBe(true);
+    expect(ciWindows.steps.some((s) => (s.run ?? '').includes('check:electron-package'))).toBe(true);
+    for (const text of [ci.text, windows.text]) {
+      expect(text).toContain('check:electron-package');
+      expect(text).not.toMatch(/check-codec-review|libheif|check:third-party/);
+    }
+  });
+
+  it('uploads the built helper with a checksum and 30-day retention', () => {
+    for (const [workflow, artifactName] of [[ci.wf, 'windows-heic-helper'], [windows.wf, 'windows-heic-helper'], [windows.wf, 'windows-heic-helper-signed']] as const) {
+      const candidate = Object.values(workflow.jobs).flatMap((j) => j.steps)
+        .find((s) => s.uses?.startsWith('actions/upload-artifact@') && s.with?.name === artifactName);
+      expect(candidate?.with?.path).toBe('dist-electron/native/win-heic-helper.exe');
+      expect(candidate?.with?.['retention-days']).toBe(30);
+      expect(Object.values(workflow.jobs).flatMap((j) => j.steps).some((s) => (s.run ?? '').includes('Get-FileHash'))).toBe(true);
+    }
+  });
+
+  it('uses a post-sign helper hash and excludes only the helper from electron-builder signing', () => {
+    const sign = job(windows.wf, 'sign');
+    const azure = step(sign, 'Sign the HEIC helper with Azure Artifact Signing');
+    expect(azure.if).toBe("env.OI_WINDOWS_SIGNING == 'azure'");
+    const build = step(sign, 'Build the NSIS installer');
+    expect(build.run).toContain('electron-builder --win nsis');
+    expect(build.env?.AZURE_CLIENT_SECRET).toBe('${{ secrets.AZURE_CLIENT_SECRET }}');
+  });
+
+  it('uses tag-only protected signing and lets manual dispatch stop at the unsigned artifact', () => {
+    expect(job(windows.wf, 'sign').environment).toBe('windows-release');
+    expect(job(windows.wf, 'sign').if).toBe("github.event_name == 'push' && github.ref_type == 'tag'");
+    expect(job(windows.wf, 'sign').needs).toBe('build');
+    expect(job(windows.wf, 'release').concurrency).toEqual({
+      group: 'release-assets-${{ github.ref }}',
+      'cancel-in-progress': false,
+    });
+    expect(job(windows.wf, 'release').if).toBe("github.event_name == 'push' && github.ref_type == 'tag'");
+    expect(job(windows.wf, 'release').needs).toBe('sign');
+    expect(job(windows.wf, 'build').environment).toBeUndefined();
+    expect(secretsIn(job(windows.wf, 'verify'))).toEqual([]);
+    expect(secretsIn(job(windows.wf, 'build'))).toEqual([]);
+  });
+
+  it('keeps signing and draft release steps on their reviewed allowlists', () => {
+    expect(stepAllowlist(job(windows.wf, 'sign'), EXPECTED_STEPS.windowsSign)).toEqual([]);
+    expect(signingJob(job(windows.wf, 'sign'))).toEqual([]);
+    expect(stepAllowlist(job(windows.wf, 'release'), EXPECTED_STEPS.windowsRelease)).toEqual([]);
+    const create = step(job(windows.wf, 'release'), 'Create the draft Release');
+    expect(create.with?.draft).toBe(true);
+    expect(create.with?.fail_on_unmatched_files).toBe(true);
+    expect(create.with?.files).toBe('release/InspectorHub-Setup-*.exe\nrelease/*.blockmap\nrelease/latest.yml\nrelease/SHA256SUMS-windows\n');
   });
 });
 
@@ -515,12 +655,16 @@ describe('release-ios specifics', () => {
     expect(iosGating(wf)).toEqual([]);
   });
 
-  it('is written to the plan: macos-26, an environment, the App Store Connect export method, encryption declared', () => {
+  it('is written to the plan: macos-26, an environment, xcodebuild archive and export, the App Store Connect export method, encryption declared', () => {
     expect(testflight['runs-on']).toBe('macos-26');
     expect(testflight.needs).toBe('verify');
-    const build = step(testflight, 'Archive and export the IPA').run ?? '';
-    expect(build).toContain('npx cap build ios');
-    expect(build).toContain('--xcode-export-method app-store-connect');
+    // Archive and export are xcodebuild calls (Capacitor's build command is no longer used); the export method lives in the options template.
+    const archive = step(testflight, 'Archive the app').run ?? '';
+    expect(archive).toContain('xcodebuild archive');
+    const exported = step(testflight, 'Export the IPA').run ?? '';
+    expect(exported).toContain('xcodebuild -exportArchive');
+    expect(testflight.steps.some((s) => (s.run ?? '').includes('cap build ios'))).toBe(false);
+    expect(readFileSync(join(ROOT, 'ios', 'ExportOptions.plist'), 'utf8')).toMatch(/<key>method<\/key>\s*<string>app-store-connect<\/string>/);
     const upload = testflight.steps.find((s) => s.uses?.startsWith('apple-actions/upload-testflight-build@'));
     expect(upload?.with?.['uses-non-exempt-encryption']).toBe('true');
     expect(testflight.steps.some((s) => s.uses?.startsWith('apple-actions/import-codesign-certs@'))).toBe(true);
@@ -533,7 +677,184 @@ describe('release-ios specifics', () => {
     expect(sync.run).toContain('node scripts/sync-ios-version.mjs --build-number "$((RUN_NUMBER * 100 + RUN_ATTEMPT))"');
     expect(sync.run).toContain('node scripts/sync-ios-version.mjs --check');
     const at = (name: string) => testflight.steps.findIndex((s) => s.name === name);
-    expect(at(syncName)).toBeLessThan(at('Archive and export the IPA'));
+    expect(at(syncName)).toBeGreaterThanOrEqual(0);
+    expect(at(syncName)).toBeLessThan(at('Archive the app'));
+  });
+});
+
+// ---- the iOS preflight, the archive and the IPA checks: each checker returns violations so a mutated copy can be shown to be rejected ----
+
+const IOS_PREFLIGHT_NAMES = ['IOS_DISTRIBUTION_CERT_P12_BASE64', 'IOS_DISTRIBUTION_CERT_PASSWORD', 'APPSTORE_API_PRIVATE_KEY', 'APPSTORE_ISSUER_ID', 'APPSTORE_API_KEY_ID', 'APPLE_TEAM_ID'];
+const IOS_SECRET_ENV_NAMES = ['IOS_DISTRIBUTION_CERT_P12_BASE64', 'IOS_DISTRIBUTION_CERT_PASSWORD', 'APPSTORE_API_PRIVATE_KEY'];
+const stepIndex = (j: Job, name: string): number => j.steps.findIndex((s) => s.name === name);
+
+/** The preflight runs the script with all six names, and runs before the certificate is imported. */
+function preflightBeforeImport(j: Job): string[] {
+  const out: string[] = [];
+  const at = stepIndex(j, IOS_PREFLIGHT_STEP);
+  const imported = j.steps.findIndex((s) => s.uses?.startsWith('apple-actions/import-codesign-certs@') === true);
+  if (at < 0) return ['no preflight step'];
+  if (imported < 0) out.push('no certificate import step');
+  if (imported >= 0 && at >= imported) out.push('the preflight does not run before the certificate import');
+  const s = j.steps[at];
+  if (s?.run?.trim() !== 'node scripts/ios-release-preflight.mjs') out.push('the preflight does not run the script');
+  for (const name of IOS_PREFLIGHT_NAMES) if (!/^\$\{\{ (secrets|vars)\.[A-Z0-9_]+ \}\}$/.test(s?.env?.[name] ?? '')) out.push(`the preflight does not receive ${name}`);
+  return out;
+}
+
+/** No script mentions the secrets context at all (an expression in a script is shell text), and no script reads a secret by its environment name. */
+function runsHoldNoSecret(j: Job, exceptSteps: string[] = []): string[] {
+  const out: string[] = [];
+  for (const s of j.steps) {
+    if (exceptSteps.includes(s.name ?? '')) continue;
+    const run = s.run ?? '';
+    if (/\bsecrets\b/.test(run)) out.push(`${s.name ?? run}: mentions secrets`);
+    if (run.includes('${{')) out.push(`${s.name ?? run}: expression in run`);
+  }
+  return out;
+}
+
+/** Every `uses:` in the text is owner/repo@<40 hex>, whatever the loader makes of it. */
+function unpinnedUses(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => /^\s*-?\s*uses:/.test(line))
+    .filter((line) => !/uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40}(\s+#.*)?$/.test(line));
+}
+
+/** A step that archives or exports must hold no secret in its env and must not name one on its command line. */
+function archiveLeaks(j: Job): string[] {
+  const out: string[] = [];
+  for (const name of ['Archive the app', 'Export the IPA']) {
+    const s = j.steps.find((x) => x.name === name);
+    if (s === undefined) {
+      out.push(`${name}: missing`);
+      continue;
+    }
+    if (secretsIn(s).length > 0 || JSON.stringify(s.env ?? {}).includes('secrets')) out.push(`${name}: holds a secret`);
+    for (const secret of IOS_SECRET_ENV_NAMES) if ((s.run ?? '').includes(secret)) out.push(`${name}: names ${secret}`);
+    if (/\bsecrets\b/.test(s.run ?? '')) out.push(`${name}: mentions secrets`);
+    if (!(s.run ?? '').includes('xcodebuild')) out.push(`${name}: runs no xcodebuild`);
+  }
+  return out;
+}
+
+const IPA_PATH = '$RUNNER_TEMP/export/App.ipa';
+/** The IPA is checked before the upload, the check fails on a missing file, and the upload reads the file the check read. */
+function ipaAsserted(j: Job): string[] {
+  const out: string[] = [];
+  const check = j.steps.find((s) => s.name === 'Check the IPA before upload');
+  const upload = j.steps.findIndex((s) => s.uses?.startsWith('apple-actions/upload-testflight-build@') === true);
+  const at = stepIndex(j, 'Check the IPA before upload');
+  if (check === undefined || at < 0) return ['no IPA check step'];
+  if (upload < 0 || at >= upload) out.push('the IPA is not checked before the upload');
+  if (!(check.run ?? '').includes(`test -f "${IPA_PATH}"`)) out.push('the check does not require the file to exist');
+  if (j.steps[upload]?.with?.['app-path'] !== '${{ runner.temp }}/export/App.ipa') out.push('the upload reads another path');
+  return out;
+}
+
+describe('release-ios: preflight, archive and IPA checks', () => {
+  const testflight = job(ios.wf, 'testflight');
+
+  it('runs the preflight before the certificate is imported (control: a copy with the order swapped, and one without it, are rejected)', () => {
+    expect(preflightBeforeImport(testflight)).toEqual([]);
+    const swapped = mutate(ios.wf, (c) => {
+      const steps = job(c, 'testflight').steps;
+      const a = steps.findIndex((s) => s.name === IOS_PREFLIGHT_STEP);
+      const b = steps.findIndex((s) => s.uses?.startsWith('apple-actions/import-codesign-certs@') === true);
+      const first = steps[a] as Step;
+      steps[a] = steps[b] as Step;
+      steps[b] = first;
+    });
+    expect(preflightBeforeImport(job(swapped, 'testflight'))).toContain('the preflight does not run before the certificate import');
+    const removed = mutate(ios.wf, (c) => void (job(c, 'testflight').steps = job(c, 'testflight').steps.filter((s) => s.name !== IOS_PREFLIGHT_STEP)));
+    expect(preflightBeforeImport(job(removed, 'testflight'))).toEqual(['no preflight step']);
+    const missingName = mutate(ios.wf, (c) => void delete step(job(c, 'testflight'), IOS_PREFLIGHT_STEP).env?.APPLE_TEAM_ID);
+    expect(preflightBeforeImport(job(missingName, 'testflight'))).toContain('the preflight does not receive APPLE_TEAM_ID');
+  });
+
+  it('hands the six names to the preflight through env only, and the preflight script names all six', () => {
+    const env = step(testflight, IOS_PREFLIGHT_STEP).env ?? {};
+    expect(Object.keys(env).sort()).toEqual([...IOS_PREFLIGHT_NAMES].sort());
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-release-preflight.mjs'), 'utf8');
+    for (const name of IOS_PREFLIGHT_NAMES) expect(script, name).toContain(name);
+  });
+
+  it('no run: block interpolates or mentions a secret (control: one that does is found)', () => {
+    expect(runsHoldNoSecret(testflight)).toEqual([]);
+    expect(testflight.steps.filter((s) => s.run !== undefined).length).toBeGreaterThan(5);
+    const leaky = mutate(ios.wf, (c) => void job(c, 'testflight').steps.push({ name: 'Added', run: 'echo ${{ secrets.APPSTORE_API_PRIVATE_KEY }}' }));
+    expect(runsHoldNoSecret(job(leaky, 'testflight')).length).toBeGreaterThan(0);
+    for (const j of Object.values(ios.wf.jobs)) expect(runsHoldNoSecret(j)).toEqual([]);
+  });
+
+  it('every uses: is pinned to a 40-hex commit (control: a tag and a short hash are found)', () => {
+    expect(unpinnedUses(ios.text)).toEqual([]);
+    expect(ios.text.split('\n').filter((l) => /^\s*-?\s*uses:/.test(l)).length).toBeGreaterThanOrEqual(6);
+    expect(unpinnedUses(`${ios.text}\n      - uses: actions/checkout@v4\n`)).toHaveLength(1);
+    expect(unpinnedUses(`${ios.text}\n      - uses: actions/checkout@3d3c42e\n`)).toHaveLength(1);
+  });
+
+  it('the archive and export steps pass no secret on the command line (control: a password flag is found)', () => {
+    expect(archiveLeaks(testflight)).toEqual([]);
+    const archive = step(testflight, 'Archive the app').run ?? '';
+    for (const needle of ['xcodebuild archive', '-scheme App', '-configuration Release', "-destination 'generic/platform=iOS'", 'CODE_SIGN_STYLE=Manual', 'CODE_SIGN_IDENTITY="Apple Distribution"', 'PROVISIONING_PROFILE_SPECIFIER=', 'DEVELOPMENT_TEAM="$APPLE_TEAM_ID"', '-archivePath']) {
+      expect(archive, needle).toContain(needle);
+    }
+    const exported = step(testflight, 'Export the IPA').run ?? '';
+    for (const needle of ['xcodebuild -exportArchive', '-archivePath', '-exportPath', '-exportOptionsPlist']) expect(exported, needle).toContain(needle);
+    const withPassword = mutate(ios.wf, (c) => {
+      const s = step(job(c, 'testflight'), 'Archive the app');
+      s.run = `${s.run ?? ''} -p12-password "$IOS_DISTRIBUTION_CERT_PASSWORD"`;
+    });
+    expect(archiveLeaks(job(withPassword, 'testflight'))).toContain('Archive the app: names IOS_DISTRIBUTION_CERT_PASSWORD');
+    const withEnv = mutate(ios.wf, (c) => void (step(job(c, 'testflight'), 'Export the IPA').env = { KEY: '${{ secrets.APPSTORE_API_PRIVATE_KEY }}' }));
+    expect(archiveLeaks(job(withEnv, 'testflight'))).toContain('Export the IPA: holds a secret');
+  });
+
+  it('asserts the Xcode major version before it archives', () => {
+    const at = stepIndex(testflight, 'Require Xcode 26 or newer');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(stepIndex(testflight, 'Archive the app'));
+    const run = testflight.steps[at]?.run ?? '';
+    expect(run).toContain('xcodebuild -version');
+    expect(run).toMatch(/-lt 26|-ge 26/);
+    expect(run).toContain('exit 1');
+  });
+
+  it('fills the options template at run time with plutil, from the profile the download step returned, without storing a team id or a profile name', () => {
+    const fill = step(testflight, 'Fill in ExportOptions.plist');
+    expect(fill.env).toEqual({ PROFILES: '${{ steps.profiles.outputs.profiles }}', APPLE_TEAM_ID: '${{ vars.APPLE_TEAM_ID }}' });
+    const run = fill.run ?? '';
+    expect(run).toContain('ios/ExportOptions.plist');
+    expect(run).toContain('$RUNNER_TEMP/ExportOptions.plist');
+    expect(run).toContain('plutil -replace teamID');
+    // A key path would split the bundle id at its dots, so the whole mapping is replaced as JSON.
+    expect(run).toContain('plutil -replace provisioningProfiles -json');
+    expect(step(testflight, 'Export the IPA').run).toContain('-exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"');
+    const template = readFileSync(join(ROOT, 'ios', 'ExportOptions.plist'), 'utf8');
+    expect(template).toMatch(/<key>method<\/key>\s*<string>app-store-connect<\/string>/);
+    expect(template).toMatch(/<key>signingStyle<\/key>\s*<string>manual<\/string>/);
+    expect(template).toMatch(/<key>teamID<\/key>\s*<string>[^<]*<\/string>/);
+    expect(template).toMatch(new RegExp(String.raw`<key>provisioningProfiles</key>\s*<dict>\s*<key>${ios.wf.env?.BUNDLE_ID?.replace(/\./g, String.raw`\.`) ?? 'unset'}</key>\s*<string>[^<]*</string>`));
+    // control: the template holds placeholders, not a real team id (ten characters of capitals and digits)
+    expect(template).not.toMatch(/<string>[A-Z0-9]{10}<\/string>/);
+  });
+
+  it('checks the IPA contents, and asserts the file exists before the upload (control: a copy without the check, and one that reads another path, are rejected)', () => {
+    expect(ipaAsserted(testflight)).toEqual([]);
+    const run = step(testflight, 'Check the IPA before upload').run ?? '';
+    for (const needle of ['Payload/App.app/PrivacyInfo.xcprivacy', 'Authority=Apple Distribution', 'ITSAppUsesNonExemptEncryption']) expect(run, needle).toContain(needle);
+    const removed = mutate(ios.wf, (c) => void (job(c, 'testflight').steps = job(c, 'testflight').steps.filter((s) => s.name !== 'Check the IPA before upload')));
+    expect(ipaAsserted(job(removed, 'testflight'))).toEqual(['no IPA check step']);
+    const elsewhere = mutate(ios.wf, (c) => {
+      const upload = job(c, 'testflight').steps.find((s) => s.uses?.startsWith('apple-actions/upload-testflight-build@') === true);
+      if (upload?.with !== undefined) upload.with['app-path'] = 'ios/App/output/App.ipa';
+    });
+    expect(ipaAsserted(job(elsewhere, 'testflight'))).toContain('the upload reads another path');
+    const noTest = mutate(ios.wf, (c) => void (step(job(c, 'testflight'), 'Check the IPA before upload').run = 'echo checked'));
+    expect(ipaAsserted(job(noTest, 'testflight'))).toContain('the check does not require the file to exist');
   });
 });
 
@@ -760,8 +1081,10 @@ describe('the signing jobs run exactly the steps that are listed', () => {
   it('every job uses only the actions allowed for it, in both workflows', () => {
     expect(usesAllowlist(android.wf, ALLOWED_USES.android ?? {})).toEqual([]);
     expect(usesAllowlist(ios.wf, ALLOWED_USES.ios ?? {})).toEqual([]);
+    expect(usesAllowlist(windows.wf, ALLOWED_USES.windows ?? {})).toEqual([]);
     expect(Object.keys(ALLOWED_USES.android ?? {}).sort()).toEqual(Object.keys(android.wf.jobs).sort());
     expect(Object.keys(ALLOWED_USES.ios ?? {}).sort()).toEqual(Object.keys(ios.wf.jobs).sort());
+    expect(Object.keys(ALLOWED_USES.windows ?? {}).sort()).toEqual(Object.keys(windows.wf.jobs).sort());
   });
 
   it('only exact files reach the artifact and the Release: release/ holds one signed APK and SHA256SUMS', () => {
@@ -898,5 +1221,382 @@ describe('the signing jobs run exactly the steps that are listed', () => {
       });
       expect(releaseDir(files)).toContain('release files');
     });
+  });
+});
+
+describe('CI iOS simulator job', () => {
+  const sim = ci.wf.jobs['ios-simulator'];
+  const runs = (sim?.steps ?? []).map((s) => s.run ?? '');
+  const smokeScript = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+
+  it('compiles the iOS project for the simulator on macOS 26 without code signing', () => {
+    expect(sim?.['runs-on']).toBe('macos-26');
+    const build = runs.find((r) => r.includes('xcodebuild') && r.includes('iphonesimulator') && !r.includes('-version'));
+    expect(build).toBeDefined();
+    // Ad-hoc ("-") signing, never a real identity: an UNSIGNED simulator app has no entitlements, so the Keychain refuses
+    // the database key (run 41268952771: KeychainWrapperError, the app sat on its could-not-open screen).
+    expect(build).toContain('CODE_SIGN_IDENTITY=-');
+    expect(build).not.toMatch(/CODE_SIGNING_ALLOWED=NO|PROVISIONING_PROFILE|DEVELOPMENT_TEAM=\S/);
+    // control: the sync-only job does not compile
+    expect(job(ci.wf, 'ios-sync').steps.some((s) => (s.run ?? '').includes('xcodebuild'))).toBe(false);
+  });
+
+  it('references no secret, while the release workflow does (so the assertion can fail)', () => {
+    expect(sim).toBeDefined();
+    expect(secretsIn(sim)).toEqual([]);
+    expect(secretsIn(job(ios.wf, 'testflight')).length).toBeGreaterThan(0);
+  });
+
+  it('asserts the Xcode major version before it builds', () => {
+    const versionAt = runs.findIndex((r) => r.includes('xcodebuild -version') && /-ge 26|>= ?26/.test(r));
+    const buildAt = runs.findIndex((r) => r.includes('iphonesimulator'));
+    expect(versionAt).toBeGreaterThanOrEqual(0);
+    expect(versionAt).toBeLessThan(buildAt);
+  });
+
+  it('runs the smoke script on the built app after the build, and keeps its screenshots for 7 days even when it fails', () => {
+    const smokeAt = runs.findIndex((r) => r.includes('scripts/ios-simulator-smoke.sh'));
+    // A script committed from Windows is not executable in git (the first CI run failed with 'Permission denied'): call it through bash.
+    expect(runs[smokeAt]).toMatch(/^bash scripts\/ios-simulator-smoke\.sh /);
+    expect(smokeAt).toBeGreaterThan(runs.findIndex((r) => r.includes('iphonesimulator')));
+    const upload = (sim?.steps ?? []).find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(upload?.if).toBe('always()');
+    expect(upload?.with?.['retention-days']).toBe(7);
+    expect(upload?.uses).toMatch(/@[0-9a-f]{40}\b/);
+  });
+
+  it('the smoke script checks what the plan promises: manifest, an iPhone and an iPad, URL routing, backup attribute, screenshots', () => {
+    for (const needle of ['plutil -lint', 'PrivacyInfo.xcprivacy', 'iPad', 'simctl openurl', 'com_apple_backup_excludeItem', 'storage open failed', 'nothing was captured', 'simctl io', 'screenshot', 'get_app_container']) {
+      expect(smokeScript, needle).toContain(needle);
+    }
+    // The directories it checks come from the Swift source, not from a second copy.
+    expect(smokeScript).toContain('BackupExclusion.swift');
+    // A check that cannot fail proves nothing: it must also prove the attribute is absent on an untouched directory.
+    expect(smokeScript).toMatch(/control/i);
+    expect(smokeScript.startsWith('#!/usr/bin/env bash')).toBe(true);
+    expect(smokeScript).toContain('set -Eeuo pipefail');
+    // The launch keeps its PTY (block-buffered stdout otherwise), now in the library the script sources.
+    const lib = readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8');
+    expect(lib).toContain('script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty');
+  });
+});
+
+describe('CI parallelism keeps full coverage', () => {
+  const win = job(ci.wf, 'windows') as Job & { strategy?: { matrix?: { shard?: number[] } } };
+  const sim = job(ci.wf, 'ios-simulator') as Job & { strategy?: { matrix?: { device?: string[] } } };
+  const shards = win.strategy?.matrix?.shard ?? [];
+  const shardArg = (run: string | undefined): { index: string; total: number } | undefined => {
+    const m = /--shard=\$\{\{ matrix\.shard \}\}\/(\d+)/.exec(run ?? '');
+    return m === null ? undefined : { index: 'matrix.shard', total: Number(m[1]) };
+  };
+
+  it('Windows is split into N shards and BOTH the unit tests and the Electron end-to-end tests run the same N (no shard count that leaves a slice untested)', () => {
+    expect(shards).toEqual([1, 2, 3]);
+    const vitest = win.steps.find((s) => (s.run ?? '').startsWith('npx vitest run'));
+    const playwright = win.steps.find((s) => (s.run ?? '').includes('playwright test'));
+    expect(shardArg(vitest?.run)?.total).toBe(shards.length);
+    expect(shardArg(playwright?.run)?.total).toBe(shards.length);
+    // Control: the matrix-less steps elsewhere carry no shard flag, so the check can fail.
+    expect(shardArg('npx vitest run')).toBeUndefined();
+  });
+
+  it('only the first shard does the once-per-run work (type-check, inventory, helper hash and upload)', () => {
+    const once = ['npm run typecheck', 'Record Windows HEIF and HEVC codec inventory', 'Record the helper SHA-256', 'windows-heic-helper'];
+    for (const needle of once) {
+      const found = win.steps.find((s) => (s.run ?? '') === needle || s.name === needle || s.with?.name === needle);
+      expect(found, needle).toBeDefined();
+      expect(found?.if, needle).toBe('matrix.shard == 1');
+    }
+    // Control: the build and the end-to-end run happen on every shard, since each shard runs on its own machine.
+    const everywhere = win.steps.filter((s) => (s.run ?? '').includes('npm run build:electron') || (s.run ?? '').includes('playwright test'));
+    expect(everywhere.length).toBeGreaterThanOrEqual(2);
+    for (const s of everywhere) expect(s.if).toBeUndefined();
+  });
+
+  it('the simulator job runs one device per matrix leg and passes it to the script; artifacts and failure context cannot collide', () => {
+    expect(sim.strategy?.matrix?.device).toEqual(['iphone', 'ipad']);
+    const smoke = sim.steps.find((s) => (s.run ?? '').includes('ios-simulator-smoke.sh'));
+    expect(smoke?.env?.SMOKE_DEVICES).toBe('${{ matrix.device }}');
+    const upload = sim.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(String(upload?.with?.name)).toContain('${{ matrix.device }}');
+    const failureUpload = win.steps.find((s) => s.if === 'failure()');
+    expect(String(failureUpload?.with?.name)).toContain('${{ matrix.shard }}');
+  });
+
+  it('the Swift package cache is keyed on what decides the packages and is pinned to a full SHA', () => {
+    const cache = sim.steps.find((s) => s.uses?.startsWith('actions/cache@'));
+    expect(cache?.uses).toMatch(/@[0-9a-f]{40}\b/);
+    expect(String(cache?.with?.key)).toContain("hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json')");
+    const cacheAt = sim.steps.indexOf(cache as Step);
+    const buildAt = sim.steps.findIndex((s) => (s.run ?? '').includes('iphonesimulator'));
+    expect(cacheAt).toBeGreaterThanOrEqual(0);
+    expect(cacheAt).toBeLessThan(buildAt);
+  });
+});
+
+describe('native logging stays off outside the simulator job', () => {
+  const setsLogging = (text: string): boolean => text.includes('OI_NATIVE_LOGGING');
+
+  it('no release workflow can turn Capacitor logging on (it prints plugin calls: secure-store keys and values, callback URLs)', () => {
+    for (const [name, workflow] of [['android', android], ['ios', ios], ['windows', windows]] as const) expect(setsLogging(workflow.text), name).toBe(false);
+    // Control: the CI file does mention it, so the check can fail.
+    expect(setsLogging(ci.text)).toBe(true);
+  });
+
+  it('in CI only the simulator job sets it, on the sync step, and the smoke script requires proof that the console is visible', () => {
+    for (const [id, j] of Object.entries(ci.wf.jobs)) {
+      const setting = j.steps.filter((s) => s.env?.OI_NATIVE_LOGGING !== undefined);
+      if (id === 'ios-simulator') {
+        expect(setting).toHaveLength(1);
+        expect(setting[0]?.run).toBe('npx cap sync ios');
+        expect(setting[0]?.env?.OI_NATIVE_LOGGING).toBe('debug');
+      } else {
+        expect(setting, id).toHaveLength(0);
+      }
+    }
+    expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
+  });
+
+  it('boots and launches through the tested library, and keeps no second, untested copy of those functions in the script', () => {
+    // What boot_simulator, simulator_answers, bootstatus_bounded and launch_app DO is checked by running them against a stubbed xcrun
+    // (scripts/lib/ios-simulator.test.ts); a text match here could not tell a right implementation from a wrong one with the same words.
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+    const lib = readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8');
+    expect(script).toContain('lib/ios-simulator.sh');
+    for (const fn of ['app_is_running', 'boot_simulator', 'simulator_answers', 'bootstatus_bounded', 'launch_app']) {
+      expect(lib, fn).toMatch(new RegExp(`^${fn}\\(\\) \\{`, 'm'));
+      expect(script, fn).not.toMatch(new RegExp(`^${fn}\\(\\) \\{`, 'm'));
+    }
+    const device = script.slice(script.indexOf('smoke_device() {'));
+    expect(device).toContain('boot_simulator "$label" "$udid"');
+    expect(device).toContain('launch_app "$label" "$udid"');
+    // The library is sourced after fail() exists (it calls it) and before smoke_device runs.
+    expect(script.indexOf('fail() {')).toBeLessThan(script.indexOf('lib/ios-simulator.sh'));
+    expect(script.indexOf('lib/ios-simulator.sh')).toBeLessThan(script.indexOf('smoke_device() {'));
+    // The check after the settle time still decides the verdict, with the app's own message.
+    expect(script).toContain('seconds after launch');
+    // The test that runs them is there and can run (the driver and the library exist next to it).
+    expect(readFileSync(join(ROOT, 'scripts', 'lib', 'fixtures', 'ios-simulator-driver.sh'), 'utf8')).toContain('. "$LIB"');
+  });
+});
+
+describe('Android emulator smoke workflow', () => {
+  const emu = load('android-emulator');
+  const emuJob = job(emu.wf, 'android-emulator');
+  const script = readFileSync(join(ROOT, 'scripts', 'android-emulator-smoke.sh'), 'utf8');
+
+  it('uses no secret, builds only the debug APK, and pins every action to a full commit SHA', () => {
+    expect(secretsIn(emu.wf)).toEqual([]);
+    expect(emuJob.steps.some((s) => (s.run ?? '').includes('assembleDebug'))).toBe(true);
+    expect(emuJob.steps.some((s) => (s.run ?? '').includes('assembleRelease'))).toBe(false);
+    for (const s of emuJob.steps) if (s.uses !== undefined) expect(s.uses, s.uses).toMatch(/@[0-9a-f]{40}\b/);
+    // Control: the workflow really holds third-party actions, so the pin check had something to fail on.
+    expect(emuJob.steps.some((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'))).toBe(true);
+  });
+
+  it('runs the smoke script on the BUNDLED debug APK it built first, and keeps the evidence for 7 days even when it fails', () => {
+    const runner = emuJob.steps.find((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'));
+    expect(String(runner?.with?.script)).toContain('bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/apk/app-debug-bundled.apk"');
+    // The bundled copy is taken straight after the first Gradle build, before anything is synced for the dev server.
+    const names = emuJob.steps.map((s) => s.name ?? '');
+    const firstBuild = names.indexOf('Build the debug APK (bundled assets)');
+    const keep = names.indexOf('Keep the bundled APK for the launch smoke');
+    expect(firstBuild).toBeGreaterThanOrEqual(0);
+    expect(keep).toBe(firstBuild + 1);
+    expect(emuJob.steps[keep]?.run).toContain('cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/app-debug-bundled.apk"');
+    const upload = emuJob.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(upload?.if).toBe('always()');
+    expect(upload?.with?.['retention-days']).toBe(7);
+  });
+
+  it('reads the UI tree more than once: the first dump can hold only the native shell (run 41295240990: 7 nodes and no text, while the screenshot showed the screen)', () => {
+    const loop = /until \[ "\$attempts" -ge (\d+) \]/.exec(script);
+    expect(Number(loop?.[1])).toBeGreaterThanOrEqual(10);
+    // The retry sits around the dump itself, and the checks on its result come after it.
+    expect(script.indexOf('until [ "$attempts"')).toBeLessThan(script.indexOf('uiautomator dump'));
+    expect(script.indexOf('uiautomator dump')).toBeLessThan(script.indexOf('after $attempts attempts'));
+  });
+
+  it('the script checks what it claims: the process, the first screen, no could-not-open screen, no crash, and keeps evidence', () => {
+    for (const needle of ['set -Eeuo pipefail', 'pidof', 'uiautomator dump', 'Choose your server', 'could not open', 'FATAL EXCEPTION', 'screencap', 'logcat']) {
+      expect(script, needle).toContain(needle);
+    }
+    // A UI tree of some other window would make the screen check meaningless, so the script checks the package first.
+    expect(script).toContain('package=\\"$APP_ID\\"');
+    expect(script.startsWith('#!/usr/bin/env bash')).toBe(true);
+  });
+
+  it('the launch smoke stands alone: its script knows nothing of the dev server, Maestro or the fake engine', () => {
+    for (const needle of ['devserver', 'maestro', 'fake-engine', '10.0.2.2', 'OI_EMULATOR_DEV_SERVER']) expect(script.toLowerCase(), needle).not.toContain(needle.toLowerCase());
+  });
+});
+
+describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestro)', () => {
+  const emu = load('android-emulator');
+  const emuJob = job(emu.wf, 'android-emulator');
+  const golden = readFileSync(join(ROOT, 'scripts', 'android-emulator-golden.sh'), 'utf8');
+  const DEV_SERVER = 'http://localhost:5173'; // the emulator's own loopback via adb reverse: a secure context, which crypto.randomUUID needs
+  const indexOfStep = (name: string): number => {
+    const at = emuJob.steps.findIndex((s) => s.name === name);
+    if (at < 0) throw new Error(`no step named ${name}`);
+    return at;
+  };
+  const runnerAt = emuJob.steps.findIndex((s) => s.uses?.startsWith('reactivecircus/android-emulator-runner@'));
+
+  it('only this workflow can point the WebView at a dev server, and only on the second sync; no CI or release workflow mentions the switch', () => {
+    const sets = (text: string): boolean => text.includes('OI_EMULATOR_DEV_SERVER');
+    for (const [name, workflow] of [['ci', ci], ['android', android], ['ios', ios], ['windows', windows]] as const) expect(sets(workflow.text), name).toBe(false);
+    // Control: this workflow does set it, so the check above could have failed.
+    expect(sets(emu.text)).toBe(true);
+    const setting = emuJob.steps.filter((s) => s.env?.OI_EMULATOR_DEV_SERVER !== undefined);
+    expect(setting).toHaveLength(1);
+    expect(setting[0]?.env?.OI_EMULATOR_DEV_SERVER).toBe(DEV_SERVER);
+    expect(setting[0]?.run).toBe('npx cap sync android');
+    expect(Object.keys(emu.wf.env ?? {})).not.toContain('OI_EMULATOR_DEV_SERVER');
+    expect(Object.keys(emuJob.env ?? {})).not.toContain('OI_EMULATOR_DEV_SERVER');
+    // Order: bundled build and its copy, then the switched sync, then the second build and its copy.
+    const order = ['Build the debug APK (bundled assets)', 'Keep the bundled APK for the launch smoke', 'Sync again for the dev-server build (golden flows)', 'Build the debug APK (WebView loads the Vite dev server)', 'Keep the dev-server APK for the golden flows'].map(indexOfStep);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(emuJob.steps[order[2] ?? 0]).toBe(setting[0]);
+    // The plain sync before it carries no env at all.
+    const plainSync = emuJob.steps.find((s) => s.run === 'npx cap sync android');
+    expect(plainSync?.env).toBeUndefined();
+    expect(emuJob.steps.indexOf(plainSync as Step)).toBeLessThan(order[0] ?? 0);
+    expect(emuJob.steps.some((s) => (s.run ?? '').includes('assembleRelease'))).toBe(false);
+  });
+
+  it('starts the fake engine and Vite on loopback before the emulator, allows exactly the dev-server origin, and waits for both', () => {
+    const start = emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')];
+    const run = start?.run ?? '';
+    expect(run).toContain(`node e2e/fake-engine/serve.mjs --host 127.0.0.1 --port 8791 --allow-origin ${DEV_SERVER}`);
+    expect(run).toContain('npx vite --host 127.0.0.1 --port 5173 --strictPort');
+    expect(run).not.toContain('0.0.0.0');
+    expect(run).toContain('curl -fsS http://127.0.0.1:8791/api/client/compat');
+    expect(run).toContain('curl -fsS http://127.0.0.1:5173/src/main.tsx');
+    expect(run).toContain('exit 1');
+    expect(indexOfStep('Start the fake engine and the Vite dev server on the runner')).toBeLessThan(runnerAt);
+    // The port in the allow-list and the one Vite serves are the one the config switch names.
+    expect(new URL(DEV_SERVER).port).toBe('5173');
+  });
+
+  it('installs Maestro from a pinned release and refuses it when the checksum does not match, before unpacking', () => {
+    expect(emuJob.env?.MAESTRO_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(emuJob.env?.MAESTRO_SHA256).toMatch(/^[0-9a-f]{64}$/);
+    const run = emuJob.steps[indexOfStep('Install Maestro (pinned release, checksum verified)')]?.run ?? '';
+    expect(run).toContain('set -eu');
+    expect(run).toContain('releases/download/cli-${MAESTRO_VERSION}/maestro.zip');
+    expect(run).toContain('--retry 3 --retry-all-errors'); // a 350 MB download over a flaky link
+    expect(run).toContain('sha256sum -c -');
+    expect(run.indexOf('sha256sum -c -')).toBeLessThan(run.indexOf('unzip'));
+    expect(run).not.toMatch(/\|\s*(ba)?sh\b/); // never a downloaded script piped into a shell
+    expect(indexOfStep('Install Maestro (pinned release, checksum verified)')).toBeLessThan(runnerAt);
+  });
+
+  it('runs G2 on the dev-server APK after the launch smoke, in the same emulator session, with no guard that could skip it', () => {
+    const lines = String(emuJob.steps[runnerAt]?.with?.script).split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('scripts/android-emulator-smoke.sh');
+    expect(lines[1]).toBe('bash scripts/android-emulator-golden.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8791 "$RUNNER_TEMP/android-smoke/g2"');
+    // A missing APK must fail the job, never skip the flow.
+    expect(lines[1]).not.toMatch(/\[ !? -f|\|\||if /);
+    // The fake engine is reached at the emulator's localhost (adb reverse in the golden script), on the port the workflow started it on.
+    expect(String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run)).toContain('--port 8791');
+  });
+
+  it('both emulator scripts deal with a system "isn\'t responding" dialog instead of failing on it', () => {
+    // CI run 41367506059: "Pixel Launcher isn't responding" sat in front of a healthy app and the launch smoke read that dialog 15 times.
+    const smoke = readFileSync(join(ROOT, 'scripts', 'android-emulator-smoke.sh'), 'utf8');
+    const helper = readFileSync(join(ROOT, 'scripts', 'lib', 'dismiss-not-responding.sh'), 'utf8');
+    // The helper only ever taps the Wait button, found by its resource id (the label is localised).
+    expect(helper).toContain('android:id/aerr_wait');
+    expect(helper).not.toContain('aerr_close');
+    for (const [name, text] of [['smoke', smoke], ['golden', golden]] as const) {
+      expect(text, name).toContain('lib/dismiss-not-responding.sh');
+      expect(text, name).toContain('dismiss_not_responding');
+    }
+    // In the smoke loop the dialog is checked BEFORE the app's own text, and the loop goes round again after a tap.
+    const loop = smoke.slice(smoke.indexOf('until [ "$attempts" -ge 15 ]'));
+    expect(loop.indexOf('dismiss_not_responding')).toBeGreaterThan(0);
+    expect(loop.indexOf('dismiss_not_responding')).toBeLessThan(loop.indexOf('Choose your server'));
+    expect(loop).toMatch(/dismiss_not_responding "\$OUT\/ui\.xml"; then[\s\S]*?continue/);
+    // The golden flow checks once BEFORE Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
+    expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeGreaterThan(0);
+    expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeLessThan(golden.indexOf('maestro --device'));
+    // A dialog that would come up LATER, while Maestro runs and nothing may look at the screen, is prevented: error dialogs are hidden
+    // before the app is started (a crash of the app is still found by the logcat check).
+    expect(golden).toContain('settings put global hide_error_dialogs 1');
+    expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('adb shell am start -n'));
+    // After the loop, a last press is followed by one more look, so the checks read the screen and not the dialog that was pressed.
+    const after = smoke.slice(smoke.indexOf('until [ "$attempts" -ge 15 ]'));
+    expect(after).toContain('dismissed=1');
+    expect(after.indexOf('if [ "$dismissed" -eq 1 ]')).toBeGreaterThan(after.indexOf('done'));
+    expect(after.indexOf('if [ "$dismissed" -eq 1 ]')).toBeLessThan(after.indexOf('UI tree read in'));
+  });
+
+  it('both emulator scripts count only a crash of the APP process, not a FATAL EXCEPTION logged by the test tooling', () => {
+    // CI run 41321526977 went red on a FATAL EXCEPTION whose process was UiAutomation (the accessibility channel behind
+    // uiautomator dump) while the app sat on its first screen. A crash of the app names the package on its Process: line.
+    const smoke = readFileSync(join(ROOT, 'scripts', 'android-emulator-smoke.sh'), 'utf8');
+    for (const [name, text] of [['smoke', smoke], ['golden', golden]] as const) {
+      expect(text, name).toContain('grep -A3 "FATAL EXCEPTION" "$OUT/logcat.txt" | grep -q "Process: $APP_ID"');
+      // Not the old, wider check that any FATAL EXCEPTION fails the run.
+      expect(text, name).not.toMatch(/^if grep -q "FATAL EXCEPTION" "\$OUT\/logcat\.txt"; then$/m);
+      // A crash of another process is still visible in the log output.
+      expect(text, name).toContain('a FATAL EXCEPTION of another process is in logcat.txt');
+    }
+  });
+
+  it('the golden script starts the app from a cleared state with pm clear and am start, then runs the G2 flow with the engine address', () => {
+    expect(golden.startsWith('#!/usr/bin/env bash')).toBe(true);
+    for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'logcat', 'uiautomator dump', 'maestro/golden/g2-controlled-sign-in.yaml', '-e "SERVER_URL=$ENGINE_ORIGIN"']) expect(golden, needle).toContain(needle);
+    // The emulator's localhost is made to reach the runner: without these two the WebView and the app would find nothing on it.
+    const reverseVite = golden.indexOf('adb reverse tcp:5173 tcp:5173');
+    const reverseEngine = golden.indexOf('adb reverse tcp:8791 tcp:8791');
+    expect(reverseVite).toBeGreaterThan(0);
+    expect(reverseEngine).toBeGreaterThan(0);
+    expect(golden).not.toContain('10.0.2.2');
+    const clear = golden.indexOf('adb shell pm clear "$APP_ID"');
+    const start = golden.indexOf('adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"');
+    const flow = golden.indexOf('maestro --device "$serial" test');
+    expect(clear).toBeGreaterThan(Math.max(reverseVite, reverseEngine));
+    expect(start).toBeGreaterThan(clear);
+    expect(flow).toBeGreaterThan(start);
+    // Maestro never launches the app itself: the flow file names the app id but has no launchApp step.
+    expect(readFileSync(join(ROOT, 'maestro', 'golden', 'g2-controlled-sign-in.yaml'), 'utf8')).not.toContain('launchApp');
+    // No credential, token or account is typed or passed by the script.
+    expect(golden).not.toMatch(/PASSWORD|E2E_EMAIL|secrets\./);
+  });
+});
+
+describe('the packaged Windows registry smoke is manual only', () => {
+  const NAMES = /windows-packaged-import-smoke|registry-guard/;
+  /** Every file under a directory, without following links. */
+  function filesUnder(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]));
+  }
+
+  it('is mentioned by nothing that could run it for the project: no workflow, no composite action, no npm script, no other script', () => {
+    const github = filesUnder(join(ROOT, '.github'));
+    const workflows = github.filter((f) => /\.ya?ml$/.test(f) && f.includes(`${join('.github', 'workflows')}`));
+    expect(workflows.length).toBeGreaterThan(3);
+    // The files that ARE the smoke test, its guard and their tests may name each other; nothing else may name them.
+    const own = new Set(['windows-packaged-import-smoke.mjs', 'registry-guard.mjs', 'registry-guard.test.ts', 'registry-guard-uncaught.mjs']);
+    const scripts = filesUnder(join(ROOT, 'scripts')).filter((f) => !own.has(f.split(/[\\/]/).at(-1)!));
+    const scanned = [...github, join(ROOT, 'package.json'), ...scripts];
+    for (const file of scanned) expect(readFileSync(file, 'utf8'), file).not.toMatch(NAMES);
+    // Controls: the scan sees the places a launcher could hide, and the pattern can match what it is looking for.
+    expect(github.some((f) => /[\\/]\.github[\\/]actions[\\/]/.test(f)) || github.length > 3).toBe(true);
+    expect(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts).toBeTypeOf('object');
+    expect(scripts.length).toBeGreaterThan(5);
+    expect(readFileSync(join(ROOT, 'scripts', 'windows-packaged-import-smoke.mjs'), 'utf8')).toMatch(NAMES);
+  });
+
+  it('refuses to start in CI and without the explicit flag, before anything is started', () => {
+    const text = readFileSync(join(ROOT, 'scripts', 'windows-packaged-import-smoke.mjs'), 'utf8');
+    expect(text).toMatch(/process\.env\.CI !== undefined \|\| process\.env\.GITHUB_ACTIONS !== undefined/);
+    expect(text).toContain('--allow-registry-change');
+    // The check comes before the guard is entered and before any child process is spawned.
+    expect(text.indexOf('Refusing to run in CI')).toBeLessThan(text.indexOf('withRegistryGuard(['));
+    expect(text.indexOf('Refusing to run in CI')).toBeLessThan(text.indexOf('spawn(process.execPath'));
   });
 });

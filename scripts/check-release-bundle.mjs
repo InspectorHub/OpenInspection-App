@@ -8,13 +8,13 @@
 // built files, because a source test cannot see what the bundler kept.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
+import { RELEASE_FORBIDDEN } from './bundle-forbidden.mjs';
 
 // Development-only UI and the diagnostics screen: its button label, and the marker every check title and console line starts with.
 // The demo-data seed for the work list (its two button labels and the prefix of every row it writes): a release device must never
 // be able to put demo inspections on itself.
 // Then the test support that bypasses the plan brand, the purge authority and the data-layer block: no production module imports
 // it (a source test pins that), and this catches what such an import would have put into the built files.
-const FORBIDDEN = ['Allow plain http', 'Diagnostics (development only)', '[diag]', 'Seed demo data', 'Remove demo data', 'diag-quarantined', 'diag-photo-unattached', 'issuePlanForTest', 'purgeAuthorityForTest', 'neverBlocked'];
 const SCANNED = new Set(['.js', '.mjs', '.css', '.html']);
 
 function* walk(dir) {
@@ -43,7 +43,7 @@ if (files.length === 0) {
 const hits = [];
 for (const file of files) {
   const text = readFileSync(file, 'utf8');
-  for (const needle of FORBIDDEN) {
+  for (const needle of RELEASE_FORBIDDEN) {
     if (text.includes(needle)) hits.push(`${file}: contains "${needle}"`);
   }
 }

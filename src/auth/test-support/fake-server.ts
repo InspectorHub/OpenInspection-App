@@ -9,6 +9,8 @@ export interface RecordedRequest {
   headers: Record<string, string>;
   form: Record<string, string>;
   json: unknown;
+  /** The body, when it was sent as raw bytes (an upload such as a package). */
+  bytes?: Uint8Array;
 }
 
 export interface FakeServerOptions {
@@ -225,7 +227,8 @@ export function createFakeServer(options: FakeServerOptions = {}): FakeServer {
       } else if (body) {
         parsedJson = JSON.parse(body);
       }
-      server.requests.push({ method: init.method ?? 'GET', path: url.pathname, query: url.searchParams, headers, form, json: parsedJson });
+      const bytes = init.body instanceof Uint8Array ? init.body : undefined;
+      server.requests.push({ method: init.method ?? 'GET', path: url.pathname, query: url.searchParams, headers, form, json: parsedJson, ...(bytes === undefined ? {} : { bytes }) });
 
       const hangsLeft = hangs.get(url.pathname) ?? 0;
       if (hangsLeft > 0) {

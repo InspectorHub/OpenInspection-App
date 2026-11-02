@@ -119,7 +119,7 @@ describe('the foreground look is skipped while the device is offline', () => {
     const world = await createSignedInWorld();
     const { services, compatCalls } = restart(world, { current: () => COMPAT({}) });
     const appState = fakeAppState();
-    render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} scheduler={fakeScheduler()} appState={appState} network={{ online: () => Promise.reject(new Error('plugin missing')) }} />);
+    render(<App open={() => Promise.resolve(services)} allowInsecureHttp={false} scheduler={fakeScheduler()} appState={appState} network={{ online: () => Promise.reject(new Error('plugin missing')), onChange: () => () => undefined }} />);
     await screen.findByRole('heading', { name: 'Work list' });
     await waitFor(() => expect(appState.listeners()).toBeGreaterThan(0));
     act(() => appState.emit(true));

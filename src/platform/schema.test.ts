@@ -78,6 +78,7 @@ describe('migrate() on the sql.js double', () => {
       'lease',
       'media',
       'outbox',
+      'photo_cache',
       'resource_cache',
       'work_package',
       'ydoc_updates',
@@ -101,6 +102,18 @@ describe('migrate() on the sql.js double', () => {
       ['body', 'TEXT', 1, 0],
       ['fetched_at', 'INTEGER', 1, 0],
       ['package_id', 'TEXT', 0, 0],
+    ]);
+    expect(await shape('photo_cache')).toEqual([
+      ['hash', 'TEXT', 0, 1],
+      ['account_key', 'TEXT', 1, 0],
+      ['inspection_id', 'TEXT', 1, 0],
+      ['key', 'TEXT', 1, 0],
+      ['size', 'TEXT', 1, 0],
+      ['path', 'TEXT', 1, 0],
+      ['bytes', 'INTEGER', 1, 0],
+      ['content_type', 'TEXT', 1, 0],
+      ['last_used_at', 'INTEGER', 1, 0],
+      ['fetched_at', 'INTEGER', 1, 0],
     ]);
     expect(await shape('ydoc_updates')).toEqual([
       ['doc_name', 'TEXT', 1, 0],

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { VideoUploadTicket } from '@inspectorhub/field-ui';
 import { isMediaError } from '../media/errors';
-import { MAX_VIDEO_BYTES } from '../media/store';
+import { MAX_VIDEO_BYTES } from '../media/media-types';
 import { INSPECTION, ORIGIN } from '../media/test-support/fakes';
 import type { ApiOutcome } from './api-client';
 import { MESSAGES } from './messages';

@@ -13,6 +13,8 @@ export const ORPHAN_MIN_AGE_MS = 60 * 60_000;
 export const MIN_PLAUSIBLE_MTIME_MS = 1e12;
 
 export const MEDIA_DIRECTORY = 'media';
+/** Where copies of server photos are kept (`field/photo-cache.ts`). Not `media/`: nothing here is the only copy of anything. */
+export const PHOTO_CACHE_DIRECTORY = 'photo-cache';
 /** The only names the store writes: `<pendingId>.<ext>`. Anything else in the directory is left alone. */
 export const MEDIA_FILE_PATTERN = /^([A-Za-z0-9_-]{1,64})\.(?:jpg|png|heic|mp4|mov)$/;
 

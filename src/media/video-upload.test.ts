@@ -3,7 +3,7 @@ import { createManualTimers } from '../collab/test-support/manual-timers';
 import { createManualClock } from '../platform/clock';
 import { createNativeUploader, MAX_UPLOAD_ATTEMPTS, TRANSIENT_BACKOFF_CAP_MS, type NativeUploader } from './native-uploader';
 import { createMediaReconciler, DOC_RETRY_CAP_MS, type MediaReconciler, type ResolvePending } from './reconcile';
-import { MAX_VIDEO_BYTES } from './store';
+import { MAX_VIDEO_BYTES } from './media-types';
 import { combinedEngine, createFakeVideoEngine, STREAM_HOST, videoBytes, videoRecord, type Backend, type FakeVideoEngine } from './test-support/video-fakes';
 import { createFakePlugin, createMediaWorld, INSPECTION, ORIGIN, photoRecord, type FakePlugin, type MediaWorld } from './test-support/fakes';
 import { createVideoStrategy, type ResolveVideo } from './video';

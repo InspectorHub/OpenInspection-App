@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { appDiagnostics } from '../app/diagnostics';
 import { appTimings } from '../app/timings';
 import { CHECKS } from './checks';
 import { INSPECTION_ID_STORAGE_KEY, Diagnostics } from './diagnostics';
@@ -140,3 +141,13 @@ describe('Diagnostics screen: timings', () => {
   });
 });
 
+
+describe('Diagnostics screen: recent diagnostic codes', () => {
+  it('lists the codes the app has recorded, so a device can be read without a log', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    appDiagnostics.push('photo_not_kept:entry_failed:DOC_BUSY:NETWORK:offline');
+    const rig = await createDiagRig({ signedIn: false });
+    render(<Diagnostics services={rig.services} origin={null} deps={rig.deps} onClose={vi.fn()} />);
+    expect(screen.getByTestId('recent-diagnostics')).toHaveTextContent('photo_not_kept:entry_failed:DOC_BUSY:NETWORK:offline');
+  });
+});

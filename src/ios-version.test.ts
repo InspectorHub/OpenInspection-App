@@ -80,7 +80,7 @@ describe('scripts/sync-ios-version.mjs', () => {
   });
 
   it('refuses a project that does not have exactly two MARKETING_VERSION settings', () => {
-    expect(run(fixture(marketing, project.replace(/^\s*MARKETING_VERSION = [^;]*;\n/m, '')), '--check').status).toBe(1);
+    expect(run(fixture(marketing, project.replace(/^\s*MARKETING_VERSION = [^;]*;\r?\n/m, '')), '--check').status).toBe(1);
   });
 
   it('works on a project with CRLF line endings and keeps them (the optional CR is captured, not dropped)', () => {

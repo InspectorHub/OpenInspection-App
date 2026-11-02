@@ -4,7 +4,8 @@ import { deleteDocRows } from '../collab/y-sqlite';
 import type { NativeUploader } from '../media/native-uploader';
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
-import { isNotFoundError, type Files } from '../platform/files';
+import type { Files } from '../platform/files';
+import { isNotFoundError } from '../platform/files-path';
 import type { IsBlocked } from './blocked';
 import { SYNC_LEASE, withLease } from './lease';
 import { accountKey, assertAccount, sameAccount, type Account } from './outbox';
@@ -12,6 +13,7 @@ import { isIssuedPlan } from './plan-brand';
 import { holdsPurgeAuthority, purgeAuthority, type PurgeAuthority } from './purge-authority';
 import { fingerprintOf, REASON_MASS_SUSPICIOUS, type ReconcilePlan } from './reconcile-decision';
 import { DEFAULT_REGISTRY, isLocalId, type CommandRegistry } from './registry';
+import { purgePhotoCopies } from './purge-photo-cache';
 import { unsentData, type UnsentReason } from './unsent';
 
 /**
@@ -58,6 +60,9 @@ import { unsentData, type UnsentReason } from './unsent';
  *  - A media file whose row has a `path` that is not exactly `media/<row id>.<ext>` is never touched (the row alone is
  *    deleted, so a poisoned path cannot make the purge delete another file). Its file stays until the orphan sweep
  *    (`sweep.ts`) finds it unreferenced.
+ *  - A cached copy of a server photo (`photo-cache/`) whose removal failed stays until eviction or a full clear; the
+ *    cache is best effort here because a copy holds nothing that is not on the server. An editor still open on the
+ *    inspection can also hold its address in memory, but the purge unmounts it first.
  *  - `Reconciler.stop()` does not abort a purge that is already running. That is safe because the tombstone is resumable:
  *    the purge ends at its next step, or the next `resumePurges` finishes it.
  */
@@ -348,6 +353,8 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
     await deps.db.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ?', [accountKey(account), inspectionId]);
     // The tags a person put on this inspection's items, including the ones the server was never told about.
     await deps.db.run('DELETE FROM item_tags WHERE account_key = ? AND inspection_id = ?', [accountKey(account), inspectionId]);
+    // The cached copies of its server photos (best effort: they hold nothing that is not on the server).
+    await purgePhotoCopies(deps.db, deps.files, accountKey(account), inspectionId);
 
     step = 'outbox';
     if (!(await go())) return failed('outbox', 'interrupted');

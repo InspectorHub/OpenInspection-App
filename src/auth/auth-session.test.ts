@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAndroidAuthSession, isCallbackUrl, type AppLike, type BrowserLike } from './auth-session';
+import { createAndroidAuthSession, type AppLike, type BrowserLike } from './auth-session';
+import { isCallbackUrl } from './callback-constants';
 import { isAuthError } from './errors';
 
 const SCHEME = 'io.inspectorhub.app';

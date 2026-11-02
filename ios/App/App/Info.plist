@@ -39,12 +39,6 @@
 	<string>InspectorHub uses the camera to photograph and record findings during an inspection.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>InspectorHub reads photos you choose from your library to attach them to an inspection.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>InspectorHub can save inspection photos to your library.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>fetch</string>
-	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

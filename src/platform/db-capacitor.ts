@@ -1,15 +1,10 @@
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { Capacitor } from '@capacitor/core';
 import { createDb, type Db, type DbOptions } from './db';
-import { assertSchemaShape, CURRENT_SCHEMA_VERSION, SchemaTooNewError, toUpgradeStatements } from './schema';
+import { assertSchemaShape, CURRENT_SCHEMA_VERSION, DbKeyLostError, type DbUpgrade, SchemaTooNewError, toUpgradeStatements } from './schema';
 
 /** The platforms the adapter distinguishes; anything that is not Android or iOS is `web`. */
 export type DbPlatform = 'android' | 'ios' | 'web';
-
-export interface DbUpgrade {
-  toVersion: number;
-  statements: string[];
-}
 
 export interface DbChanges {
   changes?: { changes?: number; lastId?: number };
@@ -30,6 +25,7 @@ export interface SqliteDbConnectionLike {
 /** The subset of `SQLiteConnection` the adapter uses. */
 export interface SqliteConnectionLike {
   isSecretStored(): Promise<{ result?: boolean }>;
+  isDatabase(database: string): Promise<{ result?: boolean }>;
   setEncryptionSecret(passphrase: string): Promise<void>;
   checkConnectionsConsistency(): Promise<{ result?: boolean }>;
   isConnection(database: string, readonly: boolean): Promise<{ result?: boolean }>;
@@ -84,6 +80,7 @@ export async function openCapacitorDb(
 
   const stored = await sqlite.isSecretStored();
   if (!stored.result) {
+    if ((await sqlite.isDatabase(name)).result) throw new DbKeyLostError();
     await sqlite.setEncryptionSecret((options.generateSecret ?? randomHex32)());
   }
 

@@ -1,7 +1,7 @@
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
 import * as Y from 'yjs';
 import { resultsDocName } from '../collab/connector';
-import { MAX_MEDIA_BYTES } from '../media/store';
+import { MAX_MEDIA_BYTES } from '../media/media-types';
 import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
 import type { ExportPlan } from './collect';
@@ -165,7 +165,7 @@ export function buildPackage(plan: ExportPlan, deps: BuildDeps): BuiltPackage {
         deviceId: plan.deviceId,
         exportedBy: plan.identity.userId,
         exportedAt: deps.exportedAt,
-        inspections: plan.inspections.map((inspection) => ({ id: inspection.id, reportId: inspection.reportId })),
+        inspections: plan.inspections.map((inspection) => ({ id: inspection.id, reportId: inspection.reportId, ...(inspection.label === undefined ? {} : { label: inspection.label }) })),
       }),
     );
     zip.end();

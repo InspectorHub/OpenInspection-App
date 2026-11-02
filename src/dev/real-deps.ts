@@ -1,7 +1,7 @@
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { realTimers } from '../collab/timers';
-import { createRealNetwork } from '../platform/network';
-import { createRealUploaderPlugin } from '../platform/uploader';
+import { createRealNetwork } from '../platform/network-capacitor';
+import { createRealUploaderPlugin } from '../platform/uploader-capacitor';
 import { errorWord, type DiagDeps, type DiagPorts, type SocketProbe } from './checks/types';
 
 function loadImage(url: string, timeoutMs: number): Promise<boolean> {

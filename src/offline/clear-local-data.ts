@@ -1,6 +1,6 @@
 import type { Db } from '../platform/db';
 import { sweepStaleExports } from '../export/sweep';
-import { MEDIA_DIRECTORY, MEDIA_FILE_PATTERN } from '../media/sweep';
+import { MEDIA_DIRECTORY, MEDIA_FILE_PATTERN, PHOTO_CACHE_DIRECTORY } from '../media/sweep';
 import { removeAllUploaderTempFiles } from '../media/uploader-temp';
 import type { Files } from '../platform/files';
 import { DEVICE_STATE_KEY_PREFIXES, type DeviceStateKey } from '../platform/schema';
@@ -69,7 +69,21 @@ export async function clearLocalData(db: Db, files: Pick<Files, 'remove' | 'list
     // A directory that cannot be listed leaves its files to the orphan sweep of a later start.
   }
 
-  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'item_tags', 'work_package', 'lease'] as const) {
+  // The cached copies of server photos: files under `photo-cache/` (nothing in `media`'s pattern), then their rows below.
+  try {
+    for (const entry of await files.list(PHOTO_CACHE_DIRECTORY)) {
+      try {
+        await files.remove(`${PHOTO_CACHE_DIRECTORY}/${entry.name}`);
+        filesRemoved += 1;
+      } catch {
+        filesFailed.push(`${PHOTO_CACHE_DIRECTORY}/${entry.name}`);
+      }
+    }
+  } catch {
+    // A directory that cannot be listed keeps its copies of server photos; they hold nothing that is not on the server.
+  }
+
+  for (const table of ['ydoc_updates', 'ydoc_sync', 'media', 'outbox', 'resource_cache', 'item_tags', 'photo_cache', 'work_package', 'lease'] as const) {
     await db.run(`DELETE FROM ${table}`);
   }
 

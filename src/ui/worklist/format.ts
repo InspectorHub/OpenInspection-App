@@ -105,8 +105,12 @@ export function checkedLabel(at: number | null, now: number, locale: string = FO
   }
 }
 
-/** Direction-changing and invisible mark characters (U+202A-202E, U+2066-2069, U+200E, U+200F): they can reorder the text around them. */
-const BIDI = /[‪-‮⁦-⁩‎‏]/g;
+/**
+ * Direction-changing and invisible mark characters: they can reorder the text around them or make two different rows look the same.
+ * U+202A-202E, U+2066-2069, U+200E, U+200F, U+061C (Arabic letter mark), U+200B (zero-width space), U+2060 (word joiner), U+FEFF.
+ * U+200C and U+200D are NOT here: they are part of how Persian, Indic scripts and emoji sequences are written.
+ */
+const BIDI = /[‪-‮⁦-⁩‎‏؜​⁠﻿]/g;
 
 /** Text from the server or from a cache, made safe to place next to our own words. */
 export function stripBidi(text: string): string {

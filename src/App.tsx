@@ -9,9 +9,11 @@ import { createUnlockEmitter } from './app/lock-events';
 import { OfflineStackContext } from './app/stack-context';
 import { useOfflineStackLifecycle, type StackFactory } from './app/use-offline-stack';
 import type { Network } from './platform/network';
+import type { DesktopSettingsPort } from './desktop/updater-port';
+import type { DiagDeps } from './dev/checks/types';
 import { startLockMonitor, realScheduler, type AppStatePort, type Scheduler } from './offline/lock-monitor';
 import type { LockOutcome } from './offline/lock-state';
-import { Booting, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
+import { Booting, DbKeyLost, OpenFailed, SchemaDrift, SchemaTooNew } from './ui/Blocking';
 import { ExportFlow } from './ui/ExportFlow';
 import { Locked } from './ui/Locked';
 import { ServerSetup } from './ui/ServerSetup';
@@ -34,8 +36,12 @@ export interface AppProps {
    * work screen appears and stopped when it goes away (sign-out, lock, another account or server). Omitted: no stack is built.
    */
   offline?: StackFactory;
-  /** Link state. When given, a return to the foreground while offline does not look at the server's version policy. */
-  network?: Pick<Network, 'online'>;
+  /** Link state for the editor and foreground version checks. Omitted: the editor uses browser link state. */
+  network?: Network;
+  /** Desktop-only Settings controls. Capacitor entry never supplies this. */
+  desktopSettings?: DesktopSettingsPort;
+  /** Platform diagnostics dependencies; Electron supplies browser/filesystem-backed adapters. */
+  diagnostics?: DiagDeps;
 }
 
 /** Consecutive failed mid-session evaluations after which the work screen is locked. */
@@ -70,13 +76,15 @@ async function backToLock(services: AppServices, origin: string, held: StoredIde
   setScreen(await screenForSignedIn(services, origin, identity).catch((): Screen => ({ kind: 'locked', origin, identity, reason: 'expired' })));
 }
 
-export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline, network }: AppProps) {
+export function App({ open, allowInsecureHttp = true, callbacks, appState, scheduler = realScheduler, offline, network, desktopSettings, diagnostics }: AppProps) {
   const [services, setServices] = useState<AppServices | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'booting' });
   const [lockedExport, setLockedExport] = useState(false);
   // True while Settings removes this device's data: the verification marks go with it, so a lock check now would read "expired".
   const [wiping, setWiping] = useState(false);
   const started = useRef<Promise<BootResult> | null>(null);
+  // Where the work list was scrolled to; it lives here because signing in again unmounts the whole work screen.
+  const listScrollY = useRef(0);
   const unlocks = useMemo(() => createUnlockEmitter(), []);
   const insecure = import.meta.env.DEV && allowInsecureHttp;
   const stack = useOfflineStackLifecycle(services, offline, screen.kind === 'signed_in' ? { origin: screen.origin, identity: screen.identity } : null, insecure, unlocks.onUnlocked, appDiagnostics.push);
@@ -107,6 +115,12 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
       if (active) void sweepStaleExports(services.files, services.clock.now(), SWEEP_AGE_MS);
     });
   }, [services, appState]);
+
+  // A sign-in that is not a return to this session (sign-out, or another server, which reaches the sign-in screen through setup) must not hand its scroll position to the next one.
+  const plainSignIn = screen.kind === 'sign_in' && !screen.backToLock;
+  useEffect(() => {
+    if (plainSignIn) listScrollY.current = 0;
+  }, [plainSignIn]);
 
   useEffect(() => {
     if (screen.kind !== 'locked') setLockedExport(false);
@@ -161,7 +175,8 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
   if (!services) {
     if (screen.kind === 'schema_too_new') return <SchemaTooNew />;
     if (screen.kind === 'schema_drift') return <SchemaDrift />;
-    if (screen.kind === 'open_failed') return <OpenFailed />;
+    if (screen.kind === 'db_key_lost') return <DbKeyLost />;
+    if (screen.kind === 'open_failed') return <OpenFailed reason={screen.reason} />;
     return <Booting />;
   }
 
@@ -200,6 +215,14 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             identity={screen.identity}
             onSignedOut={() => setScreen({ kind: 'sign_in', origin: screen.origin, relogin: false, notices: [] })}
             onWiping={setWiping}
+            scrollMemory={listScrollY}
+            onSignInAgain={() => {
+              listScrollY.current = window.scrollY;
+              setScreen({ kind: 'sign_in', origin: screen.origin, relogin: true, notices: [], backToLock: screen.identity });
+            }}
+            desktopSettings={desktopSettings}
+            diagnostics={diagnostics}
+            {...(network === undefined ? {} : { network })}
           />
         </OfflineStackContext.Provider>
       );

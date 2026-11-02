@@ -36,6 +36,9 @@ describe('createNotificationPermission', () => {
     const ios = createNotificationPermission(p, 'ios');
     expect(await ios.check()).toBe('unsupported');
     expect(await ios.request()).toBe('unsupported');
+    const windows = createNotificationPermission(p, 'windows');
+    expect(await windows.check()).toBe('unsupported');
+    expect(await windows.request()).toBe('unsupported');
     expect(p.checkPermissions).not.toHaveBeenCalled();
     expect(p.requestPermissions).not.toHaveBeenCalled();
     await createNotificationPermission(p, 'android').check();

@@ -22,14 +22,33 @@ const line = () => screen.getByTestId('server-line');
 const unknownNetwork = { online: () => new Promise<boolean>(() => undefined), onChange: () => () => undefined };
 
 describe('the server cannot be reached while the device has a network', () => {
-  it('says so in plain words, keeps the chip meaning "device network", and does not ask for a sign-in', async () => {
+  it('says so in plain words, shows the chip as Server unreachable (not Online), and does not ask for a sign-in', async () => {
     const held = withStatus(w.stack, { serverUnreachable: true });
     renderList(held.stack, { network: fakeNetwork(true) });
     expect(await screen.findByText(SERVER_UNREACHABLE_TEXT)).toBeInTheDocument();
     expect(SERVER_UNREACHABLE_TEXT).toBe("The server can't be reached right now. Your work is saved on this device and will sync when it is back.");
-    expect(screen.getByText('Online')).toBeInTheDocument();
+    expect(screen.getByText('Server unreachable')).toBeInTheDocument();
+    expect(screen.queryByText('Online')).toBeNull();
     expect(screen.queryByText(SIGN_IN)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the same chip with no network port (the page-event path), and Online again once the stack recovers', async () => {
+    const held = withStatus(w.stack, { serverUnreachable: true });
+    renderList(held.stack, {});
+    expect(await screen.findByText('Server unreachable')).toBeInTheDocument();
+    act(() => {
+      held.status.patch({ serverUnreachable: false });
+    });
+    await waitFor(() => expect(screen.getByText('Online')).toBeInTheDocument());
+    expect(screen.queryByText('Server unreachable')).toBeNull();
+  });
+
+  it('shows Sync paused on the chip while the link is up', async () => {
+    const held = withStatus(w.stack, { syncPaused: true });
+    renderList(held.stack, { network: fakeNetwork(true) });
+    expect(await screen.findByText('Sync paused')).toBeInTheDocument();
+    expect(screen.queryByText('Online')).toBeNull();
   });
 
   it('goes away on its own when the stack reports the next answer', async () => {

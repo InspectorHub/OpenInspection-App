@@ -11,6 +11,7 @@ import { DAY_MS } from '../offline/lock';
 import { fakeScheduler } from '../offline/test-support/fakes';
 import { reconcileOutcome, renderList } from './test-support/worklist-render';
 import { at, createListWorld, seedPkg } from './test-support/worklist-world';
+import { seedExportableForSignedIn } from './test-support/export-view';
 import { SignedIn } from './SignedIn';
 
 configure({ asyncUtilTimeout: 5000 });
@@ -42,6 +43,7 @@ describe('the export entry in the work list', () => {
 describe('the export entry in the signed-in screen', () => {
   it('opens the question, and asks the reconcile of the live stack once', async () => {
     const world = await createSignedInWorld();
+    await seedExportableForSignedIn(world.db);
     const list = await createListWorld();
     const trigger = vi.fn();
     let latest = reconcileOutcome({ status: 'never', at: null });
@@ -74,6 +76,7 @@ describe('the export entry in the signed-in screen', () => {
 
   it('without an offline stack it still offers the export, and the dialog says the list is unconfirmed', async () => {
     const world = await createSignedInWorld();
+    await seedExportableForSignedIn(world.db);
     render(<SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} />);
     await userEvent.setup().click(screen.getByRole('button', EXPORT_BUTTON));
     const dialog = await screen.findByRole('alertdialog');
@@ -82,6 +85,7 @@ describe('the export entry in the signed-in screen', () => {
 
   it('still offers it while the server demands an update: editing is off, exporting is not', async () => {
     const world = await createSignedInWorld();
+    await seedExportableForSignedIn(world.db);
     world.services.clientState.noteUpgrade(world.server.origin, 'required');
     render(<SignedIn services={world.services} origin={world.server.origin} identity={identity} onSignedOut={vi.fn()} />);
     expect(await screen.findByRole('heading', { name: 'Update required' })).toBeInTheDocument();
@@ -95,6 +99,7 @@ describe('the export entry in the signed-in screen', () => {
 describe('the export entry on the lock screen', () => {
   it('a locked device can export: the button is there and opens the question; cancelling changes nothing', async () => {
     const world = await createSignedInWorld();
+    await seedExportableForSignedIn(world.db);
     world.clock.advance(31 * DAY_MS);
     const before = await rowCounts(world.db);
     const { services } = restartOffline(world);

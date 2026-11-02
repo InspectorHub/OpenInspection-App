@@ -7,7 +7,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Local data holds unsent work and its key is not in any backup: keep it out of backups. Never fatal.
+        if let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            do {
+                try BackupExclusion.apply(under: library, fileManager: .default)
+            } catch {
+                NSLog("BackupExclusion failed: \(error)")
+            }
+        }
         return true
     }
 

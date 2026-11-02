@@ -5,10 +5,48 @@ import { connectToServer } from '../app/connect';
 import { createSignedInWorld, createWorld, restartOffline, rowCounts, seedLocalData, type World } from '../app/test-support/world';
 import { CLOCK_SKEW_TOLERANCE_MS, DAY_MS } from './lock';
 import { evaluateAndPersist, lastSessionServerTime, loadLockState, recordVerified } from './lock-state';
+import { startLockMonitor } from './lock-monitor';
+import { fakeAppState, fakeScheduler } from './test-support/fakes';
 import { verifyOnline } from './verify-online';
 
 const SECURE = { allowInsecureHttp: false };
 const START = 9_000_000;
+
+describe('desktop wake re-evaluates lock state without deleting local data', () => {
+  it('locks on resume after the offline period elapsed during sleep', async () => {
+    const world = await createSignedInWorld();
+    await seedLocalData(world.db);
+    const before = await rowCounts(world.db);
+    const appState = fakeAppState();
+    const outcomes: Array<{ locked: boolean; reason?: string }> = [];
+    const monitor = startLockMonitor({ db: world.db, clock: world.clock, scheduler: fakeScheduler(), appState, onOutcome: (o) => outcomes.push(o) });
+    appState.emit(false);
+    world.clock.advance(31 * DAY_MS);
+    appState.emit(true);
+    await monitor.idle();
+    expect(outcomes).toEqual([{ locked: true, reason: 'expired' }]);
+    expect(await rowCounts(world.db)).toEqual(before);
+    monitor.stop();
+  });
+
+  it('locks on resume after the clock was wound back below max-seen time, preserving data', async () => {
+    const world = await createSignedInWorld();
+    await seedLocalData(world.db);
+    const before = await rowCounts(world.db);
+    world.clock.advance(2 * DAY_MS);
+    await evaluateAndPersist(world.db, world.clock.now());
+    const appState = fakeAppState();
+    const outcomes: Array<{ locked: boolean; reason?: string }> = [];
+    const monitor = startLockMonitor({ db: world.db, clock: world.clock, scheduler: fakeScheduler(), appState, onOutcome: (o) => outcomes.push(o) });
+    appState.emit(false);
+    world.clock.set(START);
+    appState.emit(true);
+    await monitor.idle();
+    expect(outcomes).toEqual([{ locked: true, reason: 'clock' }]);
+    expect(await rowCounts(world.db)).toEqual(before);
+    monitor.stop();
+  });
+});
 
 function session(role: string, userId = 'user-1'): () => Response {
   return () => new Response(JSON.stringify({ success: true, data: { userId, tenantId: 'tenant-1', role, offlineMaxDays: 30 } }), { status: 200, headers: { 'content-type': 'application/json' } });

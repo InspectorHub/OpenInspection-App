@@ -39,6 +39,15 @@ function fakeApp(options: { failFirst?: boolean } = {}): AppLike & { emit(url: s
 const STRAY = 'io.inspectorhub.app:/oauth/callback?code=abc&state=stray';
 
 describe('callback router', () => {
+  it('drops a cold-start callback before a flow is bound, making no network request', () => {
+    const app = fakeApp();
+    const router = registerCallbackRouter(app);
+    app.emit(STRAY);
+    const networkRequests = vi.fn((_url: string) => Promise.resolve(null));
+    router.bind({ handleCallback: networkRequests });
+    expect(networkRequests).not.toHaveBeenCalled();
+  });
+
   it('a non-string url and an undefined or non-object event are dropped before the flow sees them', () => {
     const app = fakeApp();
     const router = registerCallbackRouter(app);

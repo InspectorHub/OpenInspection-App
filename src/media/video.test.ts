@@ -4,7 +4,8 @@ import { createManualClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { sweepOrphanFiles, ORPHAN_MIN_AGE_MS } from './sweep';
 import { resolveUploadUrl } from './native-uploader';
-import { createMediaStore, MAX_VIDEO_BYTES } from './store';
+import { MAX_VIDEO_BYTES } from './media-types';
+import { createMediaStore } from './store';
 import { createMediaWorld, INSPECTION, jpegBlob, photoRecord } from './test-support/fakes';
 import { STREAM_HOST, videoBytes, videoRecord } from './test-support/video-fakes';
 import {

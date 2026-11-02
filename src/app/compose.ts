@@ -1,25 +1,24 @@
-import { Capacitor } from '@capacitor/core';
-import { createCapacitorAuthSession, type AuthSession } from '../auth/auth-session';
+import type { AuthSession } from '../auth/auth-session';
 import { createHttp, type FetchLike, type Http } from '../auth/http';
 import { createLoginFlow, type LoginFlow } from '../auth/pkce-login';
 import { createRegistrar, type Registrar } from '../auth/registration';
 import { fetchCompat, loadClientId } from '../auth/server-config';
 import { createTokenManager, type TokenManager } from '../auth/tokens';
-import { systemClock, type Clock } from '../platform/clock';
+import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
-import { closeRealCapacitorDb, openRealCapacitorDb } from '../platform/db-capacitor';
-import { createRealFiles, type Files } from '../platform/files';
-import { createMemoryKeyValue, createPreferencesKeyValue, type KeyValue } from '../platform/kv';
-import { createRealSecureStore, type SecureStore } from '../platform/secure-store';
+import type { Files } from '../platform/files';
+import { createMemoryKeyValue, type KeyValue } from '../platform/kv';
+import type { SecureStore } from '../platform/secure-store';
 import { recordRefreshed, recordVerified, setRevoked } from '../offline/lock-state';
-import { Browser } from '@capacitor/browser';
-import { createRealNotificationPermission, type NotificationPermissionPort } from '../platform/notifications';
+import type { Sharer } from '../export/share-package';
+import type { NotificationPermissionPort } from '../platform/notifications';
+import { unavailableGallery, type PhotoGallery } from '../platform/photo-gallery';
+import { createGallerySetting, type GallerySetting } from '../field/gallery-copy';
+import type { DecodeImage } from '@inspectorhub/field-ui';
 import { createClientState, type ClientStateController } from './client-state';
 import { createNotificationAsk, type NotificationAsk } from './notification-ask';
 
-export type ClientPlatform = 'android' | 'ios';
-
-export const DATABASE_NAME = 'inspectorhub';
+export type ClientPlatform = 'android' | 'ios' | 'windows';
 
 /** Everything the screens use. Built once per launch, by `composeReal` or, in tests, by `composeWith`. */
 export interface AppServices {
@@ -47,8 +46,16 @@ export interface AppServices {
   notifications: NotificationPermissionPort;
   /** When to explain the notification permission and the memory of the answer. */
   notificationAsk: NotificationAsk;
+  /** Where a copy of a photo taken in the app can be put (the phone's gallery, a pictures folder). `available()` is false where this build cannot. */
+  photoGallery: PhotoGallery;
+  /** The device setting "Save photos I take to my gallery" (off until turned on). */
+  gallerySetting: GallerySetting;
+  /** Hands a finished export file to the system. Rejects when it cannot be opened or was dismissed. */
+  sharer: Sharer;
   /** Hands an https address to the system browser. Callers check the address first (`httpsHref`); rejects when it cannot be opened. */
   openExternal(url: string): Promise<void>;
+  /** Optional host decoder for image formats the renderer cannot decode, such as desktop HEIC. */
+  decodeImage?: DecodeImage;
   /**
    * Calls the listener after the server accepted this device (a token refresh or a session check) and the verification was
    * recorded. For flows that should look again once the grant is known to be good. Returns the unsubscribe function.
@@ -71,8 +78,14 @@ export interface ComposeParts {
   kv?: KeyValue;
   /** The notification permission. Defaults to one that reports `unsupported`. */
   notifications?: NotificationPermissionPort;
+  /** The gallery a copy of a photo can be saved to. Defaults to one that is not available, so nothing offers to save. */
+  photoGallery?: PhotoGallery;
   builtAt?: string;
   openExternal?: (url: string) => Promise<void>;
+  /** Defaults to one that always rejects, for a build that cannot share. */
+  sharer?: Sharer;
+  /** Optional host decoder for image formats the renderer cannot decode. */
+  decodeImage?: DecodeImage;
   closeDb?: () => Promise<void>;
 }
 
@@ -145,63 +158,16 @@ export function composeWith(parts: ComposeParts): AppServices {
     kv,
     notifications,
     notificationAsk: createNotificationAsk({ kv, permission: notifications }),
+    photoGallery: parts.photoGallery ?? unavailableGallery,
+    gallerySetting: createGallerySetting(kv),
     refreshCompat,
     openExternal: parts.openExternal ?? (() => Promise.reject(new Error('This build cannot open links'))),
+    ...(parts.decodeImage === undefined ? {} : { decodeImage: parts.decodeImage }),
     onTokenVerified,
+    sharer: parts.sharer ?? { share: () => Promise.reject(new Error('This build cannot share files')) },
     close: parts.closeDb ?? (() => Promise.resolve()),
   };
 }
 
-/** Anything that is not iOS reports as Android, which includes the browser used for development. */
-export function toClientPlatform(capacitorPlatform: string): ClientPlatform {
-  return capacitorPlatform === 'ios' ? 'ios' : 'android';
-}
-
-/** The device adapters `composeReal` opens; tests substitute fakes. */
-export interface RealAdapters {
-  openDb(): Promise<Db>;
-  closeDb(): Promise<void>;
-  openStore(): Promise<SecureStore>;
-}
-
 /** The page's `fetch`, called bare: a WebView throws `Illegal invocation` if it is called as a method of another object. */
 export const realFetch: FetchLike = (input, init) => fetch(input, init);
-
-const realAdapters: RealAdapters = {
-  openDb: () => openRealCapacitorDb({ name: DATABASE_NAME }),
-  closeDb: () => closeRealCapacitorDb(DATABASE_NAME),
-  openStore: () => createRealSecureStore(),
-};
-
-/**
- * The real adapters behind one call. Rejects with `SchemaTooNewError` when the stored
- * database was written by a newer app, and with `SchemaDriftError` when a development device still carries an
- * earlier draft of version 1; the caller shows a blocking screen for either.
- * When the secure store cannot be opened the database is closed again before the error is rethrown,
- * so a failed launch leaves no connection open.
- */
-export async function composeReal(adapters: RealAdapters = realAdapters): Promise<AppServices> {
-  const db = await adapters.openDb();
-  let store: SecureStore;
-  try {
-    store = await adapters.openStore();
-  } catch (err) {
-    await adapters.closeDb().catch(() => undefined);
-    throw err;
-  }
-  return composeWith({
-    db,
-    files: createRealFiles(),
-    store,
-    fetch: realFetch,
-    authSession: createCapacitorAuthSession(),
-    clock: systemClock,
-    platform: toClientPlatform(Capacitor.getPlatform()),
-    appVersion: __APP_VERSION__,
-    builtAt: __APP_BUILT_AT__,
-    kv: createPreferencesKeyValue(),
-    notifications: createRealNotificationPermission(toClientPlatform(Capacitor.getPlatform())),
-    openExternal: (url) => Browser.open({ url }),
-    closeDb: adapters.closeDb,
-  });
-}

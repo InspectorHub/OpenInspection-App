@@ -1,7 +1,8 @@
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier, generateRandomState } from 'oauth4webapi';
 import type { Clock } from '../platform/clock';
 import type { Db } from '../platform/db';
-import { CALLBACK_SCHEME, parseCallbackUrl, PENDING_LOGIN_TTL_MS, REDIRECT_URI, type AuthSession } from './auth-session';
+import { PENDING_LOGIN_TTL_MS, type AuthSession } from './auth-session';
+import { CALLBACK_SCHEME, parseCallbackUrl, REDIRECT_URI } from './callback-constants';
 import { AuthError, isAuthError } from './errors';
 import type { Http } from './http';
 import type { Registrar } from './registration';

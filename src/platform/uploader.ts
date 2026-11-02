@@ -1,5 +1,3 @@
-import { Uploader } from '@capgo/capacitor-uploader';
-
 /** The options of `startUpload` that this app uses; a subset of the plugin's. */
 export interface UploaderStartOptions {
   /** `file://` uri of the file to send. */
@@ -34,14 +32,4 @@ export interface UploaderPluginLike {
   addListener(name: 'events', listener: (event: UploaderEventLike) => void): Promise<{ remove(): Promise<void> }>;
   /** Removes a delivered `completed`/`failed` event from the plugin's persistent cache (Android; a no-op on iOS). */
   acknowledgeEvent(options: { eventId: string }): Promise<void>;
-}
-
-/** Thin real-plugin wiring. The notification shade is handled natively (`UploadShade.java`): one rate-limited notice, nothing per file. */
-export function createRealUploaderPlugin(): UploaderPluginLike {
-  return {
-    startUpload: (options) => Uploader.startUpload(options),
-    removeUpload: (options) => Uploader.removeUpload(options),
-    addListener: (name, listener) => Uploader.addListener(name, (event) => listener(event)),
-    acknowledgeEvent: (options) => Uploader.acknowledgeEvent(options),
-  };
 }

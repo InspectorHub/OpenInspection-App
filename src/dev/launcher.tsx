@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import type { AppServices } from '../app/compose';
+import type { DiagDeps } from './checks/types';
 import { Button } from '../ui/kit';
 
 const Diagnostics = lazy(() => import('./diagnostics').then((module) => ({ default: module.Diagnostics })));
@@ -7,15 +8,16 @@ const Diagnostics = lazy(() => import('./diagnostics').then((module) => ({ defau
 export interface DiagnosticsLauncherProps {
   services: AppServices;
   origin: string | null;
+  deps?: DiagDeps;
 }
 
 /** The button that opens the diagnostics screen. Only ever loaded by a development build. */
-export default function DiagnosticsLauncher({ services, origin }: DiagnosticsLauncherProps) {
+export default function DiagnosticsLauncher({ services, origin, deps }: DiagnosticsLauncherProps) {
   const [open, setOpen] = useState(false);
   if (open) {
     return (
       <Suspense fallback={null}>
-        <Diagnostics services={services} origin={origin} onClose={() => setOpen(false)} />
+        <Diagnostics services={services} origin={origin} onClose={() => setOpen(false)} {...(deps === undefined ? {} : { deps })} />
       </Suspense>
     );
   }

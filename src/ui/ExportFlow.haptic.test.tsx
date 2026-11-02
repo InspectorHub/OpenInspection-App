@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createExportWorld } from '../export/test-support/world';
+import { createExportWorld, seedInspection } from '../export/test-support/world';
 import { setHapticsPort } from '../platform/haptics';
 import { ready, threeWithOneQuarantined, view } from './test-support/export-view';
 
@@ -31,6 +31,8 @@ describe('export and haptics', () => {
     const notify = vi.fn(() => Promise.resolve());
     setHapticsPort({ notify });
     const world = await createExportWorld();
+    // Only a quarantined inspection: the question is asked (the person could tick it in), and the build then finds nothing.
+    await seedInspection(world, 'insp-q', { quarantined: true, writes: ['update'] });
     view(world);
     await ready();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Export' }));

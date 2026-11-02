@@ -8,19 +8,18 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import { systemClock, type Clock } from '../platform/clock';
 import type { UploaderPluginLike } from '../platform/uploader';
 import { isValidMediaId } from './errors';
-import { isValidUploadedKey, MEDIA_CONTENT_TYPES, type MediaRow, type MediaStore } from './store';
+import { MEDIA_CONTENT_TYPES } from './media-types';
+import { isValidUploadedKey, type MediaRow, type MediaStore } from './store';
 import {
   clampRetryAfter,
   failure,
   isRecord,
   MAX_RETRY_AFTER_MS,
   resolveUploadUrl as resolveSignedUploadUrl,
-  type AuthedResult,
   type Failure,
-  type KindContext,
-  type KindStrategy,
   type UploadFailureCode,
 } from './upload-kinds';
+import type { AuthedResult, KindContext, KindStrategy } from './upload-strategy';
 import { isExpectedVideoKey } from './video';
 
 export type { UploadFailureCode };

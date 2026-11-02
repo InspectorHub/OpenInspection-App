@@ -7,6 +7,7 @@ git tags; two workflows do the building:
 |---|---|---|
 | `.github/workflows/release-android.yml` | a pushed tag `vX.Y.Z`, or a manual run | on a tag: a signed APK, `SHA256SUMS` and a **draft** GitHub Release; from a branch: an unsigned APK as a pipeline check |
 | `.github/workflows/release-ios.yml` | a pushed tag `vX.Y.Z`, or a manual run on a tag | a signed build uploaded to TestFlight |
+| `.github/workflows/release-windows.yml` | a pushed tag `vX.Y.Z`, or a manual run | on a tag: a Windows installer and a **draft** GitHub Release; a manual run: an unsigned unpacked app artifact |
 
 > **The iOS workflow has not uploaded a build to TestFlight.** The `v0.1.0` tag run passed its verification job, then waited at the
 > protected TestFlight environment. It needs an Apple developer account and the items listed under "iOS: what the workflow cannot do
@@ -16,7 +17,7 @@ git tags; two workflows do the building:
 > 0.3.0 or later in `package.json`). An older editor treats that answer as a failure, so a photo the server has already kept would be
 > reported as lost. Check the dependency before tagging.
 
-The current dependency is `@inspectorhub/field-ui` 0.5.0, which meets that prerequisite. Check it again when tagging a later version.
+The current dependency is `@inspectorhub/field-ui` 0.6.2, which meets that prerequisite. Check it again when tagging a later version.
 
 ## First tag run (`v0.1.0`, 2026-10-29)
 
@@ -51,10 +52,11 @@ in the data it keeps on the device, is a major version.
 
 The app sends its version as `X-Client-Version`. The engine can refuse versions below a minimum:
 
-- `NATIVE_MIN_VERSION_ANDROID` / `NATIVE_MIN_VERSION_IOS`: a version below this answers **426 Upgrade Required** for editor writes; the
+- `NATIVE_MIN_VERSION_ANDROID` / `NATIVE_MIN_VERSION_IOS` / `NATIVE_MIN_VERSION_WINDOWS`: a version below this answers **426 Upgrade Required** for editor writes; the
   app turns editing off, keeps uploading what it already holds, and shows an update-required screen. `NATIVE_DOWNLOAD_URL_ANDROID`
   (an https address) gives that screen its button.
-- `NATIVE_RECOMMENDED_VERSION_ANDROID` / `NATIVE_RECOMMENDED_VERSION_IOS`: a dismissible banner, shown once per app version.
+- `NATIVE_RECOMMENDED_VERSION_ANDROID` / `NATIVE_RECOMMENDED_VERSION_IOS` / `NATIVE_RECOMMENDED_VERSION_WINDOWS`: a dismissible banner, shown once per app version.
+- `NATIVE_DOWNLOAD_URL_WINDOWS`: an HTTPS download URL used by the Windows update-required screen; point it at the GitHub Releases page.
 
 Before you publish a release:
 
@@ -219,7 +221,9 @@ These belong to the Apple developer account holder. The workflow cannot create a
   an encryption implementation. Upload the classification documents in App Store Connect, wait for Apple to issue the compliance
   code, then record it as `ITSEncryptionExportComplianceCode` in `ios/App/App/Info.plist` and commit it. The workflow prints a
   warning when the key is missing; App Store Connect then asks for the answer on every build. The owner is the account holder; verify
-  every regulation you cite against its primary text.
+  every regulation you cite against its primary text. The code is not a secret, but it belongs only in `Info.plist`. Once it is
+  committed the warning step stays in the workflow, so removing the key later is noticed. Whether App Store Connect then stops asking for the
+  answer on a build is to be confirmed by the owner after the first successful upload.
 - [ ] Beta App Review material for external testing: review notes and a demo account. App Store Connect's TestFlight "Test
   Information" (description, feedback email, locale) must also be filled in, because the upload step checks it before uploading.
 
@@ -227,19 +231,136 @@ Review notes can say how to check the native abilities by hand: switch on airpla
 and reopen to see the data is still there, then reconnect and watch it sync; the encrypted local storage, background upload and the
 system share sheet.
 
+### Making the certificate request and the .p12 without a Mac
+
+**Unverified.** These `openssl` steps are community practice. They were not checked against Apple's documentation and have not been run for
+this project; the owner confirms or corrects them after the first successful signed upload. Keep the private key and the `.p12` in two
+offline backups, in separate places, as for the Android keystore, and never commit them or paste them into an issue, a pull request or a chat.
+
+```bash
+# 1. A private key and a certificate signing request. Keep the .key file; Apple only ever sees the .csr.
+openssl genrsa -out ios_distribution.key 2048
+openssl req -new -key ios_distribution.key -out ios_distribution.csr -subj "/emailAddress=<your email>/CN=<your name>/C=<country code>"
+
+# 2. In the Apple developer portal (Certificates, Identifiers & Profiles) create an Apple Distribution certificate from the .csr and
+#    download the .cer file. The portal's wording was not checked here.
+
+# 3. Combine the certificate and the key into a .p12. The password comes from the environment so it is not left in the shell history.
+openssl x509 -inform DER -in distribution.cer -out distribution.pem
+P12_PASSWORD='<choose one>' openssl pkcs12 -export -inkey ios_distribution.key -in distribution.pem -out distribution.p12 -passout env:P12_PASSWORD
+
+# 4. Encode it as one line of base64 for the IOS_DISTRIBUTION_CERT_P12_BASE64 secret (GNU coreutils; on macOS use: base64 -i distribution.p12).
+base64 -w0 distribution.p12
+```
+
+The preflight below checks that the encoded value is a single line of base64 whose first decoded byte is `0x30`. It cannot tell whether the
+certificate is the right one. Reports from others say that a `.p12` written by OpenSSL 3 with its default encryption can fail to import on a Mac
+and needs the `-legacy` option; that is also unverified here.
+
 ### TestFlight cadence
 
 A TestFlight build expires **90 days** after upload. The release rule is to ship a new build at least every **60 days** while testers
 depend on it, which leaves a month of slack; a new tag is all it takes. External testing also needs the first build of each version to pass Beta App Review.
 
+### What the `testflight` job does, in order
+
+The job runs only for a tag, in the `ios-release` environment, on `macos-26`.
+
+1. **Preflight.** `scripts/ios-release-preflight.mjs` runs first, before `npm ci` and before any certificate is imported. It reads the six
+   names in the table above and fails the job, with one `::error::` line per problem, when any is unset or empty, has leading or trailing
+   whitespace, or has the wrong shape: the certificate must be a single line of base64 whose first decoded byte is `0x30`, and the API key
+   must contain a `BEGIN PRIVATE KEY` line (a final line break is allowed on the key, because a pasted `.p8` file ends with one). Each message
+   names the variable and the reason and never contains the value. It checks the shape only: it cannot tell whether a value is correct, and
+   it knows no Apple rule. The values reach the step only through `env:`; no `run:` block in the workflow mentions a secret, and
+   `src/release-workflows.test.ts` checks both.
+2. `npm ci`, `npm run build`, the version and build number (see "The version"), `npx cap sync ios`.
+3. **Xcode.** The job prints `xcodebuild -version` and fails unless the major version is 26 or higher.
+4. The encryption compliance warning, then the certificate import and the provisioning profile download.
+5. **ExportOptions.plist.** `ios/ExportOptions.plist` is a template that names the export method (`app-store-connect`), manual signing and
+   the bundle id, with placeholders for the team id and the profile name. The job copies it to the runner's temporary directory and fills the
+   team id (the `APPLE_TEAM_ID` variable) and the profile name (from the download step) in with `plutil`, so neither is stored in the
+   repository.
+6. **Build.** `xcodebuild archive` (Release, `generic/platform=iOS`, manual signing, the `Apple Distribution` identity and the profile name as
+   build settings), then `xcodebuild -exportArchive` with that options file. No secret is passed on either command line: the certificate is already
+   in the keychain.
+7. **IPA check.** The job requires `App.ipa` to exist in the export directory and then checks that it contains
+   `Payload/App.app/PrivacyInfo.xcprivacy`, that `codesign -dvv` reports an `Authority` of `Apple Distribution`, and that
+   `ITSAppUsesNonExemptEncryption` in its `Info.plist` is `true`. The upload step reads the same file.
+8. **Upload** to TestFlight with `apple-actions/upload-testflight-build`.
+
 ### What was assumed and is unverified
 
-`release-ios.yml` follows the plan text and the action documentation, but no run has happened. In particular the following are
-untested: manual signing with the profile name returned by the download step, the `Apple Distribution` certificate selector, the
-export path `ios/App/output/App.ipa` that Capacitor's build writes, and the upload step's wait for TestFlight processing. Fix what
-the first run shows, and tighten this page.
+The workflow cannot sign yet: it needs the Apple account items above, and no run has passed the preflight. `release-ios.yml` follows the plan
+text and the action documentation, but nothing in it has run on a runner. The following are specifically untested; fix what the first run shows
+and tighten this page:
+
+- The spelling and effect of the `xcodebuild archive` and `-exportArchive` arguments, and that the `App` scheme archives with the settings
+  given on the command line.
+- That the first entry of the download step's `profiles` output carries the profile's name in a field called `name`, and that this name (not an
+  id) is what `PROVISIONING_PROFILE_SPECIFIER` and the options file expect.
+- That `plutil -replace provisioningProfiles -json ...` and `plutil -extract ITSAppUsesNonExemptEncryption raw` behave as the job assumes.
+- That the export writes `App.ipa` into the export directory (the check and the upload both read that exact name).
+- That the `codesign -dvv` output contains an `Authority=Apple Distribution` line for an App Store export.
+- The upload step's wait for TestFlight processing.
+- The CI simulator job and `scripts/ios-simulator-smoke.sh` (see `docs/development.md`): passed on an iPhone and an iPad simulator in CI run 41269612566. That is a simulator result only; no signed build has run on a physical device through this repository's workflows.
+- The `openssl` steps for the certificate (above).
 
 ## If a release is wrong
 
 Delete the draft Release and the tag (`git push upstream :refs/tags/vX.Y.Z`) and cut the next patch version. Do not move a tag that
 anyone may have built from, and never reuse a published version: Android refuses to install a lower `versionCode` over a higher one.
+
+## Windows desktop
+
+The Windows workflow builds x64 NSIS installers. A pushed `vX.Y.Z` tag runs verification, creates the installer, and leaves a draft
+GitHub Release for a maintainer to review and publish. A `workflow_dispatch` run produces an unsigned unpacked application artifact
+for CI inspection; it does not enter `windows-release`, sign files, or create a Release. The initial pilot is unsigned, so Windows
+SmartScreen may show its usual first-run warning. Unsigned builds do not use the in-app updater; install a newer version manually
+from the Releases page. Uninstalling keeps the local InspectorHub data directory.
+
+Before distributing a Windows build, configure the engine variables `NATIVE_MIN_VERSION_WINDOWS`,
+`NATIVE_RECOMMENDED_VERSION_WINDOWS`, and `NATIVE_DOWNLOAD_URL_WINDOWS`. The download URL should point to the Releases page. Follow
+the version policy above: never set a minimum above a version users can install.
+
+To check a downloaded installer in PowerShell, compare its hash with `SHA256SUMS-windows` and inspect its signature:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\InspectorHub-Setup-X.Y.Z.exe
+Get-AuthenticodeSignature .\InspectorHub-Setup-X.Y.Z.exe | Format-List Status,SignerCertificate
+```
+
+The unsigned pilot should report `NotSigned`. When Azure signing is enabled, the workflow requires `Valid`; compare the publisher
+shown in the job summary before publishing the draft.
+
+### Windows signing configuration
+
+The protected GitHub environment is `windows-release`; the repository owner must create it, add required reviewers, and protect
+`v*` tags. The default `OI_WINDOWS_SIGNING` environment variable is `none`, matching the unsigned pilot. To switch to Azure Artifact
+Signing (formerly Trusted Signing), the owner must create the service account and certificate profile first, then set the following
+environment-scoped entries:
+
+| Name | Kind | Holds |
+|---|---|---|
+| `OI_WINDOWS_SIGNING` | variable | `none` or `azure` |
+| `AZURE_TENANT_ID` | secret | Microsoft Entra tenant ID |
+| `AZURE_CLIENT_ID` | secret | Signing app registration client ID |
+| `AZURE_CLIENT_SECRET` | secret | Signing app registration client secret |
+| `AZURE_SIGNING_ENDPOINT` | variable | Region-specific Artifact Signing endpoint |
+| `AZURE_SIGNING_ACCOUNT` | variable | Artifact Signing account name |
+| `AZURE_SIGNING_PROFILE` | variable | Certificate profile name |
+| `WINDOWS_PUBLISHER_NAME` | variable | Exact publisher name in the signing certificate |
+
+The helper is signed before its SHA-256 is embedded in the packaged metadata; electron-builder then signs the app and installer
+without changing those helper bytes. Only the tag-triggered `sign` job can read environment credentials. A draft release is never
+published automatically.
+
+### HEIC photos on Windows
+
+The Windows application does not include a HEIC or HEVC decoder. A small helper installed with the app calls Windows imaging
+components. Computers without Microsoft's HEIF Image Extensions and HEVC Video Extensions cannot decode iPhone HEIC photos; the app
+explains how to install the extensions, or users can export the photo as JPEG from the phone. The helper source is in
+`native/win-heic-helper/` and is signed together with the app when signing is enabled.
+
+The Web editor does not include an image decoder. Android and iOS apps continue to use the system WebView decoder. This release has
+no decoder sign-off record or license-approval step; if a bundled decoder is added later, revisit this documentation and the release
+process. Published versions are not recalled because update clients may already have seen them; ship a corrected patch version.

@@ -10,12 +10,17 @@ import { Button, Screen } from './kit';
 import { AboutSection } from './settings/AboutSection';
 import { DeviceSection } from './settings/DeviceSection';
 import { ExternalLink } from './settings/ExternalLink';
+import { GallerySection } from './settings/GallerySection';
+import { ImportEntry } from './settings/ImportEntry';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
 import { UnreferencedPhotosSection } from './settings/UnreferencedPhotosSection';
 import { SignOutControl } from './SignOutControl';
 import { useBackHandler } from './use-back-handler';
 import { useWaitingCount } from './use-waiting-count';
+import { useOnline } from './worklist/useOnline';
+import { DesktopSettings } from './DesktopSettings';
+import type { DesktopSettingsPort } from '../desktop/updater-port';
 
 export interface SettingsProps {
   services: AppServices;
@@ -26,12 +31,16 @@ export interface SettingsProps {
   onBack(): void;
   /** Opens the export of everything on the device. */
   onExport(): void;
+  /** Opens the import of an offline package. */
+  onImport(): void;
   onSignedOut(): void;
   onCleared(): void;
   /** See `ClearLocalDataControl`. */
   onWiping?(wiping: boolean): void;
   timers?: TimerPort;
   locale?: string;
+  /** Omitted by Capacitor; present only in the Electron renderer. */
+  desktop?: DesktopSettingsPort;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -52,11 +61,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tied to the server's version policy: whatever else is refused, a person can always get their data out and their sign-in off.
  * The back key and the Back button both return to the list.
  */
-export function Settings({ services, origin, stack, onBack, onExport, onSignedOut, onCleared, onWiping, timers, locale }: SettingsProps) {
+export function Settings({ services, origin, stack, onBack, onExport, onImport, onSignedOut, onCleared, onWiping, timers, locale, desktop }: SettingsProps) {
   const language = locale ?? FORMAT_LOCALE;
   const state = useClientState(services.clientState);
   const policy = clientPolicy(state, origin);
   const accountUrl = factsFor(state, origin).accountUrl;
+  const online = useOnline();
   const waiting = useWaitingCount(services.db, timers === undefined ? {} : { timers });
   const heading = useRef<HTMLHeadingElement>(null);
 
@@ -87,17 +97,20 @@ export function Settings({ services, origin, stack, onBack, onExport, onSignedOu
       <SyncSection services={services} stack={stack} canSync={policy.canSync} />
       <DeviceSection services={services} origin={origin} waiting={waiting} locale={language} />
       <NotificationsSection services={services} />
+      <GallerySection services={services} />
       {stack !== null && <UnreferencedPhotosSection store={stack.store} reconciler={stack.mediaReconciler} />}
       <Section title="Your data">
         <Button variant="secondary" onClick={onExport}>
           Export unsent data
         </Button>
+        <ImportEntry availability={{ hasSession: stack !== null, online, canSync: policy.canSync, canEdit: policy.canEdit }} onImport={onImport} />
         <ClearLocalDataControl services={services} origin={origin} onCleared={onCleared} onWiping={onWiping} />
       </Section>
       <Section title="Account">
         <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
         {accountUrl !== null && <ExternalLink services={services} url={accountUrl} label="Delete account" showHost />}
       </Section>
+      {desktop !== undefined && <DesktopSettings desktop={desktop} />}
       <AboutSection services={services} locale={language} />
     </Screen>
   );

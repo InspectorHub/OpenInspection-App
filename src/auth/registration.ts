@@ -1,5 +1,5 @@
 import type { Db } from '../platform/db';
-import { REDIRECT_URI } from './auth-session';
+import { REDIRECT_URI } from './callback-constants';
 import { AuthError } from './errors';
 import type { Http } from './http';
 import { clearClientId, loadClientId, saveClientId, serverEndpoints } from './server-config';

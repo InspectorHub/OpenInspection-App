@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../auth/errors';
+import { DesktopOpenError } from '../desktop/db-ipc';
 import { refreshTokenKey } from '../auth/server-config';
-import { SchemaDriftError, SchemaTooNewError } from '../platform/schema';
+import { DbKeyLostError, SchemaDriftError, SchemaTooNewError } from '../platform/schema';
 import { boot, decideScreen } from './boot';
 import { connectToServer } from './connect';
 import { createSignedInWorld as signedInWorld, createWorld, restartOffline } from './test-support/world';
@@ -84,6 +85,29 @@ describe('opening the app', () => {
     expect(result).toEqual({ services: null, screen: { kind: 'schema_drift' } });
   });
 
+  it('a database whose key is gone: its own blocking screen, no services, not the generic open failure', async () => {
+    const result = await boot(() => Promise.reject(new DbKeyLostError()), SECURE);
+    expect(result).toEqual({ services: null, screen: { kind: 'db_key_lost' } });
+    // Control: any other error still lands on the generic screen.
+    expect(await boot(() => Promise.reject(new Error('boom')), SECURE)).toEqual({ services: null, screen: { kind: 'open_failed' } });
+  });
+
+  it('an unexpected open failure is logged with its name and message, so a device screenshot can be explained', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await boot(() => Promise.reject(new Error('disk is on fire')), SECURE);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(String(spy.mock.calls[0]?.[0])).toBe('[boot] storage open failed: Error: disk is on fire');
+      // Control: the failures that have their own screen are expected states, not logged as errors.
+      spy.mockClear();
+      await boot(() => Promise.reject(new SchemaTooNewError(9, 1)), SECURE);
+      await boot(() => Promise.reject(new DbKeyLostError()), SECURE);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('control: an ordinary open reaches the decision', async () => {
     const world = await createWorld();
     const result = await boot(() => Promise.resolve(world.services), SECURE);
@@ -94,6 +118,11 @@ describe('opening the app', () => {
   it('any other open failure is a distinct screen, not the newer-data one', async () => {
     const result = await boot(() => Promise.reject(new AuthError('storage_failed')), SECURE);
     expect(result).toEqual({ services: null, screen: { kind: 'open_failed' } });
+  });
+
+  it('keeps the typed desktop open reason for the recovery screen', async () => {
+    const result = await boot(() => Promise.reject(new DesktopOpenError('key-unreadable')), SECURE);
+    expect(result).toEqual({ services: null, screen: { kind: 'open_failed', reason: 'key-unreadable' } });
   });
 
   it('a failing first read closes the database it opened and shows the open-failed screen', async () => {

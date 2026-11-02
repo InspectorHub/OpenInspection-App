@@ -4,6 +4,18 @@ import { createDiagRig } from '../test-support';
 import { filesCheck, sanitizeMessage, STAT_MESSAGE_LIMIT } from './files';
 
 describe('files', () => {
+  it('writes diagnostic JPEG data with its real file signature', async () => {
+    const rig = await createDiagRig({ signedIn: false });
+    let prefix: Uint8Array | undefined;
+    const original = rig.ctx.services.files.write;
+    rig.ctx.services.files.write = async (path, data) => {
+      if (path === 'media/diag-file.jpg') prefix = data.slice(0, 3);
+      return original(path, data);
+    };
+    await filesCheck.run(rig.ctx);
+    expect(prefix).toEqual(Uint8Array.from([0xff, 0xd8, 0xff]));
+  });
+
   it('passes, reports the mtime unit and the raw missing-file answer, and removes what it wrote', async () => {
     const rig = await createDiagRig({ signedIn: false });
     const result = await filesCheck.run(rig.ctx);

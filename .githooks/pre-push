@@ -1,0 +1,3 @@
+#!/bin/sh
+# Local pre-push guard: vitest files related to the pushed changes. Install: npm run hooks:install
+exec node "$(git rev-parse --show-toplevel)/scripts/prepush-related-tests.mjs"

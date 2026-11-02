@@ -9,7 +9,7 @@ import type { Db } from '../../platform/db';
 import { createSqlJsDb } from '../../platform/db-sqljs';
 import type { FileEntry } from '../../platform/files';
 import { migrate } from '../../platform/schema';
-import type { Account } from '../../offline/outbox';
+import { accountKey, type Account } from '../../offline/outbox';
 import type { ReconcileOutcome } from '../../offline/reconciler';
 import type { ExportFilesPort } from '../exporter';
 import type { Sharer } from '../share-package';
@@ -211,6 +211,8 @@ export interface SeedOptions {
   writes?: ('create' | 'update' | 'complete')[];
   /** Overrides the state of every queued write seeded (a quarantined inspection holds them as orphaned). */
   writeState?: 'pending' | 'failed' | 'orphaned';
+  /** The address the device has cached for the inspection (its `/api/inspections/{id}` read). Nothing is cached when omitted. */
+  address?: string;
 }
 
 const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/heic': 'heic' } as const;
@@ -240,6 +242,11 @@ export async function seedInspection(world: ExportWorld, id: string, options: Se
     'INSERT INTO work_package (inspection_id, report_id, refreshed_at, quarantine_source, server_confirmed, tenant_id, user_id, purging) VALUES (?, ?, 1, ?, ?, ?, ?, ?)',
     [id, reportId, quarantined ? 'reconcile_missing' : null, options.confirmed === false ? 0 : 1, owner.tenantId, owner.userId, options.purging === true ? 1 : 0],
   );
+
+  if (options.address !== undefined) {
+    const body = JSON.stringify({ data: { inspection: { propertyAddress: options.address } } });
+    await world.db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, ?, 1, ?)', [accountKey(owner), `/api/inspections/${id}`, body, id]);
+  }
 
   const edits = options.edits ?? 2;
   if (edits > 0) {

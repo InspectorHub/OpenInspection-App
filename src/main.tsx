@@ -4,15 +4,17 @@ import { SystemBars } from '@capacitor/core';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { registerCallbackRouter } from './app/callbacks';
-import { composeReal } from './app/compose';
-import { createRealStackFactory } from './app/real-stack';
+import { composeReal, createRealStackFactory } from './app/compose-capacitor';
 import { createCapacitorAppState } from './offline/lock-monitor';
-import { createRealNetwork } from './platform/network';
+import { createRealHaptics } from './platform/haptics-capacitor';
+import { setHapticsPort } from './platform/haptics';
+import { createRealNetwork } from './platform/network-capacitor';
 import './styles.css';
 import { registerBackButton } from './ui/back-button';
 import { followSystemColorScheme } from './ui/color-scheme';
 import { createSystemBarsSync } from './ui/system-bars';
 
+setHapticsPort(createRealHaptics());
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');
 

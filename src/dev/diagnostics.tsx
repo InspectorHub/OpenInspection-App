@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
+import { appDiagnostics } from '../app/diagnostics';
 import { appTimings } from '../app/timings';
 import { Body, Button, Heading, INPUT_CLASSES, Screen } from '../ui/kit';
 import { useActionLatch } from '../ui/latch';
-import { CHECKS, EXTRAS, stopKillSession } from './checks';
+import { CHECKS, EXTRAS, stopDesktopKillSession, stopKillSession } from './checks';
 import type { CheckDef, CheckResult, DiagContext, DiagDeps } from './checks/types';
 import { logResult } from './log';
 import { createRealDiagDeps } from './real-deps';
@@ -62,6 +63,7 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
   useEffect(() => {
     return () => {
       void stopKillSession();
+      void stopDesktopKillSession();
     };
   }, []);
 
@@ -162,6 +164,18 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
             appTimings.summary().map((entry) => (
               <p key={entry.code} className="font-ih-mono text-xs break-words text-ih-fg-2">
                 {`${entry.code} first ${String(entry.first)} ms, latest ${entry.last.map((ms) => `${String(ms)} ms`).join(', ')}`}
+              </p>
+            ))
+          )}
+        </section>
+        <section data-testid="recent-diagnostics" className="flex flex-col gap-2">
+          <h2 className="text-base font-semibold text-ih-fg-1">Recent diagnostic codes</h2>
+          {appDiagnostics.recent().length === 0 ? (
+            <p className="font-ih-mono text-xs text-ih-fg-3">None since the app started.</p>
+          ) : (
+            appDiagnostics.recent().map((code, index) => (
+              <p key={`${String(index)}-${code}`} className="font-ih-mono text-xs break-words text-ih-fg-2">
+                {code}
               </p>
             ))
           )}

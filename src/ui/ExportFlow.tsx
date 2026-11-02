@@ -7,13 +7,13 @@ import {
   CHECKING_TEXT,
   EXPORT_CONFIRM_LABEL,
   EXPORT_TITLE,
-  FAILURE_TEXT,
   INCLUDE_QUARANTINED_LABEL,
   LEFTOVER_NOTICE,
   NOTHING_TO_EXPORT,
   PREPARE_FAILED_TEXT,
   PREPARE_RETRY_LABEL,
   UNCONFIRMED_NOTICE,
+  failureText,
   changedText,
   countsText,
   reportIdNotice,
@@ -24,7 +24,7 @@ import {
 } from '../export/copy';
 import { createExporter, type ExportFilesPort, type ExportOutcome, type Preflight } from '../export/exporter';
 import type { ReconcileGate } from '../export/reconcile-gate';
-import { createRealSharer, type Sharer } from '../export/share-package';
+import type { Sharer } from '../export/share-package';
 import { haptic } from '../platform/haptics';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExportResult } from './ExportResult';
@@ -33,10 +33,10 @@ import { useActionLatch } from './latch';
 
 export interface ExportFlowProps {
   /** What an export reads and writes; `AppServices` satisfies it. */
-  services: { db: Db; files: ExportFilesPort; clock: Clock; platform: ClientPlatform };
+  services: { db: Db; files: ExportFilesPort; clock: Clock; platform: ClientPlatform; sharer: Sharer };
   /** Asks the server which inspections still exist. Absent where no session runs (the lock screen). */
   reconcile?: ReconcileGate | undefined;
-  /** Replaces the system share sheet. Tests only. */
+  /** Replaces `services.sharer`. Tests only. */
   sharer?: Sharer | undefined;
   /** Replaces the timers that schedule the delayed deletion on Android. Tests only. */
   timers?: TimerPort | undefined;
@@ -55,8 +55,8 @@ const UNKNOWN_PREFLIGHT: Preflight = { confirmed: false, included: 0, quarantine
  */
 export function ExportFlow({ services, reconcile, sharer, timers, only, onClose }: ExportFlowProps) {
   const exporter = useMemo(
-    () => createExporter({ db: services.db, files: services.files, clock: services.clock, platform: services.platform, sharer: sharer ?? createRealSharer(), timers, reconcile }),
-    [services.db, services.files, services.clock, services.platform, sharer, timers, reconcile],
+    () => createExporter({ db: services.db, files: services.files, clock: services.clock, platform: services.platform, sharer: sharer ?? services.sharer, timers, reconcile }),
+    [services.db, services.files, services.clock, services.platform, services.sharer, sharer, timers, reconcile],
   );
   const [prep, setPrep] = useState<Preflight | null>(null);
   const [include, setInclude] = useState(false);
@@ -99,12 +99,21 @@ export function ExportFlow({ services, reconcile, sharer, timers, only, onClose 
       outcome = { kind: 'failed', code: 'build_failed' };
     }
     setBusy(false);
-    if (outcome.kind === 'failed') setError(FAILURE_TEXT[outcome.code]);
-    else if (outcome.kind === 'busy') setError(FAILURE_TEXT.busy);
+    if (outcome.kind === 'failed') setError(failureText(outcome.code, services.platform));
+    else if (outcome.kind === 'busy') setError(failureText('busy', services.platform));
     else {
       if (outcome.kind === 'shared') haptic('success');
       setFinished(outcome);
     }
+  }
+
+  // Nothing on the device to export (and nothing quarantined that a tick could add): say so at once, with no question to confirm.
+  if (finished === null && prep !== null && !prepareFailed && only === undefined && prep.included === 0 && prep.quarantined === 0) {
+    return (
+      <ExportResult title="Nothing to export" onClose={onClose}>
+        <Notice tone="info">{NOTHING_TO_EXPORT}</Notice>
+      </ExportResult>
+    );
   }
 
   if (finished !== null) {
@@ -119,7 +128,7 @@ export function ExportFlow({ services, reconcile, sharer, timers, only, onClose 
     if (finished.kind === 'shared' || finished.kind === 'cancelled') {
       return (
         <ExportResult title={finished.kind === 'shared' ? 'Export finished' : 'Export cancelled'} onClose={onClose}>
-          <Notice tone="info">{summaryText(finished)}</Notice>
+          <Notice tone="info">{summaryText(finished, services.platform)}</Notice>
           {finished.unconfirmed && <Notice tone="watch">{UNCONFIRMED_NOTICE}</Notice>}
           {leftOutNotes(finished).map((note) => (
             <Notice key={note} tone="watch">
