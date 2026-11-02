@@ -15,6 +15,8 @@ export interface FixtureSpec {
   /** Extra bytes of Yjs state per inspection, to make a package bigger. */
   yjsBytes?: number;
   exportedAt?: string;
+  /** A `label` written into the manifest entry of these inspections, whatever its type (hostile values included). */
+  labels?: Readonly<Record<string, unknown>>;
 }
 
 export const inspectionId = (index: number): string => `insp-${String(index)}`;
@@ -54,7 +56,7 @@ export function makePackage(spec: FixtureSpec): { zip: Uint8Array; ids: string[]
     deviceId: 'device-1',
     exportedBy: 'user-1',
     exportedAt: spec.exportedAt ?? '2026-10-20T09:30:00.000Z',
-    inspections: ids.map((id, i) => ({ id, reportId: `rep-${String(i)}` })),
+    inspections: ids.map((id, i) => ({ id, reportId: `rep-${String(i)}`, ...(spec.labels !== undefined && id in spec.labels ? { label: spec.labels[id] } : {}) })),
   });
   files['outbox.json'] = enc(outbox);
   files['media/index.json'] = enc(media);

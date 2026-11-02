@@ -165,7 +165,7 @@ export function buildPackage(plan: ExportPlan, deps: BuildDeps): BuiltPackage {
         deviceId: plan.deviceId,
         exportedBy: plan.identity.userId,
         exportedAt: deps.exportedAt,
-        inspections: plan.inspections.map((inspection) => ({ id: inspection.id, reportId: inspection.reportId })),
+        inspections: plan.inspections.map((inspection) => ({ id: inspection.id, reportId: inspection.reportId, ...(inspection.label === undefined ? {} : { label: inspection.label }) })),
       }),
     );
     zip.end();

@@ -164,6 +164,7 @@ export function ImportPackage({ api, tenantId, share, now, onClose, importDeps }
       {state.kind === 'done' && (
         <ImportResult
           outcome={state.outcome}
+          labels={state.labels}
           saveNote={saveNote}
           saving={saving}
           onSave={save}

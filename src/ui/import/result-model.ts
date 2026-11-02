@@ -1,5 +1,6 @@
 import { PACKAGE_MAX_AGE_DAYS, PACKAGE_MAX_FUTURE_SKEW_DAYS, type HeldBack } from '@inspectorhub/offline-package';
 import type { ImportOutcome, StopProblem } from '../../offline/import-package';
+import { cleanLabel } from '../../offline/cached-address';
 import { stripBidi } from '../worklist/format';
 import { answerText } from './copy';
 
@@ -14,13 +15,16 @@ import { answerText } from './copy';
  *  - Days in the "too old" and "dated ahead" sentences are the ones the server named; the shared package's own figures only when it named none.
  */
 
+/** One inspection in a list: named by its address when the file carried one, else by its id. */
+export type ResultRow = HeldBack & { name: string };
+
 export interface ResultGroup {
   key: string;
   /** What happened, in everyday words. Written for one or for several inspections. */
   heading: string;
   /** What to do next (and, where it is true, what is safe). */
   action: string;
-  rows: HeldBack[];
+  rows: ResultRow[];
   /** Trying the whole file again can help these. */
   retry: boolean;
   /** Saving these as a file of their own is useful. */
@@ -181,7 +185,12 @@ function templateFor(h: HeldBack, n: number, outcome: ImportOutcome): Template {
   return saidNo(h, n);
 }
 
-function buildGroups(outcome: ImportOutcome): ResultGroup[] {
+const NO_LABELS: ReadonlyMap<string, string> = new Map();
+
+/** The cleaned address the file carried for an inspection, or null. Cleaned again here: this is the last step before the screen. */
+const labelOf = (id: string, labels: ReadonlyMap<string, string>): string | null => cleanLabel(labels.get(id));
+
+function buildGroups(outcome: ImportOutcome, labels: ReadonlyMap<string, string>): ResultGroup[] {
   const byKey = new Map<string, HeldBack[]>();
   for (const row of outcome.report.heldBack) {
     const key = groupKey(row, outcome);
@@ -191,7 +200,14 @@ function buildGroups(outcome: ImportOutcome): ResultGroup[] {
     const first = rows[0];
     if (first === undefined) throw new Error('empty group');
     const t = templateFor(first, rows.length, outcome);
-    return { key, heading: t.heading, action: t.action, rows, retry: t.retry, save: t.save };
+    return {
+      key,
+      heading: t.heading,
+      action: t.action,
+      rows: rows.map((row) => ({ ...row, name: labelOf(row.id, labels) ?? `Inspection ${stripBidi(row.id)}` })),
+      retry: t.retry,
+      save: t.save,
+    };
   });
 }
 
@@ -207,14 +223,15 @@ function headlineOf(imported: number, notImported: number, changes: number, allS
   return `${String(imported)} of ${String(total)} inspections ${imported === 1 ? 'was' : 'were'} imported. ${notImported === 1 ? '1 was' : `${String(notImported)} were`} not.`;
 }
 
-function detailsOf(outcome: ImportOutcome): string[] {
+function detailsOf(outcome: ImportOutcome, labels: ReadonlyMap<string, string>): string[] {
   const { report, stopped } = outcome;
   const lines = [`Requests sent: ${String(report.requests)}`, `Imported: ${String(report.imported.length)}. Already on the server: ${String(report.skipped)}. Applied: ${String(report.applied)}.`];
   if (stopped !== null) lines.push(`Sending ended early: ${stopped}.`);
   for (const h of report.heldBack) {
     const answer = answerText(h);
     const extra = h.detail !== undefined && h.detail !== 'local_error' ? ` Server detail: ${stripBidi(h.detail)}.` : '';
-    lines.push(`${stripBidi(h.id)}: ${h.reason}. Server answer: ${answer ?? 'none'}.${extra}`);
+    const label = labelOf(h.id, labels);
+    lines.push(`${stripBidi(h.id)}${label === null ? '' : ` (${label})`}: ${h.reason}. Server answer: ${answer ?? 'none'}.${extra}`);
   }
   for (const c of report.needsAttention) {
     lines.push(`${stripBidi(c.op)} on inspection ${stripBidi(c.inspectionId)}: server answer ${String(c.status)}${c.reason === undefined ? '' : `, reason ${stripBidi(c.reason)}`}`);
@@ -222,9 +239,9 @@ function detailsOf(outcome: ImportOutcome): string[] {
   return lines;
 }
 
-export function buildResult(outcome: ImportOutcome): ResultModel {
+export function buildResult(outcome: ImportOutcome, labels: ReadonlyMap<string, string> = NO_LABELS): ResultModel {
   const { report } = outcome;
-  const groups = buildGroups(outcome);
+  const groups = buildGroups(outcome, labels);
   const imported = report.imported.length;
   const notImported = report.heldBack.length;
   const changes = report.needsAttention.length;
@@ -260,10 +277,10 @@ export function buildResult(outcome: ImportOutcome): ResultModel {
         : {
             heading: 'Some changes were not applied',
             intro: 'The inspections and photos arrived, but the server did not apply these changes, and they will not be sent again. Ask whoever runs your server if you need them.',
-            rows: report.needsAttention.map((c) => `Change to inspection ${stripBidi(c.inspectionId)}`),
+            rows: report.needsAttention.map((c) => `Change to ${labelOf(c.inspectionId, labels) ?? `inspection ${stripBidi(c.inspectionId)}`}`),
           },
     groups,
-    details: detailsOf(outcome),
+    details: detailsOf(outcome, labels),
   };
 }
 
@@ -275,6 +292,6 @@ export function mainTextOf(model: ResultModel): string {
     model.primary.label,
     ...model.secondary.map((s) => s.label),
     ...(model.attention === null ? [] : [model.attention.heading, model.attention.intro, ...model.attention.rows]),
-    ...model.groups.flatMap((g) => [g.heading, g.action, ...g.rows.map((r) => `Inspection ${stripBidi(r.id)}`)]),
+    ...model.groups.flatMap((g) => [g.heading, g.action, ...g.rows.map((r) => r.name)]),
   ].join('\n');
 }

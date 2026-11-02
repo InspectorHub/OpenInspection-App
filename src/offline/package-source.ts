@@ -1,4 +1,5 @@
 import { IMPORT_LIMIT_CEILINGS, readPackageSummary, type PackageSummary } from '@inspectorhub/offline-package';
+import { readLabels } from './package-labels';
 
 /**
  * Getting a package into memory from a file the person chose.
@@ -18,7 +19,9 @@ export interface PickedFile {
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
-export type PackageRead = { kind: 'ready'; fileName: string; bytes: Uint8Array; summary: PackageSummary } | { kind: 'refused'; message: string };
+export type PackageRead =
+  | { kind: 'ready'; fileName: string; bytes: Uint8Array; summary: PackageSummary; /** The address the exporting device wrote for some inspections. Empty for a file from before labels. */ labels: ReadonlyMap<string, string> }
+  | { kind: 'refused'; message: string };
 
 const MIB = 1024 * 1024;
 
@@ -48,7 +51,8 @@ export async function readPackageFile(file: PickedFile): Promise<PackageRead> {
     return { kind: 'refused', message: FILE_UNREADABLE };
   }
   try {
-    return { kind: 'ready', fileName: file.name, bytes, summary: readPackageSummary(bytes) };
+    const summary = readPackageSummary(bytes);
+    return { kind: 'ready', fileName: file.name, bytes, summary, labels: readLabels(bytes, summary.manifest.inspections.map((i) => i.id)) };
   } catch {
     return { kind: 'refused', message: FILE_NOT_A_PACKAGE };
   }

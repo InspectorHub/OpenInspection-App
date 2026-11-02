@@ -23,6 +23,13 @@ describe('choosing a package file', () => {
     expect(result.fileName).toBe('export.zip');
   });
 
+  it('hands over the addresses the file carries, cleaned, and none for a file from before labels', async () => {
+    const labelled = await readPackageFile(fileOf(makePackage({ inspections: 2, labels: { 'insp-0': '  12 Oak   Street ' } }).zip));
+    expect(labelled.kind === 'ready' && Object.fromEntries(labelled.labels)).toEqual({ 'insp-0': '12 Oak Street' });
+    const old = await readPackageFile(fileOf(makePackage({ inspections: 2 }).zip));
+    expect(old.kind === 'ready' && old.labels.size).toBe(0);
+  });
+
   it('a file over the ceiling is refused before it is read into memory', async () => {
     const file = fileOf(new Uint8Array(8), { size: IMPORT_LIMIT_CEILINGS.compressedBytes + 1 });
     const result = await readPackageFile(file);

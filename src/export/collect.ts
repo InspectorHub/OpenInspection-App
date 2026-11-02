@@ -1,6 +1,8 @@
 import { resultsDocName } from '../collab/connector';
 import { docIsCovered } from '../collab/sync-proof';
 import type { Db } from '../platform/db';
+import { readCachedAddresses } from '../offline/cached-address';
+import { accountKey } from '../offline/outbox';
 import { DEFAULT_REGISTRY, findCommand, type Payload } from '../offline/registry';
 import {
   IDEMPOTENCY_KEY_PATTERN,
@@ -31,6 +33,8 @@ export interface PlannedInspection {
   /** The device knows the server's report id (the placeholder is NOT used). */
   reportIdKnown: boolean;
   quarantined: boolean;
+  /** The address the device has cached for it, written into the manifest as an optional `label`. Absent when nothing is cached. */
+  label?: string;
 }
 
 export interface PlannedPhoto {
@@ -219,9 +223,17 @@ export async function collectPlan(db: Db, identity: ExportIdentity, options: Col
 
     const outbox = entries.filter((item) => takenIds.has(item.inspectionId));
     const creating = new Set(outbox.filter((item) => item.entry.op === 'inspection.create').map((item) => item.inspectionId));
+    const addresses = await readCachedAddresses(tx, accountKey(identity), taken.map((row) => row.inspection_id));
     const inspections: PlannedInspection[] = taken.map((row) => {
       const reportIdKnown = isUsableReportId(row.report_id);
-      return { id: row.inspection_id, reportId: isUsableReportId(row.report_id) ? row.report_id : UNKNOWN_REPORT_ID, reportIdKnown, quarantined: row.quarantine_source !== null };
+      const label = addresses.get(row.inspection_id);
+      return {
+        id: row.inspection_id,
+        reportId: isUsableReportId(row.report_id) ? row.report_id : UNKNOWN_REPORT_ID,
+        reportIdKnown,
+        quarantined: row.quarantine_source !== null,
+        ...(label === undefined ? {} : { label }),
+      };
     });
 
     const device = await tx.query<{ value: unknown }>("SELECT value FROM device_state WHERE key = 'device_id'");

@@ -1,11 +1,12 @@
 import { useId, useMemo, useState } from 'react';
 import type { ImportOutcome } from '../../offline/import-package';
 import { Button, Notice } from '../kit';
-import { stripBidi } from '../worklist/format';
 import { buildResult, type ResultGroup } from './result-model';
 
 export interface ImportResultProps {
   outcome: ImportOutcome;
+  /** The address the file carried for some inspections (already cleaned). Empty for a file from before labels. */
+  labels: ReadonlyMap<string, string>;
   /** A line about the last save (done, or failed). */
   saveNote: { tone: 'info' | 'bad'; text: string } | null;
   saving: boolean;
@@ -24,7 +25,7 @@ function Group({ group, showSave, saving, onSave }: { group: ResultGroup; showSa
       <ul className="divide-y divide-ih-border rounded-ih-card border border-ih-border">
         {group.rows.map((row) => (
           <li key={row.id} className="break-all px-3 py-3 text-base font-semibold text-ih-fg-1" data-testid="import-row">
-            Inspection {stripBidi(row.id)}
+            {row.name}
           </li>
         ))}
       </ul>
@@ -43,8 +44,8 @@ function Group({ group, showSave, saving, onSave }: { group: ResultGroup; showSa
  * act (server answers, counts, internal reasons) is behind "Details" and not on the page until it is opened. What to say is decided in
  * `result-model.ts`; this file only lays it out.
  */
-export function ImportResult({ outcome, saveNote, saving, onSave, onAgain, onAnother, onDone }: ImportResultProps) {
-  const model = useMemo(() => buildResult(outcome), [outcome]);
+export function ImportResult({ outcome, labels, saveNote, saving, onSave, onAgain, onAnother, onDone }: ImportResultProps) {
+  const model = useMemo(() => buildResult(outcome, labels), [outcome, labels]);
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   const { primary } = model;

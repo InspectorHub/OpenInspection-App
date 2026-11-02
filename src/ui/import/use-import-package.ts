@@ -5,6 +5,7 @@ import { exportFileName } from '../../export/format';
 import { writeAndShare, type WriteAndShareDeps } from '../../export/share-package';
 import { importPackage, realNextFrame, tenantMatches, type ImportDeps, type ImportOutcome } from '../../offline/import-package';
 import { readPackageFile, type PickedFile } from '../../offline/package-source';
+import { withLabels } from '../../offline/package-labels';
 import { RUN_FAILED } from './copy';
 
 /**
@@ -23,7 +24,7 @@ export type ImportState =
   | { kind: 'reading'; fileName: string }
   | { kind: 'preview'; fileName: string; summary: PackageSummary; error: string | null }
   | { kind: 'running'; fileName: string; summary: PackageSummary; progress: ImportProgress }
-  | { kind: 'done'; fileName: string; summary: PackageSummary; outcome: ImportOutcome };
+  | { kind: 'done'; fileName: string; summary: PackageSummary; outcome: ImportOutcome; labels: ReadonlyMap<string, string> };
 
 export interface ImportPackageDeps {
   api: Pick<Api, 'send'>;
@@ -43,7 +44,7 @@ export type SaveResult = 'saved' | 'cancelled' | 'failed';
 export function useImportPackage(deps: ImportPackageDeps) {
   const [state, setState] = useState<ImportState>(CHOOSE);
   const bytes = useRef<Uint8Array | null>(null);
-  const picked = useRef<{ fileName: string; summary: PackageSummary } | null>(null);
+  const picked = useRef<{ fileName: string; summary: PackageSummary; labels: ReadonlyMap<string, string> } | null>(null);
   const latest = useRef(deps);
   latest.current = deps;
 
@@ -59,7 +60,7 @@ export function useImportPackage(deps: ImportPackageDeps) {
       return;
     }
     bytes.current = read.bytes;
-    picked.current = { fileName: read.fileName, summary: read.summary };
+    picked.current = { fileName: read.fileName, summary: read.summary, labels: read.labels };
     setState({ kind: 'preview', fileName: read.fileName, summary: read.summary, error: null });
   }, []);
 
@@ -83,7 +84,7 @@ export function useImportPackage(deps: ImportPackageDeps) {
       const outcome = await importPackage(zip, { api, ...importDeps }, (p) => {
         setState((s) => (s.kind === 'running' ? { ...s, progress: { done: Math.min(s.progress.total, p.imported + p.heldBack), total: s.progress.total, imported: p.imported, heldBack: p.heldBack } } : s));
       });
-      setState({ kind: 'done', fileName: chosen.fileName, summary: chosen.summary, outcome });
+      setState({ kind: 'done', fileName: chosen.fileName, summary: chosen.summary, outcome, labels: chosen.labels });
     } catch {
       // Rejects only for a package the shared reader cannot read; nothing was sent.
       setState({ kind: 'preview', fileName: chosen.fileName, summary: chosen.summary, error: RUN_FAILED });
@@ -95,7 +96,8 @@ export function useImportPackage(deps: ImportPackageDeps) {
     const zip = bytes.current;
     if (zip === null) return 'failed';
     try {
-      const part = extractHeldBackPackage(zip, ids);
+      // The library cuts a part without the addresses; they are put back for the inspections the part holds.
+      const part = withLabels(extractHeldBackPackage(zip, ids), picked.current?.labels ?? new Map());
       const { share, now } = latest.current;
       const result = await writeAndShare(share, exportFileName(now()), (async function* () { yield part; })());
       return result.result === 'shared' ? 'saved' : 'cancelled';
