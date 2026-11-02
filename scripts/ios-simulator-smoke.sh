@@ -142,6 +142,30 @@ simulator_answers() {
   done
 }
 
+# Starts the app under script(1) (see smoke_device) and waits up to 60 s for its process. The iPad simulator can take well over 12 s
+# to start the app (run 41268952771), but run 41375830738 showed a simulator that answered commands after a slow boot and then never
+# produced the process at all in 72 s, with an empty app log. A launch that produced no process is therefore repeated once, after
+# the first one is stopped, and the second failure prints what the simulator was doing so the next log can tell the cause.
+launch_app() {
+  local label="$1" udid="$2" attempt waited
+  for attempt in 1 2; do
+    script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty "$udid" "$APP_ID" > /dev/null 2>&1 &
+    LAUNCH_PID=$!
+    waited=0
+    until app_is_running "$udid" || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
+    if app_is_running "$udid"; then return 0; fi
+    echo "::warning::$label: no app process 60 s after launch (attempt $attempt of 2)"
+    echo "--- $label: what the simulator was doing ---"
+    xcrun simctl list devices | grep -E "Booted|$udid" || true
+    xcrun simctl spawn "$udid" launchctl list 2>&1 | grep -iE "SpringBoard|backboardd|UIKitApplication|PID" | head -12 || true
+    ls -t "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null | head -5 || true
+    kill "$LAUNCH_PID" 2>/dev/null || true
+    xcrun simctl terminate "$udid" "$APP_ID" > /dev/null 2>&1 || true
+    sleep 3
+  done
+  return 0
+}
+
 smoke_device() {
   local label="$1" udid="$2"
   CURRENT_UDID="$udid"
@@ -153,12 +177,8 @@ smoke_device() {
   # and 41267660047 captured 0 bytes of it), so the app gets a PTY (--console-pty), which makes its stdout line-buffered.
   # simctl itself needs a terminal for that and CI has none (run 41268388426: the backgrounded launcher died silently and the
   # app never started), so it runs under script(1), whose -F flushes the capture after every write instead of at exit.
-  script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty "$udid" "$APP_ID" > /dev/null 2>&1 &
-  LAUNCH_PID=$!
-  # The iPad simulator can take well over 12 s to start the app (run 41268952771: not running after a fixed 12 s), so wait
-  # for the process, then give the web app SETTLE_SECONDS to start and try to open its storage.
-  local waited=0
-  until app_is_running "$udid" || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
+  launch_app "$label" "$udid"
+  # Then give the web app SETTLE_SECONDS to start and try to open its storage.
   sleep "$SETTLE_SECONDS"
   tr -d '\r\004' < "$OUT/${label}.typescript" 2>/dev/null | sed 's/^\^D//' > "$OUT/${label}.console" || true
   if ! app_is_running "$udid"; then

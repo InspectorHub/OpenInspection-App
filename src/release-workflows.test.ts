@@ -1384,6 +1384,28 @@ describe('native logging stays off outside the simulator job', () => {
     expect(script).toMatch(/smoke_device\(\) \{[\s\S]*?boot_simulator "\$label" "\$udid"/);
     expect(script).not.toMatch(/xcrun simctl boot "\$udid" 2>\/dev\/null \|\| true\n  xcrun simctl bootstatus "\$udid" -b\n/);
   });
+
+  it('a launch that produced no app process is repeated once, with what the simulator was doing printed', () => {
+    // Run 41375830738: the simulator answered commands after a slow boot, then showed no app process for 72 s and an empty app log.
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+    expect(script).toContain('launch_app()');
+    const body = script.slice(script.indexOf('launch_app() {'), script.indexOf('smoke_device() {'));
+    expect(body).toContain('for attempt in 1 2');
+    // The launch stays under script(1) with --console-pty (block-buffered stdout otherwise), and the process wait is bounded.
+    expect(body).toContain('script -q -F "$OUT/${label}.typescript" xcrun simctl launch --console-pty');
+    expect(body).toContain('-ge 60');
+    // The first launch is stopped before the second, and a failed one prints what the simulator was doing.
+    const stop = body.indexOf('xcrun simctl terminate');
+    expect(stop).toBeGreaterThan(0);
+    expect(body.indexOf('what the simulator was doing')).toBeGreaterThan(0);
+    expect(body).toMatch(/SpringBoard/);
+    // Giving up is not decided here: the check after the settle time still fails the run with the app's own message.
+    expect(script).toContain('seconds after launch');
+    // smoke_device launches through the helper; the inline launch is gone from it.
+    const device = script.slice(script.indexOf('smoke_device() {'));
+    expect(device).toContain('launch_app "$label" "$udid"');
+    expect(device).not.toContain('script -q -F');
+  });
 });
 
 describe('Android emulator smoke workflow', () => {
