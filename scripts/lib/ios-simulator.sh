@@ -7,37 +7,70 @@
 #    app ran), and a retry that shut everything down, restarted CoreSimulatorService and erased the device (run 41374220395) interrupted
 #    the boot that was about to finish and failed six times out of six. So a boot bootstatus gave up on is left alone and waited for.
 #  - Answering `launchctl list` only says launchd is up, which happens long before the home screen is: a simulator that "answered" then
-#    showed no app process for 72 s (run 41375830738). So the wait is for SpringBoard to be listed with a pid, with a short grace period
-#    so that a label this code guessed wrong costs seconds, not minutes (the full list is printed then, so the next log shows the real one).
-#  - Every wait is a deadline on the wall clock ($SECONDS), not a count of sleeps: a probe against a wedged simulator can itself take a
-#    long time.
+#    showed no app process for 72 s (run 41375830738). So the wait is for SpringBoard to be listed with a pid. On the runner it IS listed
+#    as `<pid> 0 com.apple.SpringBoard` (runs 41388071464 and 41390577663); the short grace period stays so that a different label on another
+#    Xcode costs seconds, not minutes (the full list is printed then, so the log shows the real one).
+#  - Every wait is a deadline on the wall clock ($SECONDS), not a count of sleeps, and every call to the simulator that could hang is bounded
+#    too (GNU timeout): a probe against a wedged simulator can itself take as long as it likes.
 #
-# Overridable for tests: SMOKE_BOOT_LIMIT (bootstatus, 240 s), SMOKE_ANSWER_QUICK (30), SMOKE_ANSWER_LIMIT (240), SMOKE_SPRINGBOARD_GRACE (20),
-# SMOKE_LAUNCH_LIMIT (60), SMOKE_POLL_SECONDS (3), SMOKE_CRASH_DIR (the host's DiagnosticReports).
+# Overridable for tests: SMOKE_BOOT_LIMIT (bootstatus, 240 s), SMOKE_PROBE_LIMIT (one launchctl probe, 20), SMOKE_ANSWER_QUICK (30),
+# SMOKE_ANSWER_LIMIT (240), SMOKE_SPRINGBOARD_GRACE (20), SMOKE_LAUNCH_LIMIT (60), SMOKE_POLL_SECONDS (3), SMOKE_CRASH_DIR (the host's
+# DiagnosticReports).
 
 # A line for the job summary, when there is one (GitHub sets GITHUB_STEP_SUMMARY; elsewhere this does nothing).
 summary_line() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
 
+# GNU timeout (coreutils) bounds every call to the simulator that could hang. macOS has none by default: Homebrew's coreutils provides
+# `gtimeout` (CI installs it, see .github/workflows/ci.yml). It starts PROGRAMS, so what it runs must be one (not a shell function).
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+[ -n "$TIMEOUT_BIN" ] || { fail "GNU timeout is needed (on macOS: brew install coreutils)"; return 1; }
+
+# Every call below that could hang runs as `"$TIMEOUT_BIN" -k 2 <seconds> <program...>`: status 124 when it was still running at the deadline
+# (SIGTERM, then SIGKILL two seconds later), and its output is taken by command substitution: no temp files, no extra processes (each one
+# costs tens of milliseconds under Git Bash, where the tests run).
+
+# probe_launchctl <udid>: `launchctl list` inside the simulator, bounded (SMOKE_PROBE_LIMIT). The list goes to PROBE_OUT; the status says
+# whether it ran (non-zero when it failed or hung).
+probe_launchctl() {
+  local rc=0
+  PROBE_OUT="$("$TIMEOUT_BIN" -k 2 "${SMOKE_PROBE_LIMIT:-20}" xcrun simctl spawn "$1" launchctl list 2>/dev/null)" || rc=$?
+  return "$rc"
+}
+
+# app_is_running <udid>: `launchctl list` prints "<pid> <status> UIKitApplication:<id>[...]"; a dash instead of the pid means not running.
+# True when ANY line for the app has a pid (two lines for one app are possible while it restarts).
 app_is_running() {
-  # `launchctl list` prints "<pid> <status> UIKitApplication:<id>[...]"; a dash instead of the pid means not running.
   local line
-  line="$(xcrun simctl spawn "$1" launchctl list | grep "UIKitApplication:$APP_ID" || true)"
-  [ -n "$line" ] && ! printf '%s' "$line" | awk '{print $1}' | grep -qx -- '-'
+  probe_launchctl "$1" || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      *"UIKitApplication:$APP_ID"*)
+        case "${line%%[[:space:]]*}" in
+          '' | *[!0-9]*) ;;
+          *) return 0 ;;
+        esac
+        ;;
+    esac
+  done <<< "$PROBE_OUT"
+  return 1
 }
 
 # simulator_answers <udid> <seconds> [name]: true once `launchctl list` runs inside the simulator and lists SpringBoard with a pid. If it runs
 # but SpringBoard is not listed within the grace period (or the label is not what was guessed), it goes on with a warning and the whole
 # list. False when it never ran within <seconds>.
 simulator_answers() {
-  local udid="$1" limit="$2" name="${3:-simulator}" end out seen answered_at="" grace="${SMOKE_SPRINGBOARD_GRACE:-20}" last=""
+  local udid="$1" limit="$2" name="${3:-simulator}" end seen line answered_at="" grace="${SMOKE_SPRINGBOARD_GRACE:-20}" last=""
   end=$((SECONDS + limit))
   while :; do
-    if out="$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null)"; then
-      last="$out"
+    if probe_launchctl "$udid"; then
+      last="$PROBE_OUT"
       [ -n "$answered_at" ] || answered_at="$SECONDS"
-      seen="$(printf '%s\n' "$out" | grep -Ei '^[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+.*SpringBoard' | head -1 || true)"
+      seen=""
+      while IFS= read -r line; do
+        if [[ "$line" =~ ^[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+.*[Ss]pring[Bb]oard ]]; then seen="$line"; break; fi
+      done <<< "$PROBE_OUT"
       if [ -n "$seen" ]; then
-        # Written down on EVERY run: whether SpringBoard is the label to wait for was a guess, and this is how a run settles it.
+        # Written down on EVERY run, so a different label on another Xcode shows up in the log and the job summary.
         echo "ok: $name: SpringBoard is listed as: $(printf '%s' "$seen" | tr -s '[:space:]' ' ')"
         summary_line "- $name: SpringBoard listed as \`$(printf '%s' "$seen" | tr -s '[:space:]' ' ')\`"
         return 0
@@ -60,26 +93,12 @@ simulator_answers() {
 # bootstatus_bounded <udid> <seconds>: `simctl bootstatus -b` for at most <seconds>. Its output goes to BOOTSTATUS_OUT (and its tail is
 # printed). Returns 0 when it ended by itself and 124 when it was still running at the deadline and was stopped.
 bootstatus_bounded() {
-  local udid="$1" limit="$2" file pid end rc=0
-  file="$(mktemp)"
-  xcrun simctl bootstatus "$udid" -b > "$file" 2>&1 &
-  pid=$!
-  end=$((SECONDS + limit))
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$SECONDS" -ge "$end" ]; then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      echo "bootstatus was still running after ${limit} s and was stopped" >> "$file"
-      rc=124
-      break
-    fi
-    sleep 1
-  done
-  [ "$rc" -eq 124 ] || wait "$pid" 2>/dev/null || true
-  BOOTSTATUS_OUT="$(cat "$file")"
-  rm -f "$file"
+  local udid="$1" limit="$2" rc=0
+  BOOTSTATUS_OUT="$("$TIMEOUT_BIN" -k 2 "$limit" xcrun simctl bootstatus "$udid" -b 2>&1)" || rc=$?
+  if [ "$rc" -eq 124 ]; then BOOTSTATUS_OUT="$BOOTSTATUS_OUT"$'\n'"bootstatus was still running after ${limit} s and was stopped"; fi
   printf '%s\n' "$BOOTSTATUS_OUT" | tail -3
-  return "$rc"
+  [ "$rc" -eq 124 ] && return 124
+  return 0
 }
 
 # boot_simulator <label> <udid>: boots one simulator and waits until it is usable, or fails saying it is the runner's simulator.
@@ -89,7 +108,8 @@ boot_simulator() {
     xcrun simctl boot "$udid" 2>/dev/null || true
     rc=0
     bootstatus_bounded "$udid" "${SMOKE_BOOT_LIMIT:-240}" || rc=$?
-    if [ "$rc" -ne 124 ] && ! printf '%s' "$BOOTSTATUS_OUT" | grep -q 'Status=4294967295'; then
+    # A pattern match on the variable, not `printf | grep -q`: under pipefail an early-exiting grep can make the pipeline fail by SIGPIPE.
+    if [ "$rc" -ne 124 ] && [[ "$BOOTSTATUS_OUT" != *Status=4294967295* ]]; then
       simulator_answers "$udid" "${SMOKE_ANSWER_QUICK:-30}" "$label" && return 0
     else
       echo "::warning::$label: bootstatus gave up (attempt $attempt of 3); leaving the boot alone and waiting for the simulator to answer"
@@ -107,9 +127,10 @@ boot_simulator() {
 }
 
 # launch_app <label> <udid>: starts the app under script(1) (see smoke_device for why) and waits for its process. A launch that produced
-# no process in the limit is repeated ONCE, unless the app crashed meanwhile (a crash report newer than the launch): a crash is not slowness,
-# and retrying it could turn a build that crashes on half its launches green. A launch that needed the second attempt is said so in the log
-# and in the job summary. Giving up is not decided here: the caller's check after the settle time still fails the run with the app's message.
+# no process in the limit is repeated ONCE, unless the app crashed meanwhile (a crash report of the app, newer than the launch): a crash is
+# not slowness, and retrying it could turn a build that crashes on half its launches green. A launch that needed the second attempt is said
+# so in the log and in the job summary. Giving up is not decided here: the caller's check after the settle time still fails the run with the
+# app's message.
 launch_app() {
   local label="$1" udid="$2" attempt marker end crashes crash_dir="${SMOKE_CRASH_DIR:-$HOME/Library/Logs/DiagnosticReports}"
   for attempt in 1 2; do
@@ -122,15 +143,16 @@ launch_app() {
       rm -f "$marker"
       if [ "$attempt" -gt 1 ]; then
         echo "::warning::$label: the app needed a second launch to start (the first produced no process in ${SMOKE_LAUNCH_LIMIT:-60} s)"
-        [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "- $label: the app needed a second launch to start" >> "$GITHUB_STEP_SUMMARY"
+        summary_line "- $label: the app needed a second launch to start"
       fi
       return 0
     fi
     echo "::warning::$label: no app process ${SMOKE_LAUNCH_LIMIT:-60} s after launch (attempt $attempt of 2)"
     echo "--- $label: what the simulator was doing ---"
     xcrun simctl list devices | grep -E "Booted|$udid" || true
-    xcrun simctl spawn "$udid" launchctl list 2>&1 | grep -iE "SpringBoard|backboardd|UIKitApplication|PID" | head -12 || true
-    crashes="$(find "$crash_dir" -maxdepth 1 -name 'App*' -newer "$marker" 2>/dev/null | head -3 || true)"
+    if probe_launchctl "$udid"; then printf '%s\n' "$PROBE_OUT" | grep -iE "SpringBoard|backboardd|UIKitApplication|PID" | head -12 || true; fi
+    # The app's own reports only: the process is called App, so its reports are App-<date>.ips (or App_<date>.crash). Not AppleSpell, AppStore...
+    crashes="$(find "$crash_dir" -maxdepth 1 \( -name 'App-*' -o -name 'App_*' \) -newer "$marker" 2>/dev/null | head -3 || true)"
     rm -f "$marker"
     if [ -n "$crashes" ]; then
       printf '%s\n' "$crashes"

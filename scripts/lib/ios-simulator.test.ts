@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 /**
  * The functions in ios-simulator.sh decide what happens on the macOS runner when the simulator is slow, silent or broken. They are run
@@ -10,6 +10,8 @@ import { afterAll, describe, expect, it } from 'vitest';
  * the script. The stubs say what the runner's logs showed: runs 41372183809, 41374220395 and 41375830738 (see the comments in the library).
  * What this cannot show is how a real simulator behaves; that is what the next CI run shows.
  */
+// Each call to a stand-in is a process, and a hosted Windows runner starts them slowly: a generous limit for one test (the waits themselves are short).
+vi.setConfig({ testTimeout: 120_000 });
 const LIB = join(__dirname, 'ios-simulator.sh').replace(/\\/g, '/');
 const DRIVER = join(__dirname, 'fixtures', 'ios-simulator-driver.sh').replace(/\\/g, '/');
 const bashAvailable = spawnSync('bash', ['-c', 'true']).status === 0;
@@ -26,7 +28,9 @@ function run(scenario: string, env: Record<string, string> = {}): Result {
   const started = Date.now();
   const r = spawnSync('bash', [DRIVER], {
     encoding: 'utf8',
-    env: { ...process.env, LIB, STATE: state.replace(/\\/g, '/'), SCENARIO: scenario, SMOKE_ANSWER_QUICK: '3', SMOKE_ANSWER_LIMIT: '3', SMOKE_SPRINGBOARD_GRACE: '1', SMOKE_LAUNCH_LIMIT: '3', SMOKE_BOOT_LIMIT: '30', ...env },
+    timeout: 100_000, // vitest's timeout cannot interrupt a synchronous spawn; a hung script ends here and shows as a null status
+    killSignal: 'SIGKILL',
+    env: { ...process.env, LIB, STATE: state.replace(/\\/g, '/'), SCENARIO: scenario, SMOKE_ANSWER_QUICK: '3', SMOKE_ANSWER_LIMIT: '3', SMOKE_SPRINGBOARD_GRACE: '1', SMOKE_LAUNCH_LIMIT: '1', SMOKE_BOOT_LIMIT: '30', ...env },
   });
   const calls = readFileSync(join(state, 'calls.log'), 'utf8').split('\n').filter(Boolean);
   return { out: `${r.stdout}${r.stderr}`, calls, status: r.status, seconds: (Date.now() - started) / 1000 };
@@ -62,7 +66,7 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
 
   it('answering is not enough while SpringBoard is missing: it keeps waiting until the grace period ends, then goes on and prints what the simulator lists', () => {
     // A grace period of 2 whole seconds of the clock is 1 to 2 real seconds: plenty of probes whichever part of a second it starts in.
-    const r = run(boot, { LIST: 'none', SMOKE_SPRINGBOARD_GRACE: '2', SMOKE_ANSWER_QUICK: '6' });
+    const r = run(boot, { LIST: 'none', SMOKE_SPRINGBOARD_GRACE: '2', SMOKE_ANSWER_QUICK: '60' });
     expect(r.out).toContain('RESULT=booted');
     expect(r.out).toContain('no SpringBoard line with a pid showed up');
     expect(r.out).toContain('com.apple.something'); // the whole list, so the next log shows the real label
@@ -86,7 +90,7 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
   });
 
   it('a simulator that never answers is reset between the attempts, never after the last one, and the failure says it is the simulator', () => {
-    const r = run(boot, { BOOTSTATUS_TEXT: SPRINGBOARD_GAVE_UP, NEVER_ANSWER: '1' });
+    const r = run(boot, { BOOTSTATUS_TEXT: SPRINGBOARD_GAVE_UP, NEVER_ANSWER: '1', SMOKE_ANSWER_LIMIT: '1' });
     expect(r.out).toContain('RESULT=failed');
     expect(r.out).toContain('the simulator did not boot after 3 attempts; this is the runner\'s simulator, not the app');
     expect(r.calls.filter((c) => c === 'xcrun simctl boot UDID-1')).toHaveLength(3);
@@ -98,6 +102,14 @@ describe.skipIf(!bashAvailable)('boot_simulator', () => {
     // The reset comes after the wait for an answer, not instead of it.
     const firstReset = r.calls.findIndex((c) => /simctl shutdown all/.test(c));
     expect(r.calls.slice(0, firstReset).filter((c) => c.includes('launchctl list')).length).toBeGreaterThan(1);
+  });
+
+  it('a launchctl probe that hangs is stopped at its limit, and the next probe is tried', () => {
+    // The first probe would hang for 30 s; with a limit of 1 s it is stopped and the second one answers.
+    const r = run(boot, { SPAWN_HANG_FIRST: '1', SMOKE_PROBE_LIMIT: '1', SMOKE_ANSWER_QUICK: '60' });
+    expect(r.out).toContain('RESULT=booted');
+    expect(r.calls.filter((c) => c.includes('launchctl list')).length).toBeGreaterThanOrEqual(2);
+    expect(r.seconds).toBeLessThan(25); // it would be 30 s or more if the bound did nothing; the margin is for a loaded machine
   });
 
   it('a bootstatus that does not end by itself is stopped at its limit and treated as given up, not waited for forever', () => {
@@ -127,7 +139,7 @@ describe.skipIf(!bashAvailable)('what the simulator listed is written down on ev
 
   it('SpringBoard not found within the grace period: the summary says so and lists what the simulator did list, so the real label can be read', () => {
     const summary = summaryFile();
-    const r = run(boot, { LIST: 'none', GITHUB_STEP_SUMMARY: summary, SMOKE_SPRINGBOARD_GRACE: '2', SMOKE_ANSWER_QUICK: '6' });
+    const r = run(boot, { LIST: 'none', GITHUB_STEP_SUMMARY: summary, SMOKE_SPRINGBOARD_GRACE: '2', SMOKE_ANSWER_QUICK: '60' });
     expect(r.out).toContain('RESULT=booted');
     const text = readFileSync(summary, 'utf8');
     expect(text).toContain('**SpringBoard was NOT listed**');
@@ -145,11 +157,24 @@ describe.skipIf(!bashAvailable)('what the simulator listed is written down on ev
 describe.skipIf(!bashAvailable)('app_is_running', () => {
   const check = 'if app_is_running UDID-1; then echo RUNNING; else echo NOT-RUNNING; fi';
 
+  const started = 'echo 1 > "$STATE/launches"; '; // one launch has happened: the stand-in then lists the app
+
   it('is true for a pid, false for a dash, false when the app is not listed at all', () => {
     expect(run(check, { APP_UP_AT_LAUNCH: '1' }).out).toContain('NOT-RUNNING'); // no launch happened yet
-    expect(run(`counter launches > /dev/null; ${check}`, { APP_UP_AT_LAUNCH: '1' }).out).toContain('RUNNING');
-    expect(run(`counter launches > /dev/null; ${check}`, { APP_UP_AT_LAUNCH: '1' }).out).not.toContain('NOT-RUNNING');
-    expect(run(`counter launches > /dev/null; ${check}`, { APP_UP_AT_LAUNCH: '1', APP_DASH: '1' }).out).toContain('NOT-RUNNING');
+    const running = run(started + check, { APP_UP_AT_LAUNCH: '1' }).out;
+    expect(running).toContain('RUNNING');
+    expect(running).not.toContain('NOT-RUNNING');
+    expect(run(started + check, { APP_UP_AT_LAUNCH: '1', APP_DASH: '1' }).out).toContain('NOT-RUNNING');
+  });
+
+  it('is true when the app is listed twice, once with a dash and once with a pid (it can be, while it restarts)', () => {
+    const out = run(started + check, { APP_UP_AT_LAUNCH: '1', APP_TWO_LINES: '1' }).out;
+    expect(out).toContain('RUNNING');
+    expect(out).not.toContain('NOT-RUNNING');
+  });
+
+  it('is false, not an error, when launchctl does not answer at all', () => {
+    expect(run(started + check, { APP_UP_AT_LAUNCH: '1', NEVER_ANSWER: '1' }).out).toContain('NOT-RUNNING');
   });
 });
 
@@ -202,8 +227,21 @@ describe.skipIf(!bashAvailable)('launch_app', () => {
     expect(r.out).not.toContain('RETURNED');
   });
 
+  it.each(['AppleSpell-2026-11-02-1.ips', 'AppStore-2026-11-02.ips', 'Application Stats.ips'])('a new report of another process (%s) is not the app\'s crash: the launch is repeated', (name) => {
+    const r = run(launch, { APP_UP_AT_LAUNCH: '2', CRASH_ON_LAUNCH: '1', CRASH_NAME: name });
+    expect(r.out).not.toContain('crashed on launch');
+    expect(r.out).toContain('APP=running');
+    expect(launches(r.calls)).toBe(2);
+  });
+
+  it.each(['App-2026-11-02-120000.ips', 'App_2026-11-02-120000.crash'])('a new report of the app itself (%s) stops the retry', (name) => {
+    const r = run(launch, { APP_UP_AT_LAUNCH: '0', CRASH_ON_LAUNCH: '1', CRASH_NAME: name });
+    expect(r.out).toContain('crashed on launch');
+    expect(launches(r.calls)).toBe(1);
+  });
+
   it('control: a crash report from BEFORE the launch (an old one in the folder) is not mistaken for this launch\'s crash', () => {
-    const r = run(': > "$SMOKE_CRASH_DIR/App-2026-01-01-old.ips"; command sleep 1.2; ' + launch, { APP_UP_AT_LAUNCH: '2' });
+    const r = run(': > "$SMOKE_CRASH_DIR/App-2026-01-01-old.ips"; touch -d "-1 hour" "$SMOKE_CRASH_DIR/App-2026-01-01-old.ips"; ' + launch, { APP_UP_AT_LAUNCH: '2' });
     expect(r.out).toContain('APP=running');
     expect(r.out).not.toContain('crashed on launch');
     expect(launches(r.calls)).toBe(2);

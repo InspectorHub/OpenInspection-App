@@ -1,58 +1,40 @@
 #!/usr/bin/env bash
-# Driver for scripts/lib/ios-simulator.test.ts: loads scripts/lib/ios-simulator.sh with a stubbed xcrun, script, killall and sleep, then
-# evals $SCENARIO. Everything a test varies comes in through environment variables; every call the library makes is appended to
-# $STATE/calls.log, which the test reads back.
+# Driver for scripts/lib/ios-simulator.test.ts: loads scripts/lib/ios-simulator.sh with a stand-in xcrun (an executable, see fixtures/ios-stubs/
+# xcrun.sh: its scenarios are listed there) and stubbed script, killall and sleep, then evals $SCENARIO. Everything a test varies comes in
+# through environment variables; every call the library makes is appended to $STATE/calls.log, which the test reads back.
 #
-#   BOOTSTATUS_TEXT  what `simctl bootstatus -b` prints (default: it ended well)
-#   BOOTSTATUS_HANG  seconds that bootstatus takes to end (default: at once)
-#   ANSWER_AFTER     the first N `launchctl list` probes fail, then it answers (default 0)
-#   NEVER_ANSWER     set: `launchctl list` never answers
-#   LIST             springboard (default) | none: whether the answer lists SpringBoard with a pid
-#   SPRINGBOARD_AFTER with LIST=none: SpringBoard is listed from the probe after this many (a SpringBoard that shows up late)
-#   APP_UP_AT_LAUNCH the app process exists once this many launches were started (0 = never)
-#   APP_DASH         set: the app is listed but with a dash instead of a pid (not running)
-#   CRASH_ON_LAUNCH  set: every launch leaves a crash report behind
+#   CRASH_ON_LAUNCH  set: every launch leaves a crash report behind (CRASH_NAME: its file name, default App-2026-11-02-crash.ips)
 set -Eeuo pipefail
 : "${LIB:?}" "${STATE:?}" "${SCENARIO:?}"
 LOG="$STATE/calls.log"
 : > "$LOG"
-APP_ID=io.inspectorhub.app
+export STATE
+export APP_ID=io.inspectorhub.app
 OUT="$STATE/out"
 SMOKE_CRASH_DIR="$STATE/crash"
-mkdir -p "$OUT" "$SMOKE_CRASH_DIR"
+mkdir -p "$OUT" "$SMOKE_CRASH_DIR" "$STATE/bin"
 export SMOKE_CRASH_DIR SMOKE_POLL_SECONDS="${SMOKE_POLL_SECONDS:-0}"
+
+# The stand-in xcrun is a program on PATH: GNU timeout starts programs, not shell functions.
+cp "$(dirname "${BASH_SOURCE[0]}")/ios-stubs/xcrun.sh" "$STATE/bin/xcrun"
+chmod +x "$STATE/bin/xcrun"
+# PATH is colon-separated: a Windows path (C:/Users/...) from the test would be split at its colon, so the directory is given as a POSIX path.
+export PATH="$(cd "$STATE/bin" && pwd):$PATH"
 
 fail() { echo "FAIL: $*"; return 1; }
 sleep() { command sleep 0.05; }
 killall() { echo "killall $*" >> "$LOG"; }
 
-counter() { local n; n="$(cat "$STATE/$1" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$STATE/$1"; echo "$n"; }
-
 script() {
   echo "script $*" >> "$LOG"
-  counter launches > /dev/null
-  if [ -n "${CRASH_ON_LAUNCH:-}" ]; then command sleep 0.4; : > "$SMOKE_CRASH_DIR/App-2026-11-02-crash.ips"; fi
-}
-
-xcrun() {
-  echo "xcrun $*" >> "$LOG"
-  [ "$1" = simctl ] || return 0
-  case "$2" in
-    bootstatus)
-      [ -z "${BOOTSTATUS_HANG:-}" ] || command sleep "$BOOTSTATUS_HANG"
-      printf '%s\n' "${BOOTSTATUS_TEXT:-Device already booted, nothing to do.}" ;;
-    spawn)
-      local n launches
-      n="$(counter probes)"
-      [ -z "${NEVER_ANSWER:-}" ] || return 1
-      [ "$n" -gt "${ANSWER_AFTER:-0}" ] || return 1
-      if [ "${LIST:-springboard}" = springboard ] || { [ -n "${SPRINGBOARD_AFTER:-}" ] && [ "$n" -gt "$SPRINGBOARD_AFTER" ]; }; then printf '123\t0\tcom.apple.SpringBoard\n'; else printf -- '-\t0\tcom.apple.something\n'; fi
-      launches="$(cat "$STATE/launches" 2>/dev/null || echo 0)"
-      if [ "${APP_UP_AT_LAUNCH:-0}" -gt 0 ] && [ "$launches" -ge "${APP_UP_AT_LAUNCH:-0}" ]; then
-        if [ -n "${APP_DASH:-}" ]; then printf -- '-\t0\tUIKitApplication:%s[abcd]\n' "$APP_ID"; else printf '4242\t0\tUIKitApplication:%s[abcd]\n' "$APP_ID"; fi
-      fi ;;
-  esac
-  return 0
+  local n
+  n="$(cat "$STATE/launches" 2>/dev/null || echo 0)"
+  echo $((n + 1)) > "$STATE/launches"
+  # The crash report is there at once, with a modification time in the FUTURE: newer than the marker however slowly this machine got here.
+  if [ -n "${CRASH_ON_LAUNCH:-}" ]; then
+    : > "$SMOKE_CRASH_DIR/${CRASH_NAME:-App-2026-11-02-crash.ips}"
+    touch -d '+1 hour' "$SMOKE_CRASH_DIR/${CRASH_NAME:-App-2026-11-02-crash.ips}"
+  fi
 }
 
 # shellcheck source=../ios-simulator.sh

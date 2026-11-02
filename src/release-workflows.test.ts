@@ -1357,6 +1357,18 @@ describe('native logging stays off outside the simulator job', () => {
     expect(readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8')).toContain("grep -q 'To Native'");
   });
 
+  it('the iOS job makes sure GNU timeout exists before the smoke script runs (macOS has none; the library bounds every simulator call with it)', () => {
+    const steps = ci.wf.jobs['ios-simulator']!.steps;
+    const smokeAt = steps.findIndex((s) => (s.run ?? '').includes('ios-simulator-smoke.sh'));
+    const timeoutAt = steps.findIndex((s) => (s.run ?? '').includes('brew install coreutils'));
+    expect(smokeAt).toBeGreaterThan(-1);
+    expect(timeoutAt).toBeGreaterThan(-1);
+    expect(timeoutAt).toBeLessThan(smokeAt);
+    // Only installed when neither name is there already, and the library looks for both names.
+    expect(steps[timeoutAt]!.run).toMatch(/command -v timeout \|\| command -v gtimeout \|\| brew install coreutils/);
+    expect(readFileSync(join(ROOT, 'scripts', 'lib', 'ios-simulator.sh'), 'utf8')).toMatch(/command -v timeout \|\| command -v gtimeout/);
+  });
+
   it('boots and launches through the tested library, and keeps no second, untested copy of those functions in the script', () => {
     // What boot_simulator, simulator_answers, bootstatus_bounded and launch_app DO is checked by running them against a stubbed xcrun
     // (scripts/lib/ios-simulator.test.ts); a text match here could not tell a right implementation from a wrong one with the same words.

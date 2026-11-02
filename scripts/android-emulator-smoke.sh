@@ -54,6 +54,9 @@ adb exec-out screencap -p > "$OUT/screen.png"
 # (run 41295240990: 7 nodes, no text, while the screenshot taken just before showed the screen). Ask again until the text is there.
 # 15 looks by default; a test that runs this whole script against a stand-in adb sets fewer, because every stand-in call is a process.
 MAX_UI_ATTEMPTS="${SMOKE_UI_ATTEMPTS:-15}"
+case "$MAX_UI_ATTEMPTS" in
+  '' | *[!0-9]* | 0) fail "SMOKE_UI_ATTEMPTS must be a whole number of at least 1, got: $MAX_UI_ATTEMPTS" ;;
+esac
 attempts=0
 dismissed=0
 until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]; do

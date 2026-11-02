@@ -78,6 +78,8 @@ jobs:
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
           -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
           -derivedDataPath "$RUNNER_TEMP/ios-build" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build
+      - name: GNU timeout, which the smoke script uses to bound every call to the simulator (macOS has none; coreutils provides gtimeout)
+        run: command -v timeout || command -v gtimeout || brew install coreutils
       - name: Smoke-test launch, callback routing, privacy manifest and backup exclusion
         env:
           SMOKE_DEVICES: ${{ matrix.device }}

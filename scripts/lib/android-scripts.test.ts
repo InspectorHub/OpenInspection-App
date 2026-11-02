@@ -104,6 +104,18 @@ describe.skipIf(!bashAvailable)('android-emulator-smoke.sh, run whole against a 
     expect(r.out).toContain(`is not in the UI tree after ${String(LOOKS)} attempts`);
   });
 
+  it.each(['abc', '0', '-3', '1.5', '2x'])('SMOKE_UI_ATTEMPTS=%s is refused at once (a word would make `[ -ge ]` fail for ever and the loop never end)', (value) => {
+    const r = smoke({ UI_SEQUENCE: 'blank', SMOKE_UI_ATTEMPTS: value });
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain('SMOKE_UI_ATTEMPTS must be a whole number of at least 1');
+    expect(dumps(r.calls)).toBe(0); // it never got as far as looking at the screen
+  });
+
+  it('an empty SMOKE_UI_ATTEMPTS means the default (15), not an error', () => {
+    const r = smoke({ UI_SEQUENCE: 'app', SMOKE_UI_ATTEMPTS: '' });
+    expect(r.status).toBe(0);
+  });
+
   it('a FATAL EXCEPTION of the app fails the run; one of the test tooling does not', () => {
     const crashed = smoke({ UI_SEQUENCE: 'app', LOGCAT_TEXT: FATAL_APP });
     expect(crashed.status).not.toBe(0);
@@ -118,7 +130,7 @@ describe.skipIf(!bashAvailable)('android-emulator-golden.sh, run whole against a
   const golden = (env: Record<string, string>): Run => run('android-emulator-golden.sh', env);
   const at = (calls: string[], needle: string): number => calls.findIndex((c) => c.includes(needle));
 
-  it('hides error dialogs before the app is started, looks once before Maestro starts, and makes no uiautomator call while it runs', () => {
+  it('hides error dialogs before the app is started and looks once before Maestro starts; the stand-in would refuse a screen read while Maestro runs (a later edit that put Maestro in the background would be caught)', () => {
     const r = golden({ UI_SEQUENCE: 'app' });
     expect(r.status).toBe(0);
     expect(r.calls.some((c) => c.startsWith('OVERLAP'))).toBe(false);
@@ -131,7 +143,7 @@ describe.skipIf(!bashAvailable)('android-emulator-golden.sh, run whole against a
     expect(hide).toBeLessThan(start);
     expect(start).toBeLessThan(preflight);
     expect(preflight).toBeLessThan(maestro);
-    // Nothing reads the screen between Maestro's start and its end.
+    // Maestro runs in the foreground here, so nothing can read the screen between its start and its end; this keeps it that way.
     expect(r.calls.slice(maestro, maestroEnd + 1).some((c) => c.includes('uiautomator'))).toBe(false);
     expect(r.out).toContain('ok: G2 passed');
   });

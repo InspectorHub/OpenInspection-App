@@ -3,7 +3,7 @@
 # $MAESTRO_EXIT (default 0).
 echo "maestro start $*" >> "$STATE/calls.log"
 : > "$STATE/maestro.running"
-/usr/bin/sleep 0.2 2>/dev/null || /bin/sleep 0.2
+if [ -x /usr/bin/sleep ]; then /usr/bin/sleep 0.2; else /bin/sleep 0.2; fi
 rm -f "$STATE/maestro.running"
 echo "maestro end" >> "$STATE/calls.log"
 exit "${MAESTRO_EXIT:-0}"
