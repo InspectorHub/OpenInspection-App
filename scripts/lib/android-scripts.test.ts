@@ -1,11 +1,12 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 /**
- * The two Android emulator scripts are run WHOLE, with a stand-in adb, maestro and sleep first on PATH (source in fixtures/android-stubs),
+ * The Android emulator scripts are run WHOLE, with a stand-in adb, maestro and sleep first on PATH (source in fixtures/android-stubs),
  * and what is asserted is what they did: which adb calls, in which order, with which result. What this cannot show is how a real emulator
  * behaves: that is what the CI job shows. The dialog's real uiautomator tree is the fixture of CI run 41367506059.
  */
@@ -171,6 +172,109 @@ describe.skipIf(!bashAvailable)('android-emulator-golden.sh, run whole against a
     expect(golden({ UI_SEQUENCE: 'app', LOGCAT_TEXT: FATAL_TOOLING }).status).toBe(0);
   });
 });
+
+describe.skipIf(!bashAvailable)('android-emulator-published.sh (G5), run whole against a stand-in adb, maestro and engine control server', () => {
+  // The stand-in engine control server answers GET /__test__/state from where the run is: how many times the stand-in maestro has started
+  // (read from the calls log the stand-ins write) says which part of the flow has passed. 0 = before part A, 1 = after A, 2 = after B.
+  const REPORT_AFTER_A = [{ notifyClient: null, summary: null, outcome: 'unchanged' }];
+  const REPORT_AFTER_B = [...REPORT_AFTER_A, { notifyClient: true, summary: 'Corrected the roof rating', outcome: 'new_version' }];
+  const GOOD = [
+    { report: { state: 'locked', version: 3 }, publishes: [], errors: [] },
+    { report: { state: 'locked', version: 3 }, publishes: REPORT_AFTER_A, errors: [] },
+    { report: { state: 'locked', version: 4 }, publishes: REPORT_AFTER_B, errors: [] },
+  ];
+
+  async function published(options: { stages?: unknown[]; env?: Record<string, string> }): Promise<Run> {
+    const s = setup();
+    const stages = options.stages ?? GOOD;
+    const server: Server = createServer((_request, response) => {
+      let started = 0;
+      try { started = readFileSync(join(s.state, 'calls.log'), 'utf8').split('\n').filter((c) => c.startsWith('maestro start')).length; } catch { /* nothing has run yet */ }
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(stages[Math.min(started, stages.length - 1)]));
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    const address = server.address();
+    const control = `http://127.0.0.1:${String(typeof address === 'object' && address !== null ? address.port : 0)}`;
+    try {
+      const env = { ...process.env, PATH: `${s.bin}${delimiter}${process.env.PATH ?? ''}`, STATE: s.state.replace(/\\/g, '/'), XML_DIR: s.xml.replace(/\\/g, '/'), SMOKE_SETTLE_SECONDS: '0', UI_SEQUENCE: 'app', ...options.env };
+      const child = spawn('bash', [join(ROOT, 'scripts', 'android-emulator-published.sh'), s.apk, 'http://localhost:8793', control, s.out], { cwd: ROOT, env });
+      let out = '';
+      child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { out += chunk.toString(); });
+      const status = await new Promise<number | null>((resolveClose) => child.on('close', resolveClose));
+      let calls: string[] = [];
+      try { calls = readFileSync(join(s.state, 'calls.log'), 'utf8').split('\n').filter(Boolean); } catch { /* no call was made */ }
+      return { status, out, calls, state: s.state, out_dir: s.out };
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  }
+  const maestroRuns = (calls: string[]): string[] => calls.filter((c) => c.startsWith('maestro start'));
+
+  it('control: against an engine that tells the true story it passes, running part A then part B in order, with the engine checked before, between and after', async () => {
+    const r = await published({});
+    expect(r.out).toContain('android-emulator-published: G5 passed');
+    expect(r.status).toBe(0);
+    const runs = maestroRuns(r.calls);
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toContain('g5-a-published-report.yaml');
+    expect(runs[0]).toContain('SERVER_URL=http://localhost:8793');
+    expect(runs[1]).toContain('g5-b-republish-with-notice.yaml');
+    expect(r.out).toContain('ok: the report is locked at version 3');
+    expect(r.out).toContain('ok: the report is locked at version 4');
+    expect(r.out).toContain('ok: no crash in logcat');
+    // The app's data is cleared once, before part A, and the engine port is forwarded to the device.
+    expect(r.calls.filter((c) => c.includes('pm clear'))).toHaveLength(1);
+    expect(r.calls).toContain('adb reverse tcp:8793 tcp:8793');
+    expect(r.calls.findIndex((c) => c.includes('pm clear'))).toBeLessThan(r.calls.findIndex((c) => c.startsWith('maestro start')));
+  });
+
+  it('fails at once when the engine does not start as a report locked at version 3, and starts no flow (a repeated run would otherwise start from the end of the last)', async () => {
+    const r = await published({ stages: [{ report: { state: 'locked', version: 4 }, publishes: [], errors: [] }] });
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain('the report is at version 4, expected 3');
+    expect(maestroRuns(r.calls)).toHaveLength(0);
+    expect(r.out).not.toContain('G5 passed');
+    // The same engine, not locked, is refused too.
+    const editing = await published({ stages: [{ report: { state: 'editing', version: 3 }, publishes: [], errors: [] }] });
+    expect(editing.status).not.toBe(0);
+    expect(editing.out).toContain('the report is editing, expected locked');
+    expect(maestroRuns(editing.calls)).toHaveLength(0);
+  }, 120_000);
+
+  it('fails when the engine saw other publishes than the screen promised after part A, and does not run part B', async () => {
+    // The screen would say "Nothing to publish" while the engine was in fact sent a notice choice.
+    const wrong = [{ notifyClient: true, summary: null, outcome: 'unchanged' }];
+    const r = await published({ stages: [GOOD[0], { report: { state: 'locked', version: 3 }, publishes: wrong, errors: [] }, GOOD[2]] });
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain('the publishes the engine saw are');
+    expect(maestroRuns(r.calls)).toHaveLength(1);
+    expect(r.out).not.toContain('G5 part B passed');
+    expect(r.out).not.toContain('G5 passed');
+  }, 120_000);
+
+  it('a failing Maestro in part A fails the script, keeps the evidence, and never starts part B', async () => {
+    const r = await published({ env: { MAESTRO_EXIT: '1' } });
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain('android-emulator-published failed');
+    expect(r.calls.some((c) => c.includes('uiautomator dump /sdcard/ui-failure.xml'))).toBe(true);
+    expect(maestroRuns(r.calls)).toHaveLength(1);
+    expect(r.out).not.toContain('G5 part A passed');
+    expect(r.out).not.toContain('G5 passed');
+  });
+
+  it('a crash of the app in logcat fails the run even though both parts and the engine agree; a crash of the test tooling does not', async () => {
+    const crashed = await published({ env: { LOGCAT_TEXT: FATAL_APP } });
+    expect(crashed.status).not.toBe(0);
+    expect(crashed.out).toContain('the app crashed during G5');
+    expect(maestroRuns(crashed.calls)).toHaveLength(2);
+    expect(crashed.out).not.toContain('G5 passed');
+    const tooling = await published({ env: { LOGCAT_TEXT: FATAL_TOOLING } });
+    expect(tooling.status).toBe(0);
+    expect(tooling.out).toContain('G5 passed');
+  });
+});
+
 
 describe.skipIf(!bashAvailable)('the stand-ins themselves (so a green run above means something)', () => {
   it('the adb stand-in refuses a uiautomator dump while the Maestro stand-in is running, and records it', () => {

@@ -1525,17 +1525,32 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
 
   it('runs G2 on the dev-server APK after the launch smoke, in the same emulator session, with no guard that could skip it', () => {
     const lines = String(emuJob.steps[runnerAt]?.with?.script).split('\n').map((l) => l.trim()).filter((l) => l !== '');
-    expect(lines).toHaveLength(3);
+    // Four lines now: the launch smoke, G2, G3 + G4 and G5 (it was three before G5; each line is one script run, so the count is exact).
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toContain('scripts/android-emulator-smoke.sh');
     expect(lines[1]).toBe('bash scripts/android-emulator-golden.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8791 "$RUNNER_TEMP/android-smoke/g2"');
     // G3 and G4 follow G2 in the same session, on their own engine (port 8792, the inspection scenario) whose control url the workflow wrote down.
     expect(lines[2]).toBe('bash scripts/android-emulator-offline-photo.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8792 "$(cat "$RUNNER_TEMP/android-smoke/g3-control-url")" "$RUNNER_TEMP/android-smoke/g3"');
+    // G5 comes last, on its own third engine (port 8793, the published scenario) whose control url the workflow wrote down in its own file.
+    expect(lines[3]).toBe('bash scripts/android-emulator-published.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8793 "$(cat "$RUNNER_TEMP/android-smoke/g5-control-url")" "$RUNNER_TEMP/android-smoke/g5"');
+    expect(lines.at(-1)).toBe(lines[3]);
     // A missing APK must fail the job, never skip a flow.
     for (const line of lines.slice(1)) expect(line).not.toMatch(/\[ !? -f|\|\||if /);
     // The fake engine is reached at the emulator's localhost (adb reverse in the golden script), on the port the workflow started it on.
     const engines = String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run);
     expect(engines).toContain('--port 8791');
     expect(engines).toMatch(/--port 8792 --scenario inspection --allow-origin http:\/\/localhost:5173/);
+    // The third engine: G5's published report, with its log and control url apart from G3's, and waited for like the others.
+    expect(engines).toContain('--port 8793 --scenario published --allow-origin http://localhost:5173 > "$RUNNER_TEMP/android-smoke/fake-engine-g5.log"');
+    expect(engines).toContain('curl -fsS http://127.0.0.1:8793/api/client/compat');
+    expect(engines).toContain('> "$RUNNER_TEMP/android-smoke/g5-control-url"');
+    expect(engines.split('--scenario published')).toHaveLength(2); // exactly one engine runs it
+    expect(engines).toContain('> "$RUNNER_TEMP/android-smoke/g3-control-url"'); // G3's own file is still written
+    expect(engines).not.toContain('0.0.0.0');
+    // The three engines use three different ports (and Vite its own, 5173).
+    expect(new Set(engines.match(/--port [0-9]+/g))).toEqual(new Set(['--port 5173', '--port 8791', '--port 8792', '--port 8793']));
+    // The step's display name names G5 too.
+    expect(String(emuJob.steps[runnerAt]?.name)).toContain('G5');
   });
 
   it('both emulator scripts deal with a system "isn\'t responding" dialog instead of failing on it', () => {
