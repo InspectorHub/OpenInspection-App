@@ -83,7 +83,9 @@ echo "ok: the engine's certificate is a trusted root in the simulator"
 xcrun simctl uninstall "$UDID" "$APP_ID" > /dev/null 2>&1 || true
 "$TIMEOUT_BIN" -k 2 300 xcrun simctl install "$UDID" "$APP_PATH"
 marker="$(mktemp)"
-"$TIMEOUT_BIN" -k 2 120 xcrun simctl launch "$UDID" "$APP_ID"
+# Launched the way the smoke job launches it (under script(1), repeated once if no process appears): a bare `simctl launch` needs a terminal
+# that CI does not have, and hung the first run that got this far until the timeout.
+launch_app published "$UDID"
 wait_for_app "$UDID" "${SMOKE_RECHECK_SECONDS:-60}" || fail "the app is not running after launch"
 sleep "${SMOKE_SETTLE_SECONDS:-8}"
 "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/00-launched.png"

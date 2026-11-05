@@ -32,6 +32,12 @@ case "\${2:-}" in
 esac
 exit 0
 `;
+// A stand-in script(1), which the app is launched under (a bare `simctl launch` needs a terminal that CI does not have): it records what it was
+// asked to run, which is all the stand-in xcrun needs, since the app's process is reported by its `launchctl list` answer.
+const SCRIPT_STANDIN = `#!/usr/bin/env bash
+echo "script $*" >> "$STATE/calls.log"
+exit 0
+`;
 // A stand-in maestro: it records its arguments and fails when asked to (MAESTRO_FAIL_ON: a part of the command line, such as a flow file name).
 const MAESTRO = `#!/usr/bin/env bash
 echo "maestro $*" >> "$STATE/calls.log"
@@ -72,6 +78,8 @@ async function run(answers: unknown[], options: { env?: Record<string, string>; 
   mkdirSync(bin);
   writeFileSync(join(bin, 'xcrun'), XCRUN, { mode: 0o755 });
   writeFileSync(join(bin, 'maestro'), MAESTRO, { mode: 0o755 });
+  writeFileSync(join(bin, 'script'), SCRIPT_STANDIN, { mode: 0o755 });
+  chmodSync(join(bin, 'script'), 0o755);
   chmodSync(join(bin, 'xcrun'), 0o755);
   chmodSync(join(bin, 'maestro'), 0o755);
   mkdirSync(join(state, 'App.app'));
@@ -103,7 +111,9 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(r.status).toBe(0);
     expect(indexOf(r.calls, 'simctl keychain UDID-1 add-root-cert')).toBeGreaterThanOrEqual(0);
     expect(indexOf(r.calls, 'simctl keychain')).toBeLessThan(indexOf(r.calls, 'simctl install'));
-    expect(indexOf(r.calls, 'simctl install')).toBeLessThan(indexOf(r.calls, 'simctl launch'));
+    // The app is launched under script(1) (the smoke job's way): after the install, with the pinned device.
+    expect(indexOf(r.calls, 'simctl install')).toBeLessThan(indexOf(r.calls, 'script -q -F'));
+    expect(r.calls.some((c) => c.startsWith('script ') && c.includes('simctl launch --console-pty UDID-1 io.inspectorhub.app'))).toBe(true);
     const [a, b, ...more] = maestroCalls(r.calls);
     expect(more).toEqual([]);
     expect(a).toContain('--platform ios --device UDID-1 test -e SERVER_URL=https://localhost:9443');
