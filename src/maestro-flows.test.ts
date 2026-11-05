@@ -225,12 +225,17 @@ describe('the golden Maestro flows', () => {
     extra: [readFileSync(join(ROOT, 'node_modules', '@inspectorhub', 'field-ui', 'dist', 'index.js'), 'utf8'), readFileSync(join(ROOT, 'e2e', 'fake-engine', 'engine.ts'), 'utf8')].join('\n').replaceAll('&apos;', "'"),
     ignoreCase: true,
     // The work list row is named "Open <address>", the item row "<rating letter> <item name>", and the count is a plural: the parts exist, the whole does not.
-    composed: { 'Open 77 Test Photo Lane': ['Open', '77 Test Photo Lane'], 'A Roof cover': ['Roof cover'], 'Updated 1 inspection.': ['Updated', 'inspection'] },
+    composed: { 'Open 77 Test Photo Lane': ['Open', '77 Test Photo Lane'], 'A Roof cover': ['Roof cover'], 'Updated 1 inspection.': ['Updated', 'inspection'],
+      // Built from the published version number at run time: the sentence around the number exists, in the app and in the field-ui library.
+      'Published as version 3. It cannot change until you choose Edit and republish.': ['Published as version', 'It cannot change until you choose Edit and republish'],
+      'Published as version 4. It cannot change until you choose Edit and republish.': ['Published as version', 'It cannot change until you choose Edit and republish'],
+      'Editing again. Clients still see version 3 until you publish the update.': ['Editing again. Clients still see version', 'until you publish the update'],
+      'Nothing changed since version 3, so nothing was published and no notices were sent.': ['Nothing changed since version', ', so nothing was published and no notices were sent'] },
     system: new Set(['Photo taken on']), // the content description of a tile in the Android system photo picker
   };
 
   it('finds the golden flows, and the ordered emulator run does not include them', () => {
-    expect(names).toEqual(['g2-controlled-sign-in.yaml', 'g3-a-offline-photo.yaml', 'g3-b-after-restart.yaml']);
+    expect(names).toEqual(['g2-controlled-sign-in.yaml', 'g3-a-offline-photo.yaml', 'g3-b-after-restart.yaml', 'g5-a-published-report.yaml', 'g5-b-republish-with-notice.yaml']);
     const runner = readFileSync(join(FLOW_DIR, 'run-emulator.ps1'), 'utf8');
     for (const name of names) expect(runner).not.toContain(name);
   });

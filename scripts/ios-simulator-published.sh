@@ -17,6 +17,8 @@
 set -Eeuo pipefail
 
 APP_ID="io.inspectorhub.app"
+# The summary typed in part B (the flow reads it from the environment) and the one the engine must have received.
+SUMMARY="Corrected the roof rating"
 USAGE="usage: ios-simulator-published.sh <App.app> <engine origin> <control url> <certificate pem> [output directory]"
 APP_PATH="${1:?$USAGE}"
 ENGINE_ORIGIN="${2:?$USAGE}"
@@ -101,10 +103,10 @@ node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 '[{"notifyClient":null
 echo "ok: the engine saw one publish, unchanged, with no notice choice, and the report is locked at version 3"
 
 # --- part B: the same app session, nothing cleared or restarted between the parts ---
-"$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test --format junit --output "$OUT/maestro-g5-b.xml" --debug-output "$OUT/maestro-debug-b" "$FLOWS/g5-b-republish-with-notice.yaml"
+"$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test -e "SUMMARY=$SUMMARY" --format junit --output "$OUT/maestro-g5-b.xml" --debug-output "$OUT/maestro-debug-b" "$FLOWS/g5-b-republish-with-notice.yaml"
 echo "ok: G5 part B passed on screen"
 "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/02-after-part-b.png" || true
-node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 4 '[{"notifyClient":null,"summary":null,"outcome":"unchanged"},{"notifyClient":true,"summary":"Corrected the roof rating","outcome":"new_version"}]' 20
+node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 4 '[{"notifyClient":null,"summary":null,"outcome":"unchanged"},{"notifyClient":true,"summary":"'"$SUMMARY"'","outcome":"new_version"}]' 20
 echo "ok: the engine holds version 4, locked, and saw notifyClient true with the summary"
 
 "$TIMEOUT_BIN" -k 2 120 xcrun simctl spawn "$UDID" log show --last 30m --info --debug --predicate 'process == "App"' > "$OUT/app.log" 2>&1 || true

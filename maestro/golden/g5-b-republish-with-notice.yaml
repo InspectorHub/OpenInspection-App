@@ -1,7 +1,7 @@
 # G5 part B: continues from part A in the same app session (the receipt "Nothing to publish" is on screen). The report is locked again at
 # version 3. Open it again, publish with a summary and the notice box ticked: that is a new version, and the choice goes to the server.
 #
-#   maestro --device <serial> test maestro/golden/g5-b-republish-with-notice.yaml
+#   maestro --device <serial> test -e "SUMMARY=Corrected the roof rating" maestro/golden/g5-b-republish-with-notice.yaml
 #
 # The caller checks the engine's side afterwards: the report is locked at version 4 and the engine saw notifyClient true with the summary.
 appId: io.inspectorhub.app
@@ -20,7 +20,7 @@ appId: io.inspectorhub.app
     visible: "Send the report-updated notices"
     timeout: 20000
 - tapOn: "What changed in this amendment?"
-- inputText: "Corrected the roof rating"
+- inputText: "${SUMMARY}"
 - hideKeyboard
 - tapOn: "Send the report-updated notices"
 # The WebView does not expose the ticked state of this box to the accessibility tree (the node stays checked="false" while the box is

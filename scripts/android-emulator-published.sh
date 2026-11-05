@@ -13,6 +13,8 @@
 set -Eeuo pipefail
 
 APP_ID="io.inspectorhub.app"
+# The summary typed in part B (the flow reads it from the environment) and the one the engine must have received.
+SUMMARY="Corrected the roof rating"
 APK="${1:?usage: android-emulator-published.sh <dev-server apk> <engine origin> <control url> [output directory]}"
 ENGINE_ORIGIN="${2:?usage: android-emulator-published.sh <dev-server apk> <engine origin> <control url> [output directory]}"
 CONTROL_URL="${3:?usage: android-emulator-published.sh <dev-server apk> <engine origin> <control url> [output directory]}"
@@ -80,9 +82,9 @@ node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 '[{"notifyClient":null
 echo "ok: the engine saw one publish, unchanged, with no notice choice, and the report is locked at version 3"
 
 # --- part B: the same app session, nothing cleared or restarted between the parts ---
-timeout 900 maestro --device "$serial" test --format junit --output "$OUT/maestro-g5-b.xml" --debug-output "$OUT/maestro-debug-b" maestro/golden/g5-b-republish-with-notice.yaml
+timeout 900 maestro --device "$serial" test -e "SUMMARY=$SUMMARY" --format junit --output "$OUT/maestro-g5-b.xml" --debug-output "$OUT/maestro-debug-b" maestro/golden/g5-b-republish-with-notice.yaml
 echo "ok: G5 part B passed on screen"
-node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 4 '[{"notifyClient":null,"summary":null,"outcome":"unchanged"},{"notifyClient":true,"summary":"Corrected the roof rating","outcome":"new_version"}]' 20
+node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 4 '[{"notifyClient":null,"summary":null,"outcome":"unchanged"},{"notifyClient":true,"summary":"'"$SUMMARY"'","outcome":"new_version"}]' 20
 echo "ok: the engine holds version 4, locked, and saw notifyClient true with the summary"
 
 adb exec-out screencap -p > "$OUT/screen-after-g5.png" || true

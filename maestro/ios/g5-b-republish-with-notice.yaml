@@ -1,7 +1,7 @@
 # G5 part B on the iOS simulator: continues from part A in the same app session. Same as maestro/golden/g5-b-republish-with-notice.yaml except
 # that the ticked state of the notice box is left to the caller (it asks the engine: notifyClient true), as in part A.
 #
-#   maestro --platform ios --device <udid> test maestro/ios/g5-b-republish-with-notice.yaml
+#   maestro --platform ios --device <udid> test -e "SUMMARY=Corrected the roof rating" maestro/ios/g5-b-republish-with-notice.yaml
 appId: io.inspectorhub.app
 ---
 - tapOn: "Close"
@@ -18,7 +18,7 @@ appId: io.inspectorhub.app
     visible: "Send the report-updated notices"
     timeout: 20000
 - tapOn: "What changed in this amendment?"
-- inputText: "Corrected the roof rating"
+- inputText: "${SUMMARY}"
 - hideKeyboard
 - tapOn: "Send the report-updated notices"
 - tapOn: "Publish Now"
