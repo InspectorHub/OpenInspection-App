@@ -150,9 +150,9 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const server: Server | HttpsServer = (options.tls === undefined ? createServer() : createHttpsServer(options.tls)).on('request', (request, response) => {
     const requestOrigin = request.headers.origin;
     if (typeof requestOrigin === 'string' && allowedOrigins.includes(requestOrigin)) response.setHeader('Access-Control-Allow-Origin', requestOrigin);
-    response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-client-platform,x-client-version');
+    response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,idempotency-key,x-client-platform,x-client-version');
     response.setHeader('Access-Control-Expose-Headers', 'date,x-client-upgrade');
-    response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS,PUT,DELETE');
+    response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS,PUT,PATCH,DELETE');
     response.setHeader('Vary', 'Origin');
     if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
     // Absolute URLs handed to clients follow the Host the client used (127.0.0.1, 10.0.2.2, localhost), so one engine serves every emulator.
@@ -338,6 +338,11 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     if (route === '/api/inspections') {
       // The list the work-list download reads: the seeded inspection when the scenario shows it, so a fresh device can download it.
       json(contract<'/api/inspections', 'get'>()({ success: true, data: options.showInspection ? [{ id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, inspectorId: 'renderer-user', templateId: null, createdAt: '2026-10-31T10:00:00Z', publishedVersionNumber: report.version, editingAgain: report.state === 'editing' }] : [], meta: { nextCursor: null } }));
+      return;
+    }
+    // The publish dialog sets the sign-on-publish flag first (a PATCH on the inspection) and does not publish if that write fails.
+    if (request.method === 'PATCH' && route === '/api/inspections/insp-7') {
+      void readBody(request).then(() => { json({ success: true, data: {} }); });
       return;
     }
     // "Edit and republish": only a published report can be opened again; the answer is the same when it is already open.

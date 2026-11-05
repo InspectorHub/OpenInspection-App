@@ -56,6 +56,21 @@ describe('the published scenario', () => {
     expect(list.data[0]).toMatchObject({ id: 'insp-7', publishedVersionNumber: 3, editingAgain: false });
   });
 
+  it('the publish dialog can reach it from the app: the preflight allows PATCH and the idempotency key, and the sign-flag write is answered', async () => {
+    engine = await startRendererEngine(scenarios.published);
+    const preflight = await fetch(`${engine.url}/api/inspections/insp-7`, { method: 'OPTIONS', headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'PATCH', 'access-control-request-headers': 'authorization,content-type,idempotency-key' } });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-methods')).toContain('PATCH');
+    expect(preflight.headers.get('access-control-allow-headers')).toContain('idempotency-key');
+    const flag = await fetch(`${engine.url}/api/inspections/insp-7`, { method: 'PATCH', headers: AUTH, body: JSON.stringify({ autoSignOnPublish: false }) });
+    expect(flag.status).toBe(200);
+    expect(await flag.json()).toMatchObject({ success: true });
+    // The write changes nothing about the report.
+    expect(engine.report).toEqual({ state: 'locked', version: 3 });
+    // Control: the write is only answered for the seeded inspection.
+    expect((await fetch(`${engine.url}/api/inspections/other`, { method: 'PATCH', headers: AUTH, body: '{}' })).status).toBe(404);
+  });
+
   it('control: an unpublished inspection is a draft, refuses edit-again, and has no version', async () => {
     engine = await startRendererEngine(scenarios.inspection);
     expect(engine.report).toEqual({ state: 'draft', version: null });

@@ -1,0 +1,37 @@
+# G5 part B: continues from part A in the same app session (the receipt "Nothing to publish" is on screen). The report is locked again at
+# version 3. Open it again, publish with a summary and the notice box ticked: that is a new version, and the choice goes to the server.
+#
+#   maestro --device <serial> test maestro/golden/g5-b-republish-with-notice.yaml
+#
+# The caller checks the engine's side afterwards: the report is locked at version 4 and the engine saw notifyClient true with the summary.
+appId: io.inspectorhub.app
+---
+- tapOn: "Close"
+# After the publish the editor read the report again: published, so reading only.
+- extendedWaitUntil:
+    visible: "Published as version 3. It cannot change until you choose Edit and republish."
+    timeout: 60000
+- tapOn: "Edit and republish"
+- extendedWaitUntil:
+    visible: "Editing again. Clients still see version 3 until you publish the update."
+    timeout: 60000
+- tapOn: "Publish update"
+- extendedWaitUntil:
+    visible: "Send the report-updated notices"
+    timeout: 20000
+- tapOn: "What changed in this amendment?"
+- inputText: "Corrected the roof rating"
+- hideKeyboard
+- tapOn: "Send the report-updated notices"
+# The WebView does not expose the ticked state of this box to the accessibility tree (the node stays checked="false" while the box is
+# drawn ticked), so a `checked: true` assertion cannot hold here. The choice is asserted where it counts: the caller checks that the
+# engine received notifyClient true (scripts/android-emulator-published.sh, after this flow).
+- tapOn: "Just publish"
+- extendedWaitUntil:
+    visible: "Report published"
+    timeout: 60000
+- assertVisible: "The report-updated notices were queued.*"
+- tapOn: "Close"
+- extendedWaitUntil:
+    visible: "Published as version 4. It cannot change until you choose Edit and republish."
+    timeout: 60000
