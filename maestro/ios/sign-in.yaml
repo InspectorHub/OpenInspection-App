@@ -1,0 +1,51 @@
+# iOS counterpart of maestro/golden/g2-controlled-sign-in.yaml: controlled sign-in against the fake engine over HTTPS, then the work list with
+# nothing waiting to upload and the status dot Online. It is used by the G5 flows; it can be run alone:
+#
+#   maestro --platform ios --device <udid> test -e SERVER_URL=https://localhost:<port> maestro/ios/sign-in.yaml
+#
+# What differs from the Android flow, and why:
+#  - The iOS build has no App Transport Security exception, so the engine is HTTPS and its certificate is trusted in the simulator by the
+#    caller (scripts/ios-simulator-published.sh). The "Allow plain http" switch exists only in a development bundle and is not needed (nor
+#    present in the ordinary build) for an https address.
+#  - The address field is not tapped by screen percentage. It is tapped three times on its text, which selects the whole line in a web view;
+#    eraseText then removes whatever is left of it. The typed address is checked on screen before going on.
+#  - Opening the sign-in page may raise a system sheet ("Open in InspectorHub?") when the page redirects back to the app: tapped when shown.
+# Start from a clean, already-running app (the caller installs and launches it); the flow does not launch it.
+appId: io.inspectorhub.app
+---
+- extendedWaitUntil:
+    visible: "Choose your server"
+    timeout: 60000
+- tapOn:
+    text: "https://app.inspectorhub.io"
+    repeat: 3
+    delay: 150
+- eraseText: 80
+- inputText: "${SERVER_URL}"
+- hideKeyboard
+# The field must now hold exactly the engine's address (an assertion on text matches the whole text).
+- assertVisible: "${SERVER_URL}"
+- tapOn: "Continue"
+- assertVisible: "Connect to this server?"
+- tapOn: "Connect"
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 30000
+- tapOn:
+    text: "Sign in"
+    index: 1
+# The fake engine answers the authorize request with the redirect straight back to the app. If iOS asks first, say yes.
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "Work list"
+    timeout: 90000
+- assertVisible: "Online"
+- assertVisible: "Download today's work"
+- assertNotVisible: "Waiting to upload.*"
+- tapOn: "Settings"
+- scrollUntilVisible:
+    element: "Waiting to upload"
+    timeout: 30000
+- assertVisible: "0 items"
