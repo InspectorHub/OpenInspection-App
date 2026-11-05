@@ -1,3 +1,11 @@
 #!/bin/sh
 # Local pre-push guard: vitest files related to the pushed changes. Install: npm run hooks:install
-exec node "$(git rev-parse --show-toplevel)/scripts/prepush-related-tests.mjs"
+# Prints "[timing] <stage> <seconds>s" and a final "[timing] total <seconds>s", on failure paths too. The guard's own exit status is
+# returned unchanged, and git's push lines on stdin reach it untouched.
+t_start=$(date +%s)
+node "$(git rev-parse --show-toplevel)/scripts/prepush-related-tests.mjs"
+status=$?
+t_end=$(date +%s)
+echo "[timing] related-tests $((t_end - t_start))s"
+echo "[timing] total $((t_end - t_start))s"
+exit "$status"
