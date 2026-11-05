@@ -16,10 +16,11 @@ appId: io.inspectorhub.app
 - extendedWaitUntil:
     visible: "Choose your server"
     timeout: 60000
+# Select by position, not by text: a triple tap on the text selected only part of it on the first CI run, so the typed address landed
+# in front of a leftover ".io". A tap in the empty right-hand end of the field puts the caret after the text, and erasing more characters
+# than the pre-filled address holds empties it.
 - tapOn:
-    text: "https://app.inspectorhub.io"
-    repeat: 3
-    delay: 150
+    point: "88%,25%"
 - eraseText: 80
 - inputText: "${SERVER_URL}"
 - hideKeyboard
