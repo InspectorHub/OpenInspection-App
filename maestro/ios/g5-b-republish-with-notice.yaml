@@ -21,11 +21,11 @@ appId: io.inspectorhub.app
 - inputText: "${SUMMARY}"
 - hideKeyboard
 - tapOn: "Send the report-updated notices"
-- tapOn: "Publish Now"
+- tapOn: "Just publish"
 - extendedWaitUntil:
     visible: "Report published"
     timeout: 60000
-- assertVisible: "The report-updated notices were queued."
+- assertVisible: "The report-updated notices were queued.*"
 - tapOn: "Close"
 - extendedWaitUntil:
     visible: "Published as version 4. It cannot change until you choose Edit and republish."
