@@ -5,7 +5,7 @@ import { createManualClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import { createSqlJsDb } from '../platform/db-sqljs';
 import { migrate } from '../platform/schema';
-import { EditorLoadError, createEditorLoader } from './editor-data';
+import { EditorLoadError, NO_REPORT_LOCK, createEditorLoader, loadReportLock, reportLockOf } from './editor-data';
 import { MESSAGES } from './messages';
 import { ALICE, BOB, SNAPSHOT, envelope, seedPackage } from './test-support/seed-package';
 
@@ -209,5 +209,51 @@ describe('editor data: queued writes are shown, so a reload does not undo them',
     await queue('inspection.update', { inspectionId: 'i1', changes: { sqft: 1500 } });
     const data = await loaderFor(ALICE)('i1');
     expect(data.inspection).toMatchObject({ propertyAddress: '2 Oak Avenue', sqft: 1500 });
+  });
+});
+
+
+const inspectionBody = (id: string, extra: Record<string, unknown>, reportStatus = 'published') =>
+  envelope({
+    inspection: { id, status: 'completed', propertyType: 'single_family', propertyAddress: '1 Main St', date: '2026-10-18T10:00:00Z', reportStatus, templateSnapshot: SNAPSHOT },
+    ...extra,
+  });
+
+describe('editor data: where the report stands after it was published', () => {
+  it('reads the three lock fields that sit beside the inspection in the cached answer', () => {
+    expect(reportLockOf({ contentLocked: true, editingAgain: false, publishedVersionNumber: 3 })).toEqual({ contentLocked: true, editingAgain: false, publishedVersionNumber: 3 });
+    expect(reportLockOf({ contentLocked: false, editingAgain: true, publishedVersionNumber: 3 })).toEqual({ contentLocked: false, editingAgain: true, publishedVersionNumber: 3 });
+  });
+
+  it('an older server, or an unreadable value, means not locked and no version', () => {
+    expect(reportLockOf(undefined)).toEqual(NO_REPORT_LOCK);
+    expect(reportLockOf({})).toEqual(NO_REPORT_LOCK);
+    expect(reportLockOf({ contentLocked: 'yes', editingAgain: 1, publishedVersionNumber: '3' })).toEqual(NO_REPORT_LOCK);
+    expect(reportLockOf({ publishedVersionNumber: 0 })).toEqual(NO_REPORT_LOCK);
+    expect(reportLockOf({ publishedVersionNumber: 2.5 })).toEqual(NO_REPORT_LOCK);
+  });
+
+  it('loads the lock of a cached inspection; a package cached before the server knew of it is not locked', async () => {
+    await seedPackage(db, 'i1', { bodies: { '/api/inspections/i1': inspectionBody('i1', { contentLocked: true, editingAgain: false, publishedVersionNumber: 4 }) } });
+    await seedPackage(db, 'i2', { skipGlobals: true });
+    expect(await loadReportLock({ db, account: ALICE }, 'i1')).toEqual({ contentLocked: true, editingAgain: false, publishedVersionNumber: 4 });
+    expect(await loadReportLock({ db, account: ALICE }, 'i2')).toEqual(NO_REPORT_LOCK);
+  });
+
+  it("another account's rows are not read, and a bad id is not locked", async () => {
+    await seedPackage(db, 'i1', { bodies: { '/api/inspections/i1': inspectionBody('i1', { contentLocked: true, publishedVersionNumber: 2 }) } });
+    expect(await loadReportLock({ db, account: BOB }, 'i1')).toEqual(NO_REPORT_LOCK);
+    expect(await loadReportLock({ db, account: ALICE }, '../etc')).toEqual(NO_REPORT_LOCK);
+  });
+
+  it('a report reopened with "Edit and republish" tells the editor so; a published one still locked does not', async () => {
+    await seedPackage(db, 'again', { bodies: { '/api/inspections/again': inspectionBody('again', { contentLocked: false, editingAgain: true, publishedVersionNumber: 2 }) } });
+    await seedPackage(db, 'locked', { skipGlobals: true, bodies: { '/api/inspections/locked': inspectionBody('locked', { contentLocked: true, editingAgain: false, publishedVersionNumber: 2 }) } });
+    await seedPackage(db, 'draft', { skipGlobals: true });
+    const load = loaderFor(ALICE);
+    expect((await load('again')).reopenedForEditing).toBe(true);
+    expect((await load('again')).nextPublishIsAmendment).toBe(true);
+    expect((await load('locked')).reopenedForEditing).toBe(false);
+    expect((await load('draft')).reopenedForEditing).toBe(false);
   });
 });

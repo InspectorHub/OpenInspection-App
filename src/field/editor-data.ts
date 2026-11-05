@@ -64,6 +64,40 @@ async function assertOwnedPackage(deps: EditorDataDeps, inspectionId: string): P
   if (row === undefined || !sameAccount(deps.account, row.tenant_id, row.user_id)) throw new EditorLoadError('unavailable', MESSAGES.unavailable);
 }
 
+/**
+ * Where a report stands as the server last said it, read from the cached inspection answer. `contentLocked` is the server's own
+ * write lock (a published report takes no content edit until the inspector chooses "Edit and republish"), `editingAgain`
+ * is the state after that choice, and `publishedVersionNumber` is the version clients read. All three describe the moment of
+ * the last refresh: a report published since then is refused by the server when the device reconnects, and the editor closes
+ * its live document when it learns of it.
+ */
+export interface ReportLock {
+  contentLocked: boolean;
+  editingAgain: boolean;
+  publishedVersionNumber: number | null;
+}
+
+export const NO_REPORT_LOCK: ReportLock = { contentLocked: false, editingAgain: false, publishedVersionNumber: null };
+
+/** The lock fields of the inspection detail answer's `data` (they sit beside `inspection`). Absent means not locked: an older server sends none. */
+export function reportLockOf(data: unknown): ReportLock {
+  if (!isRec(data)) return NO_REPORT_LOCK;
+  const version = data.publishedVersionNumber;
+  return {
+    contentLocked: data.contentLocked === true,
+    editingAgain: data.editingAgain === true,
+    publishedVersionNumber: typeof version === 'number' && Number.isInteger(version) && version > 0 ? version : null,
+  };
+}
+
+/** The lock of one cached inspection, for the screen that decides whether the editor opens for reading only. */
+export async function loadReportLock(deps: Pick<EditorDataDeps, 'db' | 'account'>, inspectionId: string): Promise<ReportLock> {
+  if (!isLocalId(inspectionId)) return NO_REPORT_LOCK;
+  const key = cacheKeys(inspectionId).editor.get('/api/inspections/:id'.replace(':id', inspectionId)) ?? '';
+  const bodies = await readCachedBodies(deps.db, accountKey(deps.account), [key]);
+  return reportLockOf(dataOf(bodies, key));
+}
+
 /** What the server will do with the writes still queued, laid over the cached row so a reload does not show the old state. */
 async function withQueuedWrites(deps: EditorDataDeps, inspectionId: string, row: Rec): Promise<Rec> {
   const queued = await listOutbox(deps.db, { account: deps.account, inspectionId, states: ['pending'] });
@@ -162,6 +196,8 @@ export function createEditorLoader(deps: EditorDataDeps): LoadEditorData {
       relianceText: resolveRelianceText(narrative),
       commercialPresets: commercialPresets(),
       nextPublishIsAmendment: nextPublishIsAmendment(row.reportStatus),
+      // The one state where the server honours the notice choice on a publish: the report was reopened with "Edit and republish".
+      reopenedForEditing: reportLockOf(data).editingAgain,
       outboundCoolingWindow: cooling as EditorData['outboundCoolingWindow'],
       resultId: isRec(resultsBody) && isRec(resultsBody.data) && typeof resultsBody.data.resultId === 'string' ? resultsBody.data.resultId : null,
     };

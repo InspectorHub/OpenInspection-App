@@ -43,9 +43,15 @@ async function publish(deps: OnlineDeps, id: string, cmd: Extract<FieldCommand, 
     if (flag.kind === 'problem' || !isSuccess(flag.status)) return flag.kind === 'problem' ? problemResult(flag.problem, MESSAGES.publishOutcomeUnknown) : failure(MESSAGES.requestFailed);
   }
   const summary = (cmd.summary ?? '').trim();
-  const res = await deps.api.send({ method: 'POST', path: apiPath(id, 'publish'), json: summary === '' ? {} : { summary }, ...(key === undefined ? {} : { idempotencyKey: key }) });
+  // The republish choice: only an explicit yes is sent. Absent means no notice, which is what the server does too.
+  const body: Record<string, unknown> = { ...(summary === '' ? {} : { summary }), ...(cmd.notifyClient === true ? { notifyClient: true } : {}) };
+  const res = await deps.api.send({ method: 'POST', path: apiPath(id, 'publish'), json: body, ...(key === undefined ? {} : { idempotencyKey: key }) });
   if (res.kind === 'problem') return problemResult(res.problem, MESSAGES.publishOutcomeUnknown);
-  if (isSuccess(res.status)) return { ok: true };
+  if (isSuccess(res.status)) {
+    // A publish with nothing changed since the latest version answers 200 with the version still current and makes no new one.
+    const unchanged = bodyData(res.json)?.unchangedSinceVersion;
+    return { ok: true, data: { unchangedSinceVersion: typeof unchanged === 'number' ? unchanged : null } };
+  }
   // A precondition failure ("must be completed before publishing") is something the inspector has to read.
   return failure(serverMessage(res.json) ?? (res.status === 403 ? MESSAGES.forbidden : MESSAGES.publishFailed));
 }

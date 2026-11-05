@@ -183,9 +183,10 @@ describe('what happens when the document cannot take the entry first, or loses i
 describe('the editor package rule the write-ahead entry relies on', () => {
   const dist = readFileSync('node_modules/@inspectorhub/field-ui/dist/index.js', 'utf8');
 
-  it('is modelled on field-ui 0.7.0', () => {
+  // Re-read against field-ui 0.8.0 (2026-11-05, a diff of the release sources): appendPhoto and upsertElement were not touched.
+  it('is modelled on field-ui 0.8.0', () => {
     const manifest = JSON.parse(readFileSync('node_modules/@inspectorhub/field-ui/package.json', 'utf8')) as { version: string };
-    expect(manifest.version, 'field-ui changed: re-read appendPhoto / upsertElement in its dist, check a photo that is swapped to its key and then attached by key stays ONE entry, and update the copy and this pin').toBe('0.7.0');
+    expect(manifest.version, 'field-ui changed: re-read appendPhoto / upsertElement in its dist, check a photo that is swapped to its key and then attached by key stays ONE entry, and update the copy and this pin').toBe('0.8.0');
   });
 
   it('attaches a photo by key with upsert: an entry with that key is merged, a new one is pushed only when there is none', () => {

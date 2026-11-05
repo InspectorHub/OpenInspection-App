@@ -30,6 +30,7 @@ export const OUTBOX_ERROR_TEXT: Record<OutboxErrorCode, string> = {
   inspection_cancelled: 'The inspection was cancelled, so this change cannot be applied.',
   quota_refused: 'The plan limit was reached, so the server refused this change.',
   conflict: 'The server holds a conflicting version of this inspection.',
+  report_published: 'This report was published, so the server did not take this change. The change is kept on this device. Open the inspection, choose Edit and republish, then retry.',
   id_conflict: 'The server already uses this inspection id for something else.',
   key_reused: 'The server saw this change before with different contents.',
   rejected: 'The server refused this change.',

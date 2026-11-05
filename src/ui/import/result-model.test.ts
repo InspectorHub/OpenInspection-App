@@ -149,6 +149,26 @@ describe('the inspections that were not imported, grouped by what happened', () 
     expect(g?.action.length).toBeGreaterThan(20);
   });
 
+  it('inspections whose report was published after the file was made are one group of their own, with what to do and nothing said about an unknown reason', () => {
+    const two = buildResult(outcome({ held: held('refused', 2, { status: 409, code: 'REPORT_PUBLISHED' }) })).groups;
+    expect(two).toHaveLength(1);
+    expect(two[0]?.key).toBe('published');
+    expect(two[0]?.heading).toBe('These reports were published after the file was made.');
+    expect(two[0]?.action).toContain('Edit and republish');
+    expect(two[0]?.action).toContain('still in your file');
+    expect(two[0]?.save).toBe(true);
+    expect(bannedWordsIn(`${two[0]?.heading ?? ''} ${two[0]?.action ?? ''}`)).toEqual([]);
+    const one = buildResult(outcome({ held: held('refused', 1, { status: 409, code: 'REPORT_PUBLISHED' }) })).groups[0];
+    expect(one?.heading).toBe('This report was published after the file was made.');
+    expect(one?.action).toContain('it is still in your file');
+  });
+
+  it('control: a refusal with another code, or with none, still reads as a reason this app does not know, and the two groups stay apart', () => {
+    const mixed = buildResult(outcome({ held: [...held('refused', 1, { status: 409, code: 'REPORT_PUBLISHED' }, 100), ...held('refused', 1, { status: 409, code: 'SOMETHING_ELSE' }, 200)] })).groups;
+    expect(mixed.map((g) => g.key).sort()).toEqual(['published', 'refused']);
+    expect(buildResult(outcome({ held: held('refused', 1) })).groups[0]?.key).toBe('refused');
+  });
+
   it('a whole file that is too old says the number of days the SERVER named, and a fallback only when it named none', () => {
     const named = buildResult(outcome({ held: held('package_rejected', 2, { status: 422, code: 'PACKAGE_EXPIRED', details: { maxAgeDays: 30 } }) })).groups[0];
     expect(named?.heading).toBe('This file is more than 30 days old, so it cannot be imported.');

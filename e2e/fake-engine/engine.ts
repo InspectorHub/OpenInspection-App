@@ -37,6 +37,12 @@ export interface RendererEngine {
   covers: Array<{ sourceKey: string; crop: string; bytes: number }>;
   /** Every accepted `POST /api/client/import`: what reached the engine, so a spec can compare it with the file it sent. */
   imports: Array<{ contentLength: number | null; byteLength: number; sha256: string; elapsedMs: number; inspections: number }>;
+  /** Where the seeded report stands: `draft`, `locked` (published) or `editing` (reopened with edit-again), and the version clients read. */
+  report: { state: 'draft' | 'locked' | 'editing'; version: number | null };
+  /** Every `POST /api/inspections/insp-7/publish`: the notice choice sent, the summary, and whether it made a new version. */
+  publishes: Array<{ notifyClient: boolean | null; summary: string | null; outcome: 'new_version' | 'unchanged' }>;
+  /** Every `POST /api/inspections/insp-7/edit-again`. */
+  reopens: number;
   /** While true the engine behaves like an unreachable host: every open connection is destroyed and new ones are reset at once. */
   setUnavailable(value: boolean): void;
   /** Request-body read failures that were NOT a connection abort. Specs should expect this to stay empty. */
@@ -49,6 +55,8 @@ export interface RendererEngine {
 export interface RendererEngineOptions {
   uploadDelayMs?: number;
   showInspection?: boolean;
+  /** The seeded inspection starts as a report published as version 3: locked until `edit-again`, as the engine does. */
+  published?: boolean;
   /** Interface to bind. Defaults to loopback; pass 0.0.0.0 to serve an Android emulator (10.0.2.2) from the host. */
   host?: string;
   /** Port to bind. 0 (default) picks a free one. */
@@ -67,6 +75,8 @@ export const scenarios: Record<string, Partial<RendererEngineOptions>> = {
   default: {},
   /** The seeded inspection insp-7 is visible to the signed-in user, so the work list shows it. */
   inspection: { showInspection: true },
+  /** As `inspection`, with the report published (version 3): read-only until "Edit and republish". */
+  published: { showInspection: true, published: true },
 };
 
 async function readBody(request: import('node:http').IncomingMessage): Promise<Buffer> {
@@ -128,6 +138,9 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const uploadCounts = new Map<string, number>();
   const uploadContentLengths: Array<number | null> = [];
   const imports: RendererEngine['imports'] = [];
+  const report: RendererEngine['report'] = options.published === true ? { state: 'locked', version: 3 } : { state: 'draft', version: null };
+  const publishes: RendererEngine['publishes'] = [];
+  let reopens = 0;
   const photoRequests: Array<{ key: string; w: string | null; authorized: boolean }> = [];
   const activeUploadResponses = new Set<import('node:http').ServerResponse>();
   const uploadTokens = new Map<string, string>();
@@ -203,10 +216,10 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     if (request.method === 'GET' && route === '/api/contractor-types') { json(contract<'/api/contractor-types', 'get'>()({ success: true, data: [] })); return; }
     if (request.method === 'GET' && route === '/api/admin/defect-categories') { json(contract<'/api/admin/defect-categories', 'get'>()({ success: true, data: [] })); return; }
     if (request.method === 'GET' && route === '/api/inspections/insp-7') {
-      const inspection = contract<'/api/inspections/{id}', 'get'>()({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, templateId: null, createdAt: '2026-10-31T10:00:00Z', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } }, primaryReportId: null } });
+      const inspection = contract<'/api/inspections/{id}', 'get'>()({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, templateId: null, createdAt: '2026-10-31T10:00:00Z', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } }, primaryReportId: null, publishedVersionNumber: report.version, editingAgain: report.state === 'editing', contentLocked: report.state === 'locked' } });
       // The app reads these two (src/field/editor-data.ts) and the contract does not list them for this route: kept, and named here so they are
       // not mistaken for documented fields. See docs/fake-engine-contract.md.
-      json({ ...inspection, data: { ...inspection.data, inspection: { ...inspection.data.inspection, propertyType: 'single_family', reportStatus: 'in_progress' } } });
+      json({ ...inspection, data: { ...inspection.data, inspection: { ...inspection.data.inspection, propertyType: 'single_family', reportStatus: report.state === 'draft' ? 'in_progress' : 'published' } } });
       return;
     }
     if (request.method === 'GET' && route === '/api/inspections/templates') { json(contract<'/api/inspections/templates', 'get'>()({ success: true, data: [], meta: { page: 1, totalPages: 1, total: 0, pageSize: 20 } })); return; }
@@ -324,7 +337,37 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     }
     if (route === '/api/inspections') {
       // The list the work-list download reads: the seeded inspection when the scenario shows it, so a fresh device can download it.
-      json(contract<'/api/inspections', 'get'>()({ success: true, data: options.showInspection ? [{ id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, inspectorId: 'renderer-user', templateId: null, createdAt: '2026-10-31T10:00:00Z' }] : [], meta: { nextCursor: null } }));
+      json(contract<'/api/inspections', 'get'>()({ success: true, data: options.showInspection ? [{ id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, inspectorId: 'renderer-user', templateId: null, createdAt: '2026-10-31T10:00:00Z', publishedVersionNumber: report.version, editingAgain: report.state === 'editing' }] : [], meta: { nextCursor: null } }));
+      return;
+    }
+    // "Edit and republish": only a published report can be opened again; the answer is the same when it is already open.
+    if (request.method === 'POST' && route === '/api/inspections/insp-7/edit-again') {
+      void readBody(request).then(() => {
+        if (report.state === 'draft') { json({ success: false, error: { code: 'BAD_REQUEST', message: 'Only a published report can be edited again.' } }, 400); return; }
+        reopens += 1;
+        report.state = 'editing';
+        json(contract<'/api/inspections/{id}/edit-again', 'post'>()({ success: true, data: { reportId: 'rep-7', state: 'editing' } }));
+      });
+      return;
+    }
+    // A publish makes a new version only when something was said (a summary stands for an edit here); otherwise it is the "nothing changed" answer.
+    if (request.method === 'POST' && route === '/api/inspections/insp-7/publish') {
+      void readBody(request).then((raw) => {
+        let body: { summary?: unknown; notifyClient?: unknown } = {};
+        try { body = JSON.parse(raw.toString('utf8') || '{}') as typeof body; } catch { body = {}; }
+        const summary = typeof body.summary === 'string' && body.summary.trim() !== '' ? body.summary.trim() : null;
+        const reportUrl = `${origin}/report/renderer-test/insp-7`;
+        if (report.state === 'locked' || (report.state === 'editing' && summary === null)) {
+          publishes.push({ notifyClient: typeof body.notifyClient === 'boolean' ? body.notifyClient : null, summary, outcome: 'unchanged' });
+          report.state = 'locked';
+          json(contract<'/api/inspections/{id}/publish', 'post'>()({ success: true, data: { reportUrl, reportStatus: 'published', isnSync: null, unchangedSinceVersion: report.version ?? 1 } }));
+          return;
+        }
+        publishes.push({ notifyClient: typeof body.notifyClient === 'boolean' ? body.notifyClient : null, summary, outcome: 'new_version' });
+        report.version = (report.version ?? 0) + 1;
+        report.state = 'locked';
+        json(contract<'/api/inspections/{id}/publish', 'post'>()({ success: true, data: { reportUrl, reportStatus: 'published', isnSync: null } }));
+      });
       return;
     }
     json({ error: 'not-found' }, 404);
@@ -356,7 +399,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   if (!address || typeof address === 'string') throw new Error('renderer-engine-listen-failed');
   const host = options.host === undefined || options.host === '0.0.0.0' ? '127.0.0.1' : options.host === '::' ? '::1' : options.host;
   url = `${scheme}://${host.includes(':') ? `[${host}]` : host}:${address.port}`;
-  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, imports, photoRequests, completedCounts, completedAt, covers, errors, setUnavailable(value) {
+  return { url, setCompatibility: (value) => Object.assign(compatibility, value), requests, uploads, uploadCounts, uploadContentLengths, imports, photoRequests, report, publishes, get reopens() { return reopens; }, completedCounts, completedAt, covers, errors, setUnavailable(value) {
     unavailable = value;
     if (value) for (const socket of connections) socket.destroy();
   }, setUploadDelay(ms) { uploadDelayMs = Math.max(0, ms); }, get activeUploadCount() { return activeUploadResponses.size; }, close: () => new Promise<void>((resolveClose) => {

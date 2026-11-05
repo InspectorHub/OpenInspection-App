@@ -346,6 +346,7 @@ export const OUTBOX_ERROR_CODES = [
   'inspection_cancelled',
   'quota_refused',
   'conflict',
+  'report_published',
   'id_conflict',
   'key_reused',
   'rejected',

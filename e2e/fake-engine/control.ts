@@ -19,7 +19,7 @@ async function readJson(request: import('node:http').IncomingMessage): Promise<R
  * Test-only control surface for a standalone engine. It listens on its OWN loopback-only port (never on the
  * engine port, which an emulator can reach and which setUnavailable cuts off), and only under /__test__/.
  *
- *   GET  /__test__/state              counters and the request log
+ *   GET  /__test__/state              counters, the request log, and where the seeded report stands (state, version, publishes, reopens)
  *   POST /__test__/unavailable        {"value": true|false}   behave like an unreachable host
  *   POST /__test__/upload-delay       {"ms": number}          delay every upload response
  *   POST /__test__/compatibility      {"minSupported"?, "recommended"?, "downloadUrl"?}
@@ -46,6 +46,9 @@ export async function startControlServer(engine: RendererEngine): Promise<Contro
         covers: engine.covers,
         imports: engine.imports,
         activeUploadCount: engine.activeUploadCount,
+        report: engine.report,
+        publishes: engine.publishes,
+        reopens: engine.reopens,
         errors: engine.errors,
       });
       return;
