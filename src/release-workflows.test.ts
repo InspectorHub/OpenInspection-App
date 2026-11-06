@@ -1634,6 +1634,8 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(off).toBeGreaterThan(0);
     expect(off).toBeLessThan(flowA.indexOf('tapOn: "Add photo"'));
     expect(flowA.indexOf('tapOn: "Add photo"')).toBeLessThan(flowA.indexOf('Add from library'));
+    expect(flowA.indexOf('visible: "Add media"')).toBeGreaterThan(flowA.indexOf('tapOn: "Add photo"'));
+    expect(flowA.indexOf('visible: "Add media"')).toBeLessThan(flowA.indexOf('tapOn: "Add from library"'));
     // The picture is in the media index (checked by a query, not a sleep) before Maestro starts: Maestro's addMedia raced the index on API 34.
     expect(stepsOf(flowA)).not.toContain('addMedia'); // the comment may name it, a step may not
     const pushed = g3.indexOf('adb push maestro/fixtures/roof-photo.jpg');

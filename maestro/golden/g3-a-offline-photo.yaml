@@ -35,6 +35,9 @@ appId: io.inspectorhub.app
       CONTROL_URL: ${CONTROL_URL}
       UNAVAILABLE: "true"
 - tapOn: "Add photo"
+- extendedWaitUntil:
+    visible: "Add media"
+    timeout: 10000
 - tapOn: "Add from library"
 # The system photo picker (Android 13+). The script pushed the fixture to /sdcard/Pictures and waited until the media index listed it BEFORE
 # this flow started (Maestro's own addMedia put the file in just before the picker opened, and on API 34 the picker then said "No photos or
