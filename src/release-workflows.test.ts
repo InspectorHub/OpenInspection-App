@@ -1668,7 +1668,9 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(started).toBeLessThan(g3.indexOf('start_app "Choose your server"'));
     const recorder = readFileSync(join(ROOT, 'scripts', 'lib', 'webview-console.mjs'), 'utf8');
     expect(recorder).toContain("'[file-input-change]'");
-    expect(recorder).toContain('input.files?.length');
+    expect(recorder).toContain('files.map(({ type, size }) => ({ type, size }))');
+    expect(recorder).toContain("'[file-input-readable]'");
+    expect(recorder).toContain("'[file-input-read-error]'");
     expect(g3).toContain('trap stop_console EXIT');
     const onError = g3.slice(g3.indexOf('on_error() {'), g3.indexOf('trap on_error ERR'));
     // The snapshot is taken while the recorder still runs, then the recorder is stopped and its tail is printed into the job log.
