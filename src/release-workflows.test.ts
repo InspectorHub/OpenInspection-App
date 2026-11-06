@@ -1569,13 +1569,13 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(loop.indexOf('dismiss_not_responding')).toBeGreaterThan(0);
     expect(loop.indexOf('dismiss_not_responding')).toBeLessThan(loop.indexOf('Choose your server'));
     expect(loop).toMatch(/dismiss_not_responding "\$OUT\/ui\.xml"; then[\s\S]*?continue/);
-    // The golden flow checks once BEFORE Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
+    // The golden flow checks before Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
     expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeGreaterThan(0);
     expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeLessThan(golden.indexOf('maestro --device'));
     // A dialog that would come up LATER, while Maestro runs and nothing may look at the screen, is prevented: error dialogs are hidden
     // before the app is started (a crash of the app is still found by the logcat check).
     expect(golden).toContain('settings put global hide_error_dialogs 1');
-    expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('adb shell am start -n'));
+    expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('start_app "Choose your server"'));
     // After the loop, a last press is followed by one more look, so the checks read the screen and not the dialog that was pressed.
     const after = smoke.slice(smoke.indexOf('until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]'));
     expect(after).toContain('dismissed=1');
@@ -1596,7 +1596,7 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     }
   });
 
-  it('the golden script starts the app from a cleared state with pm clear and am start, then runs the G2 flow with the engine address', () => {
+  it('the golden script starts the app from a cleared state with the shared screen-aware launcher, then runs G2 with the engine address', () => {
     expect(golden.startsWith('#!/usr/bin/env bash')).toBe(true);
     for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'logcat', 'uiautomator dump', 'maestro/golden/g2-controlled-sign-in.yaml', '-e "SERVER_URL=$ENGINE_ORIGIN"']) expect(golden, needle).toContain(needle);
     // The emulator's localhost is made to reach the runner: without these two the WebView and the app would find nothing on it.
@@ -1606,11 +1606,14 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(reverseEngine).toBeGreaterThan(0);
     expect(golden).not.toContain('10.0.2.2');
     const clear = golden.indexOf('adb shell pm clear "$APP_ID"');
-    const start = golden.indexOf('adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"');
+    const start = golden.indexOf('start_app "Choose your server"');
     const flow = golden.indexOf('maestro --device "$serial" test');
+    const launcher = readFileSync(join(ROOT, 'scripts', 'lib', 'android-start-app.sh'), 'utf8');
     expect(clear).toBeGreaterThan(Math.max(reverseVite, reverseEngine));
     expect(start).toBeGreaterThan(clear);
     expect(flow).toBeGreaterThan(start);
+    expect(launcher).toContain('adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"');
+    expect(launcher).toContain('wait_for_screen_text "$pattern"');
     // Maestro never launches the app itself: the flow file names the app id but has no launchApp step.
     expect(readFileSync(join(ROOT, 'maestro', 'golden', 'g2-controlled-sign-in.yaml'), 'utf8')).not.toContain('launchApp');
     // No credential, token or account is typed or passed by the script.
