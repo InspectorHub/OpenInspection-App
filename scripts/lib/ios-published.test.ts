@@ -14,6 +14,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 vi.setConfig({ testTimeout: 120_000 });
 const SCRIPT = join(__dirname, '..', 'ios-simulator-published.sh').replace(/\\/g, '/');
 const SIGN_IN_FLOW = join(__dirname, '..', '..', 'maestro', 'ios', 'sign-in.yaml');
+const REPUBLISH_FLOW = join(__dirname, '..', '..', 'maestro', 'ios', 'g5-b-republish-with-notice.yaml');
 const bashAvailable = (() => { try { return spawn('bash', ['-c', 'true']).pid !== undefined; } catch { return false; } })();
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -115,6 +116,18 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(flow).toContain('visible: "Download today\'s work"');
     expect(flow).not.toContain('visible: "Work list"');
     expect(flow).toContain('- assertVisible: "Online"');
+  });
+
+  it('scrolls the iOS republish modal again after the checkbox dismisses the keyboard', () => {
+    const flow = readFileSync(REPUBLISH_FLOW, 'utf8');
+    const checkbox = flow.indexOf('- tapOn: "Send the report-updated notices"');
+    const secondScroll = flow.indexOf('- swipe:', checkbox);
+    const publishReady = flow.indexOf('visible: "Just publish"', secondScroll);
+    const publish = flow.indexOf('- tapOn: "Just publish"', publishReady);
+    expect(checkbox).toBeGreaterThan(0);
+    expect(secondScroll).toBeGreaterThan(checkbox);
+    expect(publishReady).toBeGreaterThan(secondScroll);
+    expect(publish).toBeGreaterThan(publishReady);
   });
 
   it('a full run: trusts the certificate before the app is installed, runs part A then part B on the pinned device, and checks the engine after each', async () => {

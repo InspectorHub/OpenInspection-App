@@ -19,13 +19,18 @@ appId: io.inspectorhub.app
     timeout: 20000
 - tapOn: "What changed in this amendment?"
 - inputText: "${SUMMARY}"
-# `hideKeyboard` cannot dismiss the keyboard of a web textarea on iOS ("Couldn't hide the keyboard", seen on CI). The box and the buttons sit
-# below the field, behind the keyboard: scroll the dialog by swiping in its visible upper part, then tap the box (which also moves the focus
-# off the field, so the keyboard goes).
+# `hideKeyboard` cannot dismiss the keyboard of a web textarea on iOS ("Couldn't hide the keyboard", seen on CI). Scroll to the box, then
+# tap it to move focus off the field and dismiss the keyboard. The smaller viewport can leave the footer below the fold, so scroll again.
 - swipe:
     start: 50%, 50%
     end: 50%, 12%
 - tapOn: "Send the report-updated notices"
+- swipe:
+    start: 50%, 50%
+    end: 50%, 12%
+- extendedWaitUntil:
+    visible: "Just publish"
+    timeout: 20000
 - tapOn: "Just publish"
 - extendedWaitUntil:
     visible: "Report published"
