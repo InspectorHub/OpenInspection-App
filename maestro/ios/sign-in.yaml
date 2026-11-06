@@ -8,7 +8,8 @@
 #    caller (scripts/ios-simulator-published.sh). The "Allow plain http" switch exists only in a development bundle and is not needed (nor
 #    present in the ordinary build) for an https address.
 #  - The address is entered only after both the screen heading and the default field value are visible; the heading can appear before the
-#    field is ready to accept input. The value is tapped to focus the field, then its blank right end to place the caret after the value.
+#    field is ready to accept input. The right-hand blank area is tapped before the keyboard appears, placing the caret after the existing
+#    value so eraseText removes it rather than leaving a suffix.
 #  - Opening the sign-in page may raise a system sheet ("Open in InspectorHub?") when the page redirects back to the app: tapped when shown.
 # Start from a clean, already-running app (the caller installs and launches it); the flow does not launch it.
 appId: io.inspectorhub.app
@@ -20,7 +21,6 @@ appId: io.inspectorhub.app
 - extendedWaitUntil:
     visible: "https://app.inspectorhub.io"
     timeout: 30000
-- tapOn: "https://app.inspectorhub.io"
 - tapOn:
     point: "95%,23%"
 - eraseText: 80

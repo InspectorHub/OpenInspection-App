@@ -110,11 +110,9 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
   it('waits for the signed-in work-list action rather than its heading before continuing', () => {
     const flow = readFileSync(SIGN_IN_FLOW, 'utf8');
     const fieldReady = flow.indexOf('visible: "https://app.inspectorhub.io"');
-    const fieldTap = flow.indexOf('- tapOn: "https://app.inspectorhub.io"');
-    const caretAtEnd = flow.indexOf('point: "95%,23%"');
+    const fieldTap = flow.indexOf('point: "95%,23%"');
     expect(fieldReady).toBeGreaterThan(0);
     expect(fieldReady).toBeLessThan(fieldTap);
-    expect(caretAtEnd).toBeGreaterThan(fieldTap);
     expect(flow).toContain('visible: "Download today\'s work"');
     expect(flow).not.toContain('visible: "Work list"');
     expect(flow).toContain('- assertVisible: "Online"');
