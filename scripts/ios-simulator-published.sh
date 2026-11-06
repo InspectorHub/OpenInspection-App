@@ -32,6 +32,31 @@ mkdir -p "$OUT"
 
 fail() { echo "::error::$*"; return 1; }
 
+run_maestro_flow() {
+  local label="$1" flow="$2" output="$3" debug_output="$4" expected_publishes="$5" flow_env="$6"
+  local rc=0 retry_output="${output%.xml}-retry.xml" retry_debug="${debug_output}-retry"
+  if "$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test \
+    -e "$flow_env" --format junit --output "$output" --debug-output "$debug_output" "$flow"; then
+    return 0
+  else
+    rc=$?
+  fi
+
+  if ! grep -Eq 'maestro\.DeviceUnreachableException|Transport unreachable while processing deviceInfo' "$output"; then
+    return "$rc"
+  fi
+
+  echo "::warning::$label: Maestro lost its XCUITest transport; verifying the engine is unchanged before one retry"
+  node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 "$expected_publishes" 20
+  "$TIMEOUT_BIN" -k 2 120 xcrun simctl terminate "$UDID" "$APP_ID" > /dev/null 2>&1 || true
+  launch_app "${label}-retry" "$UDID"
+  wait_for_app "$UDID" "${SMOKE_RECHECK_SECONDS:-60}" || fail "$label: the app is not running after retry launch"
+  sleep "${SMOKE_SETTLE_SECONDS:-8}"
+
+  "$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test \
+    -e "$flow_env" --format junit --output "$retry_output" --debug-output "$retry_debug" "$flow"
+}
+
 # fail() must exist before the library is read (it stops the script when GNU timeout is missing).
 # shellcheck source=lib/ios-simulator.sh
 . "$HERE/lib/ios-simulator.sh"
@@ -96,7 +121,7 @@ echo "ok: the app is running, starting part A against $ENGINE_ORIGIN (engine con
 node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 '[]' 5
 
 # --- part A ---
-"$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test -e "SERVER_URL=$ENGINE_ORIGIN" --format junit --output "$OUT/maestro-g5-a.xml" --debug-output "$OUT/maestro-debug-a" "$FLOWS/g5-a-published-report.yaml"
+run_maestro_flow "g5-a" "$FLOWS/g5-a-published-report.yaml" "$OUT/maestro-g5-a.xml" "$OUT/maestro-debug-a" '[]' "SERVER_URL=$ENGINE_ORIGIN"
 echo "ok: G5 part A passed on screen"
 "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/01-after-part-a.png" || true
 # The screen said "Nothing to publish": the engine must agree. One publish, nothing said, so no new version; locked again at 3; the app sent no
@@ -105,7 +130,7 @@ node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 '[{"notifyClient":null
 echo "ok: the engine saw one publish, unchanged, with no notice choice, and the report is locked at version 3"
 
 # --- part B: the same app session, nothing cleared or restarted between the parts ---
-"$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test -e "SUMMARY=$SUMMARY" --format junit --output "$OUT/maestro-g5-b.xml" --debug-output "$OUT/maestro-debug-b" "$FLOWS/g5-b-republish-with-notice.yaml"
+run_maestro_flow "g5-b" "$FLOWS/g5-b-republish-with-notice.yaml" "$OUT/maestro-g5-b.xml" "$OUT/maestro-debug-b" '[{"notifyClient":null,"summary":null,"outcome":"unchanged"}]' "SUMMARY=$SUMMARY"
 echo "ok: G5 part B passed on screen"
 "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/02-after-part-b.png" || true
 node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 4 '[{"notifyClient":null,"summary":null,"outcome":"unchanged"},{"notifyClient":true,"summary":"'"$SUMMARY"'","outcome":"new_version"}]' 20

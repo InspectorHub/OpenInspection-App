@@ -43,8 +43,26 @@ exit 0
 // A stand-in maestro: it records its arguments and fails when asked to (MAESTRO_FAIL_ON: a part of the command line, such as a flow file name).
 const MAESTRO = `#!/usr/bin/env bash
 echo "maestro $*" >> "$STATE/calls.log"
+args="$*"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then shift; output="$1"; fi
+  shift || true
+done
+if [[ "$args" == *"\${MAESTRO_TRANSPORT_FAIL_ON:-@@never@@}"* ]] && [ ! -e "$STATE/transport-failed" ]; then
+  touch "$STATE/transport-failed"
+  [ "\${MAESTRO_TRANSPORT_STATE_DRIFT:-}" != "1" ] || touch "$STATE/transport-state-drift"
+  printf '%s\\n' '<testsuites><testsuite><testcase><failure>maestro.DeviceUnreachableException: Transport unreachable while processing deviceInfo</failure></testcase></testsuite></testsuites>' > "$output"
+  exit 1
+fi
+case "$args" in
+  *"\${MAESTRO_FAIL_ON:-@@never@@}"*)
+    echo "flow failed on screen"
+    printf '%s\\n' '<testsuites><testsuite><testcase><failure>flow failed on screen</failure></testcase></testsuite></testsuites>' > "$output"
+    exit 1
+    ;;
+esac
 echo x >> "$STATE/maestro-runs"
-case "$*" in *"\${MAESTRO_FAIL_ON:-@@never@@}"*) echo "flow failed on screen"; exit 1 ;; esac
 exit 0
 `;
 
@@ -54,6 +72,12 @@ interface Result { out: string; calls: string[]; status: number | null }
 async function controlServer(state: string, answers: unknown[]): Promise<string> {
   const server = createServer((request, response) => {
     if (request.url !== '/__test__/state') { response.writeHead(404).end(); return; }
+    if (existsSync(join(state, 'transport-state-drift'))) {
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+        report: { state: 'locked', version: 4 }, publishes: [UNCHANGED], errors: [],
+      }));
+      return;
+    }
     const runsFile = join(state, 'maestro-runs');
     const runs = existsSync(runsFile) ? readFileSync(runsFile, 'utf8').split('\n').filter(Boolean).length : 0;
     response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(answers[Math.min(runs, answers.length - 1)]));
@@ -167,6 +191,33 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(b).toContain('g5-b-republish-with-notice.yaml');
     expect(b).not.toContain('SERVER_URL');
     expect(r.out).toContain('the engine holds version 4, locked');
+  });
+
+  it('retries once after XCUITest transport loss only when the engine still has the expected state', async () => {
+    const r = await run(HAPPY, { env: { MAESTRO_TRANSPORT_FAIL_ON: 'g5-a' } });
+    expect(r.status).toBe(0);
+    expect(r.out).toContain('verifying the engine is unchanged before one retry');
+    expect(r.out).toContain('ios-simulator-published: G5 passed');
+    const calls = maestroCalls(r.calls);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain('g5-a-published-report.yaml');
+    expect(calls[1]).toContain('g5-a-published-report.yaml');
+    expect(calls[2]).toContain('g5-b-republish-with-notice.yaml');
+    expect(calls[0]).toContain('SERVER_URL=https://localhost:9443');
+    expect(calls[1]).toContain('SERVER_URL=https://localhost:9443');
+    expect(calls[2]).toContain('SUMMARY=Corrected the roof rating');
+    const retryLaunch = r.calls.findIndex((call) => call.includes('g5-a-retry.typescript'));
+    expect(retryLaunch).toBeGreaterThan(r.calls.findIndex((call) => call.includes('simctl terminate UDID-1 io.inspectorhub.app')));
+    const retryFlow = r.calls.findIndex((call, index) => index > retryLaunch && call.startsWith('maestro ') && call.includes('g5-a-published-report.yaml'));
+    expect(retryFlow).toBeGreaterThan(retryLaunch);
+  });
+
+  it('does not retry after XCUITest transport loss if the engine state changed', async () => {
+    const r = await run(HAPPY, { env: { MAESTRO_TRANSPORT_FAIL_ON: 'g5-a', MAESTRO_TRANSPORT_STATE_DRIFT: '1' } });
+    expect(r.status).not.toBe(0);
+    expect(maestroCalls(r.calls)).toHaveLength(1);
+    expect(r.calls.some((call) => call.includes('g5-a-retry.typescript'))).toBe(false);
+    expect(r.out).toContain('expected');
   });
 
   it('refuses a plain-http engine address before touching the simulator (the app has no ATS exception)', async () => {
