@@ -212,7 +212,10 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           session,
           origin,
           canEdit: ports.canEdit,
-          onDiagnostic: appDiagnostics.push,
+          onDiagnostic: (code) => {
+            appDiagnostics.push(code);
+            if (import.meta.env.DEV) console.info('[photo-diagnostic]', code);
+          },
           copyToGallery: createGalleryCopier({ setting: services.gallerySetting, gallery: services.photoGallery }),
           platform: services.platform,
           signedAtMs: () => services.clock.now(),
