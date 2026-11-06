@@ -110,12 +110,19 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
   it('waits for the signed-in work-list action rather than its heading before continuing', () => {
     const flow = readFileSync(SIGN_IN_FLOW, 'utf8');
     const fieldReady = flow.indexOf('visible: "https://app.inspectorhub.io"');
-    const fieldTap = flow.indexOf('point: "95%,23%"');
+    const fieldSelect = flow.indexOf('- longPressOn: "https://app.inspectorhub.io"');
+    const selectAllReady = flow.indexOf('visible: "Select All"');
+    const selectAllTap = flow.indexOf('- tapOn: "Select All"');
+    const fieldInput = flow.indexOf('- inputText: "${SERVER_URL}"');
     expect(fieldReady).toBeGreaterThan(0);
-    expect(fieldReady).toBeLessThan(fieldTap);
+    expect(fieldSelect).toBeGreaterThan(fieldReady);
+    expect(selectAllReady).toBeGreaterThan(fieldSelect);
+    expect(selectAllTap).toBeGreaterThan(selectAllReady);
+    expect(fieldInput).toBeGreaterThan(selectAllTap);
     expect(flow).toContain('visible: "Download today\'s work"');
     expect(flow).not.toContain('visible: "Work list"');
     expect(flow).toContain('- assertVisible: "Online"');
+    expect(flow).not.toContain('point: "95%,23%"');
   });
 
   it('scrolls the iOS republish modal again after the checkbox dismisses the keyboard', () => {

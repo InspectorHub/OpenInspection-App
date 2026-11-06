@@ -48,6 +48,8 @@ appId: io.inspectorhub.app
 - tapOn:
     text: "Photo taken on.*"
     index: 0
+- takeScreenshot:
+    path: g3-photo-selected
 # The picker confirms a selection with "Done" on API 36 and with "Add (1)" on API 34 (seen in CI run 41413632011); a version that returns at
 # once has no button at all. Maestro matches the whole text, so the count in "Add (1)" is part of the pattern. Either way the next step is
 # a hard wait for the tile.
