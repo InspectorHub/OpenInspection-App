@@ -20,10 +20,8 @@ appId: io.inspectorhub.app
 - extendedWaitUntil:
     visible: "https://app.inspectorhub.io"
     timeout: 30000
-# A tap in the empty right-hand end of the field puts the caret after the text, and erasing more characters than the pre-filled address
-# holds empties it.
-- tapOn:
-    point: "88%,25%"
+# Tapping the visible value targets the input itself; a screen coordinate can miss it as simulator safe areas change.
+- tapOn: "https://app.inspectorhub.io"
 - eraseText: 80
 - inputText: "${SERVER_URL}"
 - hideKeyboard
