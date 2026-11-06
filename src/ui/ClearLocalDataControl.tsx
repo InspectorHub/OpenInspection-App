@@ -17,6 +17,8 @@ export interface ClearLocalDataControlProps {
    * The app stops its lock checks while it is true: a device whose verification marks were just removed is not "expired".
    */
   onWiping?(wiping: boolean): void;
+  /** The text on the button that opens the question. The questions themselves are the same whatever it says. */
+  label?: string;
 }
 
 const FIRST_DESCRIPTION = 'This permanently removes the inspections, photos and changes stored on this device. This cannot be undone.';
@@ -50,7 +52,7 @@ interface Counted {
  * before a single-step clear, so work that arrived while the dialog was open sends the person to the second step instead of being
  * removed. Signing out follows the clear (the sign-in belongs to the data that was removed). Never `window.confirm`.
  */
-export function ClearLocalDataControl({ services, origin, onCleared, onWiping }: ClearLocalDataControlProps) {
+export function ClearLocalDataControl({ services, origin, onCleared, onWiping, label = 'Clear local data' }: ClearLocalDataControlProps) {
   const [step, setStep] = useState<'closed' | 'first' | 'second'>('closed');
   const [opening, setOpening] = useState(0);
   const [counted, setCounted] = useState<Counted | null>(null);
@@ -151,7 +153,7 @@ export function ClearLocalDataControl({ services, origin, onCleared, onWiping }:
   return (
     <>
       <Button ref={trigger} variant="secondary" onClick={open}>
-        Clear local data
+        {label}
       </Button>
       {step === 'first' && (
         <ConfirmDialog

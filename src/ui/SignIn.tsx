@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { CompatNotice } from '../app/compat-notice';
 import type { AppServices } from '../app/compose';
-import { isAuthError } from '../auth/errors';
+import { isAuthError, type IdentityMismatch } from '../auth/errors';
 import type { SignInResult } from '../auth/pkce-login';
 import { BuildExpiry } from './BuildExpiry';
+import { IdentityMismatchPanel } from './IdentityMismatchPanel';
 import { Body, Button, Heading, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NOTICE_MESSAGES } from './messages';
@@ -17,14 +18,19 @@ export interface SignInProps {
   notices: CompatNotice[];
   onSignedIn(result: SignInResult): void;
   onChangeServer(): void;
+  /** True while a clear of the device's data (offered after a sign-in as a different account) runs, as in Settings. */
+  onWiping?(wiping: boolean): void;
   /** Present when this screen was reached from the lock screen: returns to it, with the lock evaluated again. */
   onBack?(): void;
 }
 
-export function SignIn({ services, origin, relogin, notices, onSignedIn, onChangeServer, onBack }: SignInProps) {
+export function SignIn({ services, origin, relogin, notices, onSignedIn, onChangeServer, onWiping, onBack }: SignInProps) {
   const { flow } = services;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the account that signed in is not the one whose data is on this device: the panel replaces the one-line error.
+  const [mismatch, setMismatch] = useState<IdentityMismatch | null>(null);
+  const [cleared, setCleared] = useState(false);
   const [browserClosed, setBrowserClosed] = useState(false);
   const latch = useActionLatch();
 
@@ -44,13 +50,15 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
 
   async function signIn(): Promise<void> {
     setError(null);
+    setMismatch(null);
     setBrowserClosed(false);
     setBusy(true);
     try {
       onSignedIn(await flow.signIn(origin));
     } catch (err) {
       // A cancel is the person's own choice: back to the button, with nothing to explain.
-      if (!(isAuthError(err) && err.code === 'sign_in_cancelled')) setError(messageFor(err));
+      if (isAuthError(err) && err.code === 'identity_mismatch' && err.mismatch) setMismatch(err.mismatch);
+      else if (!(isAuthError(err) && err.code === 'sign_in_cancelled')) setError(messageFor(err));
       setBusy(false);
     }
   }
@@ -72,7 +80,21 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
           {NOTICE_MESSAGES[notice]}
         </Notice>
       ))}
+      {cleared && <Notice tone="info">This device&apos;s data was removed. Sign in to start fresh with this account.</Notice>}
       {error && <Notice tone="bad">{error}</Notice>}
+      {mismatch && !busy && (
+        <IdentityMismatchPanel
+          services={services}
+          origin={origin}
+          mismatch={mismatch}
+          onKeep={() => setMismatch(null)}
+          onCleared={() => {
+            setMismatch(null);
+            setCleared(true);
+          }}
+          {...(onWiping ? { onWiping } : {})}
+        />
+      )}
       {busy && browserClosed && <Notice tone="info">The sign-in page was closed. If you did not finish signing in, tap Cancel and try again.</Notice>}
       <div className="flex flex-col gap-3">
         {busy ? (

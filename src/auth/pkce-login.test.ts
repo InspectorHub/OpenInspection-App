@@ -61,6 +61,15 @@ function tokenPosts(server: FakeServer, grantType: string): number {
   return server.requests.filter((r) => r.path === '/oauth/token' && r.form.grant_type === grantType).length;
 }
 
+async function errorOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (err) {
+    return err;
+  }
+  return null;
+}
+
 async function codeOf(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -729,6 +738,32 @@ describe('session check after login (P1)', () => {
     expect(await codeOf(r.flow.signIn(r.server.origin))).toBe('identity_mismatch');
     expect(await loadIdentity(r.db)).toEqual({ userId: 'u1', tenantId: 't1', role: 'inspector' });
     expect(r.store.entries()).toEqual({});
+  });
+
+  it('records the server the identity signed in to, so a later mismatch can name it', async () => {
+    const r = await rig();
+    await r.flow.signIn(r.server.origin);
+    const rows = await r.db.query<{ value: string }>("SELECT value FROM device_state WHERE key = 'identity_origin'");
+    expect(rows[0]?.value).toBe(r.server.origin);
+  });
+
+  it('says whose data it is: another company, with both roles', async () => {
+    const r = await rig({ server: createFakeServer({ userId: 'someone-else', tenantId: 't-other', role: 'inspector' }) });
+    await saveIdentity(r.db, { userId: 'u1', tenantId: 't1', role: 'owner' });
+    const err = await errorOf(r.flow.signIn(r.server.origin));
+    expect(isAuthError(err) && err.mismatch).toEqual({ sameCompany: false, storedRole: 'owner', newRole: 'inspector' });
+  });
+
+  it('says whose data it is: another person in the same company', async () => {
+    const r = await rig({ server: createFakeServer({ userId: 'someone-else', tenantId: 'tenant-1', role: 'manager' }) });
+    await saveIdentity(r.db, { userId: 'u1', tenantId: 'tenant-1', role: 'inspector' });
+    const err = await errorOf(r.flow.signIn(r.server.origin));
+    expect(isAuthError(err) && err.mismatch).toEqual({ sameCompany: true, storedRole: 'inspector', newRole: 'manager' });
+    // Control: every other error carries no such detail.
+    const other = await rig();
+    other.server.queue('/api/client/session', () => new Response('{}', { status: 401 }));
+    const failed = await errorOf(other.flow.signIn(other.server.origin));
+    expect(isAuthError(failed) && failed.mismatch).toBeUndefined();
   });
 
   it('lets the same user and tenant sign in again over existing local data', async () => {

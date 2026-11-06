@@ -196,6 +196,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             void screenForSignedIn(services, result.origin, identity).then(setScreen, () => setScreen({ kind: 'locked', origin: result.origin, identity, reason: 'expired' }));
           }}
           onChangeServer={() => setScreen({ kind: 'setup' })}
+          onWiping={setWiping}
           onBack={
             screen.backToLock
               ? () => {

@@ -75,18 +75,31 @@ export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
  */
 export type RetryCause = 'no_answer' | 'answered' | 'local' | 'upgrade_required' | 'none';
 
+/**
+ * Who the sign-in was for, compared with whose data is on this device. Carried by `identity_mismatch` only, as plain facts
+ * (never a server's text): whether the two accounts are in the same company, and each one's role.
+ */
+export interface IdentityMismatch {
+  sameCompany: boolean;
+  storedRole: string;
+  newRole: string;
+}
+
 export class AuthError extends Error {
   readonly code: AuthErrorCode;
   readonly messageKey: string;
   /** Set only on an error that a failed token fetch throws; absent on every other `AuthError`. */
   readonly retryCause: RetryCause | undefined;
+  /** Set only on `identity_mismatch` thrown by a sign-in; absent on every other `AuthError`. */
+  readonly mismatch: IdentityMismatch | undefined;
 
-  constructor(code: AuthErrorCode, retryCause?: RetryCause) {
+  constructor(code: AuthErrorCode, retryCause?: RetryCause, mismatch?: IdentityMismatch) {
     super(AUTH_ERROR_MESSAGES[code]);
     this.name = 'AuthError';
     this.code = code;
     this.messageKey = AUTH_ERROR_MESSAGE_KEYS[code];
     this.retryCause = retryCause;
+    this.mismatch = mismatch;
   }
 }
 
