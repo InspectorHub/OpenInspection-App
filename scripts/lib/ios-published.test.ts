@@ -15,6 +15,7 @@ vi.setConfig({ testTimeout: 120_000 });
 const SCRIPT = join(__dirname, '..', 'ios-simulator-published.sh').replace(/\\/g, '/');
 const SIGN_IN_FLOW = join(__dirname, '..', '..', 'maestro', 'ios', 'sign-in.yaml');
 const REPUBLISH_FLOW = join(__dirname, '..', '..', 'maestro', 'ios', 'g5-b-republish-with-notice.yaml');
+const PUBLISHED_FLOW = join(__dirname, '..', '..', 'maestro', 'ios', 'g5-a-published-report.yaml');
 const bashAvailable = (() => { try { return spawn('bash', ['-c', 'true']).pid !== undefined; } catch { return false; } })();
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -174,6 +175,17 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(publish).toBeGreaterThan(publishReady);
   });
 
+  it('scrolls back to the published banner after closing the final receipt', () => {
+    const flow = readFileSync(REPUBLISH_FLOW, 'utf8');
+    const finalClose = flow.lastIndexOf('- tapOn: "Close"');
+    const bannerScroll = flow.indexOf('- scrollUntilVisible:', finalClose);
+    const finalBanner = flow.indexOf('visible: "Published as version 4.', finalClose);
+    expect(finalClose).toBeGreaterThan(0);
+    expect(bannerScroll).toBeGreaterThan(finalClose);
+    expect(flow.slice(bannerScroll, finalBanner)).toContain('direction: UP');
+    expect(finalBanner).toBeGreaterThan(bannerScroll);
+  });
+
   it('a full run: trusts the certificate before the app is installed, runs part A then part B on the pinned device, and checks the engine after each', async () => {
     const r = await run(HAPPY);
     expect(r.out).toContain('ios-simulator-published: G5 passed');
@@ -218,6 +230,42 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(maestroCalls(r.calls)).toHaveLength(1);
     expect(r.calls.some((call) => call.includes('g5-a-retry.typescript'))).toBe(false);
     expect(r.out).toContain('expected');
+  });
+
+  it('does not retry g5-b after XCUITest transport loss: it continues from part A\'s screen, which a restarted app cannot resume', async () => {
+    const r = await run(HAPPY, { env: { MAESTRO_TRANSPORT_FAIL_ON: 'g5-b' } });
+    expect(r.status).not.toBe(0);
+    const calls = maestroCalls(r.calls);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('g5-a-published-report.yaml');
+    expect(calls[1]).toContain('g5-b-republish-with-notice.yaml');
+    expect(r.calls.some((call) => call.includes('g5-b-retry.typescript'))).toBe(false);
+    expect(r.out).toContain('a restarted app cannot resume it');
+  });
+
+  it('names the first failure when the retry fails too, so the log does not end on the second symptom', async () => {
+    // The first call to g5-a loses its transport; the retry (the second call) then fails on screen.
+    const r = await run(HAPPY, { env: { MAESTRO_TRANSPORT_FAIL_ON: 'g5-a', MAESTRO_FAIL_ON: 'g5-a' } });
+    expect(r.status).not.toBe(0);
+    expect(maestroCalls(r.calls)).toHaveLength(2);
+    expect(r.out).toContain('the retry failed too');
+    expect(r.out).toContain('had lost its XCUITest transport');
+  });
+
+  it('g5-a starts from a fresh app or a signed-in one, and signs in only on the first (a retry restarts a signed-in app)', () => {
+    const flow = readFileSync(PUBLISHED_FLOW, 'utf8');
+    // The old form ran the sign-in flow unconditionally, which asserts the server screen a restarted app no longer shows.
+    expect(flow).not.toMatch(/^- runFlow:\n {4}file: sign-in\.yaml/m);
+    const waitEither = flow.search(/extendedWaitUntil:\n\s+visible: "Choose your server\|Download today's work"/);
+    const guardedSignIn = flow.search(/when:\n\s+visible: "Choose your server"\n\s+file: sign-in\.yaml/);
+    const scrollBack = flow.search(/scrollUntilVisible:\n\s+element: "Back to work list"\n\s+direction: UP\n\s+timeout: \d+\n\s+optional: true/);
+    const guardedBack = flow.search(/when:\n\s+visible: "Back to work list"\n\s+commands:\n\s+- tapOn: "Back to work list"/);
+    const download = flow.indexOf('- tapOn: "Download today\'s work"');
+    expect(waitEither).toBeGreaterThan(0);
+    expect(guardedSignIn).toBeGreaterThan(waitEither);
+    expect(scrollBack).toBeGreaterThan(guardedSignIn);
+    expect(guardedBack).toBeGreaterThan(scrollBack);
+    expect(download).toBeGreaterThan(guardedBack);
   });
 
   it('refuses a plain-http engine address before touching the simulator (the app has no ATS exception)', async () => {

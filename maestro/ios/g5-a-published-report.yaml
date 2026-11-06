@@ -8,11 +8,29 @@
 # The engine must run with `--scenario published` over https; scripts/ios-simulator-published.sh does all of it and checks the engine between the parts.
 appId: io.inspectorhub.app
 ---
+# Starts from either app: a fresh one on the server screen, or (after scripts/ios-simulator-published.sh restarted the app because Maestro lost
+# its XCUITest transport) one that is already signed in on the work list. Wait for whichever appears, and sign in only on the first.
+- extendedWaitUntil:
+    visible: "Choose your server|Download today's work"
+    timeout: 90000
 - runFlow:
+    when:
+      visible: "Choose your server"
     file: sign-in.yaml
     env:
       SERVER_URL: ${SERVER_URL}
-- tapOn: "Back to work list"
+# Sign-in ends on Settings, scrolled down to its last row, so the button at the top may be off screen; a restarted app is already on the work
+# list, where the button does not exist (the scroll then gives up quietly and the next step is skipped).
+- scrollUntilVisible:
+    element: "Back to work list"
+    direction: UP
+    timeout: 8000
+    optional: true
+- runFlow:
+    when:
+      visible: "Back to work list"
+    commands:
+      - tapOn: "Back to work list"
 - retry:
     maxRetries: 4
     commands:

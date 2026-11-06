@@ -37,6 +37,9 @@ appId: io.inspectorhub.app
     timeout: 60000
 - assertVisible: "The report-updated notices were queued.*"
 - tapOn: "Close"
+- scrollUntilVisible:
+    element: "Published as version 4. It cannot change until you choose Edit and republish."
+    direction: UP
 - extendedWaitUntil:
     visible: "Published as version 4. It cannot change until you choose Edit and republish."
     timeout: 60000

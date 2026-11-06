@@ -33,8 +33,10 @@ mkdir -p "$OUT"
 fail() { echo "::error::$*"; return 1; }
 
 run_maestro_flow() {
-  local label="$1" flow="$2" output="$3" debug_output="$4" expected_publishes="$5" flow_env="$6"
-  local rc=0 retry_output="${output%.xml}-retry.xml" retry_debug="${debug_output}-retry"
+  # retryable: "yes" when the flow starts from a fresh or a signed-in app (g5-a waits for either), "no" when it continues from the screen the
+  # previous flow left (g5-b starts by closing part A's receipt), because a restarted app is on the work list and cannot resume it.
+  local label="$1" flow="$2" output="$3" debug_output="$4" expected_publishes="$5" flow_env="$6" retryable="${7:-yes}"
+  local rc=0 retry_rc=0 retry_output="${output%.xml}-retry.xml" retry_debug="${debug_output}-retry"
   if "$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test \
     -e "$flow_env" --format junit --output "$output" --debug-output "$debug_output" "$flow"; then
     return 0
@@ -46,6 +48,11 @@ run_maestro_flow() {
     return "$rc"
   fi
 
+  if [ "$retryable" != "yes" ]; then
+    echo "::error::$label: Maestro lost its XCUITest transport, and this flow continues from the screen the previous flow left, so a restarted app cannot resume it; not retrying (the first result is in $output)"
+    return "$rc"
+  fi
+
   echo "::warning::$label: Maestro lost its XCUITest transport; verifying the engine is unchanged before one retry"
   node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 "$expected_publishes" 20
   "$TIMEOUT_BIN" -k 2 120 xcrun simctl terminate "$UDID" "$APP_ID" > /dev/null 2>&1 || true
@@ -53,8 +60,15 @@ run_maestro_flow() {
   wait_for_app "$UDID" "${SMOKE_RECHECK_SECONDS:-60}" || fail "$label: the app is not running after retry launch"
   sleep "${SMOKE_SETTLE_SECONDS:-8}"
 
-  "$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test \
-    -e "$flow_env" --format junit --output "$retry_output" --debug-output "$retry_debug" "$flow"
+  if "$TIMEOUT_BIN" -k 10 900 maestro --platform ios --device "$UDID" test \
+    -e "$flow_env" --format junit --output "$retry_output" --debug-output "$retry_debug" "$flow"; then
+    return 0
+  else
+    retry_rc=$?
+  fi
+  # The retry's failure is a second symptom, not the cause: name the first one so it is not the only thing the log ends on.
+  echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt had lost its XCUITest transport (see $output); read that result before this one's"
+  return "$retry_rc"
 }
 
 # fail() must exist before the library is read (it stops the script when GNU timeout is missing).
@@ -130,7 +144,7 @@ node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 '[{"notifyClient":null
 echo "ok: the engine saw one publish, unchanged, with no notice choice, and the report is locked at version 3"
 
 # --- part B: the same app session, nothing cleared or restarted between the parts ---
-run_maestro_flow "g5-b" "$FLOWS/g5-b-republish-with-notice.yaml" "$OUT/maestro-g5-b.xml" "$OUT/maestro-debug-b" '[{"notifyClient":null,"summary":null,"outcome":"unchanged"}]' "SUMMARY=$SUMMARY"
+run_maestro_flow "g5-b" "$FLOWS/g5-b-republish-with-notice.yaml" "$OUT/maestro-g5-b.xml" "$OUT/maestro-debug-b" '[{"notifyClient":null,"summary":null,"outcome":"unchanged"}]' "SUMMARY=$SUMMARY" no
 echo "ok: G5 part B passed on screen"
 "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/02-after-part-b.png" || true
 node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 4 '[{"notifyClient":null,"summary":null,"outcome":"unchanged"},{"notifyClient":true,"summary":"'"$SUMMARY"'","outcome":"new_version"}]' 20
