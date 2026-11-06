@@ -64,7 +64,17 @@ async function adb(...args) {
 }
 
 const APP_ID = 'io.inspectorhub.app';
-const FILE_INPUT_DIAGNOSTIC = `(() => {
+/**
+ * What the recorder runs inside the page once, so a flow that fails after "the photo was picked" says which step stopped.
+ *
+ * A CI run showed a photo that was picked and never added: the file reached the page, then nothing, with no error. The photo pipeline
+ * awaits two browser calls that have no timeout (createImageBitmap, then canvas.toBlob), so each is timed here, and the page's
+ * visibility and any error nobody caught are noted. It only observes: a wrapper returns what the original returns, and calls the
+ * original with the arguments it was given.
+ *
+ * Exported so the test can run it in a stand-in page. Written without template placeholders because it is itself a template string.
+ */
+export const FILE_INPUT_DIAGNOSTIC = `(() => {
   document.addEventListener('change', (event) => {
     const input = event.target;
     if (input instanceof HTMLInputElement && input.type === 'file') {
@@ -72,6 +82,38 @@ const FILE_INPUT_DIAGNOSTIC = `(() => {
       console.info('[file-input-change]', JSON.stringify(files.map(({ type, size }) => ({ type, size }))));
     }
   }, true);
+  const now = () => Math.round(performance.now());
+  const trace = (...parts) => console.info('[photo-trace]', ...parts);
+  const originalBitmap = window.createImageBitmap;
+  if (typeof originalBitmap === 'function') {
+    window.createImageBitmap = function (...args) {
+      const started = now();
+      trace('createImageBitmap start', document.visibilityState);
+      const result = originalBitmap.apply(this, args);
+      if (result && typeof result.then === 'function') {
+        result.then(
+          (bitmap) => trace('createImageBitmap resolved after', now() - started, 'ms', bitmap.width + 'x' + bitmap.height),
+          (error) => trace('createImageBitmap rejected after', now() - started, 'ms', String(error)),
+        );
+      }
+      return result;
+    };
+  }
+  const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+  if (typeof originalToBlob === 'function') {
+    HTMLCanvasElement.prototype.toBlob = function (callback, ...rest) {
+      if (typeof callback !== 'function') return originalToBlob.call(this, callback, ...rest);
+      const started = now();
+      trace('toBlob start', this.width + 'x' + this.height, document.visibilityState);
+      return originalToBlob.call(this, (blob) => {
+        trace('toBlob called back after', now() - started, 'ms', blob ? blob.size + ' bytes' : 'null');
+        callback(blob);
+      }, ...rest);
+    };
+  }
+  document.addEventListener('visibilitychange', () => trace('visibility', document.visibilityState));
+  window.addEventListener('unhandledrejection', (event) => trace('unhandledrejection', String(event.reason)));
+  window.addEventListener('error', (event) => trace('window error', event.message));
   return true;
 })()`;
 /** socket name -> local port: one forward per socket, not one per attempt. */
