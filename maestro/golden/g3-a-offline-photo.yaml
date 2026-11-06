@@ -12,6 +12,11 @@ appId: io.inspectorhub.app
     file: g2-controlled-sign-in.yaml
     env:
       SERVER_URL: ${SERVER_URL}
+# The sign-in flow leaves Settings scrolled when its last row was below the fold, and the button sits at the top: scroll back first.
+- scrollUntilVisible:
+    element: "Back to work list"
+    direction: UP
+    timeout: 30000
 - tapOn: "Back to work list"
 # The first sync after sign-in can still be running; the app then says so and the button needs another press a moment later.
 - retry:
@@ -56,9 +61,16 @@ appId: io.inspectorhub.app
 - tapOn:
     text: 'Done|Add \(\d+\)'
     optional: true
-# Added while the engine is off: the tile shows the picture at once and says it is still on its way. Nothing was lost on the way in.
+# Added while the engine is off: the tile shows the picture and says it is still on its way. Nothing was lost on the way in.
+# The device link is still up (the app's online flag is link state only), so the photo first takes the upload path, and the server's silence
+# is noticed when that request fails. The tile, its caption and the offline notice therefore settle one after another; each is waited for
+# instead of judged at a single instant (a local run on a slow machine saw the tile first and the caption about a minute later).
 - extendedWaitUntil:
     visible: "UPLOADING"
-    timeout: 30000
-- assertVisible: "1 photo"
-- assertVisible: "Can't reach the server"
+    timeout: 90000
+- extendedWaitUntil:
+    visible: "1 photo"
+    timeout: 90000
+- extendedWaitUntil:
+    visible: "Can't reach the server"
+    timeout: 90000

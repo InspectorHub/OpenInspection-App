@@ -14,6 +14,11 @@ appId: io.inspectorhub.app
     file: g2-controlled-sign-in.yaml
     env:
       SERVER_URL: ${SERVER_URL}
+# The sign-in flow leaves Settings scrolled when its last row was below the fold, and the button sits at the top: scroll back first.
+- scrollUntilVisible:
+    element: "Back to work list"
+    direction: UP
+    timeout: 30000
 - tapOn: "Back to work list"
 - retry:
     maxRetries: 4
