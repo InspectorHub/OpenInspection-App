@@ -253,7 +253,8 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
   });
 
   it('g5-a starts from a fresh app or a signed-in one, and signs in only on the first (a retry restarts a signed-in app)', () => {
-    const flow = readFileSync(PUBLISHED_FLOW, 'utf8');
+    // A Windows checkout gives the file CRLF line ends; the patterns below span lines, so compare with LF only.
+    const flow = readFileSync(PUBLISHED_FLOW, 'utf8').replace(/\r\n/g, '\n');
     // The old form ran the sign-in flow unconditionally, which asserts the server screen a restarted app no longer shows.
     expect(flow).not.toMatch(/^- runFlow:\n {4}file: sign-in\.yaml/m);
     const waitEither = flow.search(/extendedWaitUntil:\n\s+visible: "Choose your server\|Download today's work"/);
