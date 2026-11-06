@@ -123,6 +123,21 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(flow).not.toContain('point: "95%,23%"');
   });
 
+  it('retries the iOS compatibility connection once only when sign-in does not appear', () => {
+    const flow = readFileSync(SIGN_IN_FLOW, 'utf8');
+    const connectPrompt = flow.indexOf('assertVisible: "Connect to this server?"');
+    const retry = flow.indexOf('maxRetries: 1', connectPrompt);
+    const connect = flow.indexOf('- tapOn: "Connect"', retry);
+    const signInWait = flow.indexOf('visible: "Sign in"', connect);
+    const signInTap = flow.indexOf('text: "Sign in"', signInWait);
+    expect(connectPrompt).toBeGreaterThan(0);
+    expect(retry).toBeGreaterThan(connectPrompt);
+    expect(connect).toBeGreaterThan(retry);
+    expect(signInWait).toBeGreaterThan(connect);
+    expect(signInTap).toBeGreaterThan(signInWait);
+    expect(flow.slice(retry, signInTap)).toContain('timeout: 20000');
+  });
+
   it('scrolls the iOS republish modal again after the checkbox dismisses the keyboard', () => {
     const flow = readFileSync(REPUBLISH_FLOW, 'utf8');
     const checkbox = flow.indexOf('- tapOn: "Send the report-updated notices"');

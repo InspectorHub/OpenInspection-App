@@ -9,6 +9,7 @@
 #    present in the ordinary build) for an https address.
 #  - The address is entered only after both the screen heading and the default field value are visible; the heading can appear before the
 #    field is ready to accept input. The tap lands on the last character, not the blank area after it, before eraseText runs.
+#  - The first compatibility request can time out on a busy simulator; retry Connect once only if the sign-in screen did not appear.
 #  - Opening the sign-in page may raise a system sheet ("Open in InspectorHub?") when the page redirects back to the app: tapped when shown.
 # Start from a clean, already-running app (the caller installs and launches it); the flow does not launch it.
 appId: io.inspectorhub.app
@@ -29,10 +30,13 @@ appId: io.inspectorhub.app
 - assertVisible: "${SERVER_URL}"
 - tapOn: "Continue"
 - assertVisible: "Connect to this server?"
-- tapOn: "Connect"
-- extendedWaitUntil:
-    visible: "Sign in"
-    timeout: 30000
+- retry:
+    maxRetries: 1
+    commands:
+      - tapOn: "Connect"
+      - extendedWaitUntil:
+          visible: "Sign in"
+          timeout: 20000
 - tapOn:
     text: "Sign in"
     index: 1
