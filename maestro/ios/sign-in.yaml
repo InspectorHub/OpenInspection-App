@@ -7,8 +7,8 @@
 #  - The iOS build has no App Transport Security exception, so the engine is HTTPS and its certificate is trusted in the simulator by the
 #    caller (scripts/ios-simulator-published.sh). The "Allow plain http" switch exists only in a development bundle and is not needed (nor
 #    present in the ordinary build) for an https address.
-#  - The address field is not tapped by screen percentage. It is tapped three times on its text, which selects the whole line in a web view;
-#    eraseText then removes whatever is left of it. The typed address is checked on screen before going on.
+#  - The address is entered only after both the screen heading and the default field value are visible; the heading can appear before the
+#    field is ready to accept input. The right end of the field is tapped so eraseText removes its existing value.
 #  - Opening the sign-in page may raise a system sheet ("Open in InspectorHub?") when the page redirects back to the app: tapped when shown.
 # Start from a clean, already-running app (the caller installs and launches it); the flow does not launch it.
 appId: io.inspectorhub.app
@@ -16,9 +16,12 @@ appId: io.inspectorhub.app
 - extendedWaitUntil:
     visible: "Choose your server"
     timeout: 60000
-# Select by position, not by text: a triple tap on the text selected only part of it on the first CI run, so the typed address landed
-# in front of a leftover ".io". A tap in the empty right-hand end of the field puts the caret after the text, and erasing more characters
-# than the pre-filled address holds empties it.
+# Wait for the input value too; the heading alone does not ensure the form is ready for interaction.
+- extendedWaitUntil:
+    visible: "https://app.inspectorhub.io"
+    timeout: 30000
+# A tap in the empty right-hand end of the field puts the caret after the text, and erasing more characters than the pre-filled address
+# holds empties it.
 - tapOn:
     point: "88%,25%"
 - eraseText: 80
