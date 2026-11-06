@@ -70,12 +70,6 @@ const FILE_INPUT_DIAGNOSTIC = `(() => {
     if (input instanceof HTMLInputElement && input.type === 'file') {
       const files = Array.from(input.files ?? []);
       console.info('[file-input-change]', JSON.stringify(files.map(({ type, size }) => ({ type, size }))));
-      for (const file of files) {
-        void file.slice(0, 1).arrayBuffer().then(
-          (bytes) => console.info('[file-input-readable]', bytes.byteLength),
-          (error) => console.info('[file-input-read-error]', error instanceof Error ? error.name : 'unknown'),
-        );
-      }
     }
   }, true);
   return true;
