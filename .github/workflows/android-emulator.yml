@@ -117,3 +117,6 @@ jobs:
           path: ${{ runner.temp }}/android-smoke
           if-no-files-found: warn
           retention-days: 7
+          # Maestro writes its per-step debug output (the failing step's screenshot, the commands it ran) under a hidden .maestro
+          # directory, and upload-artifact leaves hidden files out unless asked. This directory holds only the flows' own output.
+          include-hidden-files: true

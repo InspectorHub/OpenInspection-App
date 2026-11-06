@@ -86,6 +86,12 @@ on_error() {
     tail -40 "$OUT/app.log" 2>/dev/null || true
   fi
   "$TIMEOUT_BIN" -k 2 20 curl -fsS "$CONTROL_URL/__test__/state" > "$OUT/engine-state-at-failure.json" 2>/dev/null || true
+  # The screen as Maestro sees it when the script gave up (its own debug output holds the failing step's). Last, because it is the one step
+  # that can be slow: it asks the XCUITest driver, which may be what died, so it is bounded; and it must not reinstall the driver, which
+  # restarts it and takes minutes on a runner.
+  if [ -n "$UDID" ] && command -v maestro > /dev/null; then
+    "$TIMEOUT_BIN" -k 5 90 maestro --platform ios --device "$UDID" hierarchy --no-reinstall-driver > "$OUT/hierarchy-at-failure.json" 2> "$OUT/hierarchy-at-failure.err" || true
+  fi
   exit "$status"
 }
 trap on_error ERR

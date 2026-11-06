@@ -1794,3 +1794,25 @@ describe('CI verify job: the fake engine is checked against the engine contract'
     expect(win?.env?.REQUIRE_ENGINE_CONTRACT).toBeUndefined();
   });
 });
+
+describe('the evidence uploads keep the hidden directory Maestro writes its debug output into', () => {
+  // Maestro puts the failing step's screenshot and the commands it ran under <debug dir>/.maestro/. upload-artifact leaves hidden files out
+  // unless asked, so without this the debug directory is empty in every artifact and a failed flow leaves only its junit file behind.
+  const uploadOf = (wf: Workflow, artifact: string): Step => {
+    const found = allSteps(wf).find((s) => s.uses?.startsWith('actions/upload-artifact@') === true && s.with?.name === artifact);
+    if (found === undefined) throw new Error(`no upload step for ${artifact}`);
+    return found;
+  };
+
+  it('the iOS published-report job uploads hidden files', () => {
+    expect(uploadOf(ci.wf, 'ios-simulator-published-evidence').with?.['include-hidden-files']).toBe(true);
+  });
+
+  it('the Android emulator job uploads hidden files', () => {
+    expect(uploadOf(load('android-emulator').wf, 'android-emulator-evidence').with?.['include-hidden-files']).toBe(true);
+  });
+
+  it('control: an upload that does not ask for them (the iOS screenshots) is left as it was', () => {
+    expect(uploadOf(ci.wf, 'ios-simulator-screenshots-${{ matrix.device }}').with?.['include-hidden-files']).toBeUndefined();
+  });
+});

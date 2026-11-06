@@ -45,6 +45,14 @@ exit 0
 const MAESTRO = `#!/usr/bin/env bash
 echo "maestro $*" >> "$STATE/calls.log"
 args="$*"
+case "$args" in
+  # The screen dump the script asks for when it gives up: answered (or not) without counting as a flow run.
+  *" hierarchy"*)
+    [ "\${MAESTRO_HIERARCHY_FAIL:-}" != "1" ] || { echo "the driver did not answer" >&2; exit 1; }
+    printf '%s\\n' '{"hierarchy":"stand-in"}'
+    exit 0
+    ;;
+esac
 output=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--output" ]; then shift; output="$1"; fi
@@ -67,7 +75,7 @@ echo x >> "$STATE/maestro-runs"
 exit 0
 `;
 
-interface Result { out: string; calls: string[]; status: number | null }
+interface Result { out: string; calls: string[]; status: number | null; outDir: string }
 
 /** The control server's answer depends on how many times maestro ran: before any run, after part A, after part B. */
 async function controlServer(state: string, answers: unknown[]): Promise<string> {
@@ -126,9 +134,11 @@ async function run(answers: unknown[], options: { env?: Record<string, string>; 
   const status = await new Promise<number | null>((resolve) => child.on('close', resolve));
   const callsFile = join(state, 'calls.log');
   const calls = existsSync(callsFile) ? readFileSync(callsFile, 'utf8').split('\n').filter(Boolean) : [];
-  return { out, calls, status };
+  return { out, calls, status, outDir: join(state, 'out') };
 }
-const maestroCalls = (calls: string[]): string[] => calls.filter((c) => c.startsWith('maestro '));
+const hierarchyCalls = (calls: string[]): string[] => calls.filter((c) => c.startsWith('maestro ') && c.includes(' hierarchy'));
+/** The flow runs only: the screen dump taken after a failure is a maestro call too, and is counted on its own. */
+const maestroCalls = (calls: string[]): string[] => calls.filter((c) => c.startsWith('maestro ') && !c.includes(' hierarchy'));
 const indexOf = (calls: string[], needle: string): number => calls.findIndex((c) => c.includes(needle));
 
 describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
@@ -250,6 +260,35 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(maestroCalls(r.calls)).toHaveLength(2);
     expect(r.out).toContain('the retry failed too');
     expect(r.out).toContain('had lost its XCUITest transport');
+  });
+
+  it('when a flow fails it keeps the screen as Maestro sees it, asked once, after the failure and without reinstalling the driver', async () => {
+    const r = await run(HAPPY, { env: { MAESTRO_FAIL_ON: 'g5-a' } });
+    expect(r.status).not.toBe(0);
+    const asked = hierarchyCalls(r.calls);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('--platform ios');
+    expect(asked[0]).toContain('--device UDID-1');
+    expect(asked[0]).toContain('--no-reinstall-driver');
+    expect(r.calls.findIndex((c) => c.includes(' hierarchy'))).toBeGreaterThan(r.calls.findIndex((c) => c.includes('g5-a-published-report.yaml')));
+    expect(readFileSync(join(r.outDir, 'hierarchy-at-failure.json'), 'utf8')).toContain('"hierarchy":"stand-in"');
+  });
+
+  it('a driver that cannot answer for the screen leaves the failure exactly as it was', async () => {
+    const plain = await run(HAPPY, { env: { MAESTRO_FAIL_ON: 'g5-a' } });
+    const r = await run(HAPPY, { env: { MAESTRO_FAIL_ON: 'g5-a', MAESTRO_HIERARCHY_FAIL: '1' } });
+    expect(hierarchyCalls(r.calls)).toHaveLength(1); // control: it was asked, and could not answer
+    expect(r.status).toBe(plain.status);
+    expect(r.status).not.toBe(0);
+    expect(readFileSync(join(r.outDir, 'hierarchy-at-failure.json'), 'utf8')).toBe('');
+    expect(readFileSync(join(r.outDir, 'hierarchy-at-failure.err'), 'utf8')).toContain('the driver did not answer');
+  });
+
+  it('a run that passes asks for no screen dump', async () => {
+    const r = await run(HAPPY);
+    expect(r.status).toBe(0);
+    expect(hierarchyCalls(r.calls)).toHaveLength(0);
+    expect(existsSync(join(r.outDir, 'hierarchy-at-failure.json'))).toBe(false);
   });
 
   it('g5-a starts from a fresh app or a signed-in one, and signs in only on the first (a retry restarts a signed-in app)', () => {
