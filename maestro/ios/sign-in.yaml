@@ -40,7 +40,7 @@ appId: io.inspectorhub.app
     text: "Open"
     optional: true
 - extendedWaitUntil:
-    visible: "Work list"
+    visible: "Download today's work"
     timeout: 90000
 - assertVisible: "Online"
 - assertVisible: "Download today's work"

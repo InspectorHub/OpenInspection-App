@@ -131,26 +131,39 @@ describe.skipIf(!bashAvailable)('android-emulator-golden.sh, run whole against a
   const golden = (env: Record<string, string>): Run => run('android-emulator-golden.sh', env);
   const at = (calls: string[], needle: string): number => calls.findIndex((c) => c.includes(needle));
 
-  it('hides error dialogs before the app is started and looks once before Maestro starts; the stand-in would refuse a screen read while Maestro runs (a later edit that put Maestro in the background would be caught)', () => {
+  it('waits for the first screen before Maestro starts; the stand-in would refuse a screen read while Maestro runs (a later edit that put Maestro in the background would be caught)', () => {
     const r = golden({ UI_SEQUENCE: 'app' });
     expect(r.status).toBe(0);
     expect(r.calls.some((c) => c.startsWith('OVERLAP'))).toBe(false);
     const hide = at(r.calls, 'settings put global hide_error_dialogs 1');
+    const clear = at(r.calls, 'pm clear io.inspectorhub.app');
     const start = at(r.calls, 'am start -n io.inspectorhub.app/io.inspectorhub.app.MainActivity');
     const preflight = at(r.calls, 'uiautomator dump /sdcard/ui-preflight.xml');
     const maestro = at(r.calls, 'maestro start');
     const maestroEnd = at(r.calls, 'maestro end');
     expect(hide).toBeGreaterThan(-1);
     expect(hide).toBeLessThan(start);
-    expect(start).toBeLessThan(preflight);
+    expect(clear).toBeLessThan(start);
+    expect(start).toBeLessThan(at(r.calls, 'uiautomator dump /sdcard/ui-wait.xml'));
+    expect(at(r.calls, 'uiautomator dump /sdcard/ui-wait.xml')).toBeLessThan(preflight);
     expect(preflight).toBeLessThan(maestro);
     // Maestro runs in the foreground here, so nothing can read the screen between its start and its end; this keeps it that way.
     expect(r.calls.slice(maestro, maestroEnd + 1).some((c) => c.includes('uiautomator'))).toBe(false);
     expect(r.out).toContain('ok: G2 passed');
   });
 
+  it('restarts after pm clear races with task removal and the app never draws its first screen', () => {
+    const r = golden({ UI_SEQUENCE: 'blank,app,app', START_SCREEN_SECONDS: '0' });
+    expect(r.status).toBe(0);
+    expect(r.calls.filter((c) => c.startsWith('adb shell am start -n'))).toHaveLength(2);
+    expect(r.calls.filter((c) => c.startsWith('adb shell am force-stop io.inspectorhub.app'))).toHaveLength(1);
+    expect(readFileSync(join(r.out_dir, 'first-screen-attempt-1.png'), 'utf8')).toBe('PNGDATA');
+    expect(r.out).toContain('the app needed 2 launches');
+    expect(r.out).toContain('ok: G2 passed');
+  });
+
   it('presses Wait on a dialog that is already on screen before Maestro starts, and not otherwise', () => {
-    const withDialog = golden({ UI_SEQUENCE: 'dialog' });
+    const withDialog = golden({ UI_SEQUENCE: 'dialog,app', START_SCREEN_SECONDS: '0' });
     expect(withDialog.status).toBe(0);
     expect(taps(withDialog.calls)).toEqual([WAIT]);
     expect(at(withDialog.calls, WAIT)).toBeLessThan(at(withDialog.calls, 'maestro start'));

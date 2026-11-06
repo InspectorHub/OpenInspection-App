@@ -449,7 +449,7 @@ Why two APKs: plain http is accepted only by a development bundle served by Vite
 
 On the runner, before the emulator starts: the fake engine on `127.0.0.1:8791` with `--allow-origin http://localhost:5173`, and `vite --host 127.0.0.1 --port 5173`. G2 is not guarded: if the dev-server APK is missing, the job fails rather than skipping the flow. Maestro 2.12.0 comes from its release page (downloaded with retries), checked against a pinned SHA-256 before it is unpacked (to move the version, change `MAESTRO_VERSION` and `MAESTRO_SHA256` together).
 
-G2 starts the app with `adb shell pm clear` and `am start`, because Maestro's own launch does not bring the app to the front on some phones; the flow has no `launchApp`. Evidence (Maestro report, logcat, screenshots, engine and Vite logs) is uploaded as `android-emulator-evidence`.
+G2 starts the app with `adb shell pm clear` and `start_app`, because Maestro's own launch does not bring the app to the front on some phones. `start_app` waits for the first screen and retries if clearing the old task races with launch; the flow has no `launchApp`. Evidence (Maestro report, logcat, screenshots, engine and Vite logs) is uploaded as `android-emulator-evidence`.
 
 **What a green run does not prove yet.** None of the G2 steps had run in CI when this was written; the first run is the real test. Two things in it are a best effort and may need a second attempt: asking Chrome to skip its first-run screen on the emulator image (`chrome-command-line`), and the Maestro flags `--format junit --output ... --debug-output`. If the sign-in hangs in front of Chrome's first-run page, that is the cause.
 

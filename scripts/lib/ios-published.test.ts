@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
  */
 vi.setConfig({ testTimeout: 120_000 });
 const SCRIPT = join(__dirname, '..', 'ios-simulator-published.sh').replace(/\\/g, '/');
+const SIGN_IN_FLOW = join(__dirname, '..', '..', 'maestro', 'ios', 'sign-in.yaml');
 const bashAvailable = (() => { try { return spawn('bash', ['-c', 'true']).pid !== undefined; } catch { return false; } })();
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -105,6 +106,13 @@ const maestroCalls = (calls: string[]): string[] => calls.filter((c) => c.starts
 const indexOf = (calls: string[], needle: string): number => calls.findIndex((c) => c.includes(needle));
 
 describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
+  it('waits for the signed-in work-list action rather than its heading before continuing', () => {
+    const flow = readFileSync(SIGN_IN_FLOW, 'utf8');
+    expect(flow).toContain('visible: "Download today\'s work"');
+    expect(flow).not.toContain('visible: "Work list"');
+    expect(flow).toContain('- assertVisible: "Online"');
+  });
+
   it('a full run: trusts the certificate before the app is installed, runs part A then part B on the pinned device, and checks the engine after each', async () => {
     const r = await run(HAPPY);
     expect(r.out).toContain('ios-simulator-published: G5 passed');

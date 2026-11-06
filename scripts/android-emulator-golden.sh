@@ -7,7 +7,7 @@
 # plain http, so the workflow builds a second debug APK whose WebView loads http://localhost:5173 (capacitor.config.ts, OI_EMULATOR_DEV_SERVER). The emulator's localhost is made to reach the
 # host with `adb reverse` below, because localhost is a secure context (crypto.randomUUID and crypto.subtle exist) and the emulator's host-alias address is not.
 # The caller has already started the fake engine and the Vite server on the host. This script contacts neither of them from here: it
-# starts from a cleared app (pm clear + am start; Maestro's own launch does not bring the app to the front on some phones), runs Maestro
+# starts from a cleared app (pm clear + start_app; Maestro's own launch does not bring the app to the front on some phones), runs Maestro
 # and keeps its report, a screenshot, the UI tree and the logcat as evidence.
 set -Eeuo pipefail
 
@@ -19,6 +19,7 @@ FLOW="maestro/golden/g2-controlled-sign-in.yaml"
 mkdir -p "$OUT"
 # shellcheck source=lib/dismiss-not-responding.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/dismiss-not-responding.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/android-start-app.sh"
 
 fail() { echo "::error::$*"; return 1; }
 on_error() {
@@ -58,11 +59,7 @@ adb logcat -c
 # is still caught: the process dies and the logcat check below finds its FATAL EXCEPTION.
 adb shell settings put global hide_error_dialogs 1 || true
 adb shell pm clear "$APP_ID"
-adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"
-
-waited=0
-until [ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || [ "$waited" -ge 60 ]; do sleep 2; waited=$((waited + 2)); done
-[ -n "$(adb shell pidof "$APP_ID" | tr -d '\r')" ] || fail "the app process did not start within 60 s"
+start_app "Choose your server"
 echo "ok: the app is running, starting $FLOW against $ENGINE_ORIGIN"
 
 # A dialog that is ALREADY on screen (it came up before hide_error_dialogs took effect) would make the flow fail on something that is not
