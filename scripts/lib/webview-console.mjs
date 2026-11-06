@@ -64,6 +64,15 @@ async function adb(...args) {
 }
 
 const APP_ID = 'io.inspectorhub.app';
+const FILE_INPUT_DIAGNOSTIC = `(() => {
+  document.addEventListener('change', (event) => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && input.type === 'file') {
+      console.info('[file-input-change]', input.files?.length ?? 0);
+    }
+  }, true);
+  return true;
+})()`;
 /** socket name -> local port: one forward per socket, not one per attempt. */
 const forwards = new Map();
 
@@ -178,6 +187,9 @@ async function collect(file, seconds) {
       });
       await session.send('Runtime.enable');
       await session.send('Log.enable');
+      const diagnostic = await session.send('Runtime.evaluate', { expression: FILE_INPUT_DIAGNOSTIC, returnByValue: true });
+      if (diagnostic.error || diagnostic.result?.exceptionDetails) note('diagnostic', 'file-input change listener unavailable');
+      else note('diagnostic', 'file-input change listener installed');
       while (!stopping && Date.now() < deadline) {
         if ((await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(() => r('tick'), 500))])) === 'closed') break;
       }
