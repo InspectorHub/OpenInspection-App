@@ -21,6 +21,13 @@
   html {
     background-color: var(--ih-bg-app);
   }
+  /*
+   * The soft keyboard's height (set by src/ui/keyboard-inset.ts on iOS, absent elsewhere): where the keyboard covers the web view the page grows
+   * by that much, so what the keyboard covers can be scrolled up above it.
+   */
+  #root {
+    padding-bottom: var(--keyboard-height, 0px);
+  }
   body {
     @apply bg-ih-bg-app font-ih-body text-ih-fg-1;
     -webkit-text-size-adjust: 100%;

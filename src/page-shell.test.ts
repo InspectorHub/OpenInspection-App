@@ -15,6 +15,11 @@ describe('page shell', () => {
     expect(block).not.toBeNull();
     expect(block?.[1]).toMatch(/outline:\s*\d+px solid Highlight/);
   });
+  it('pads the root by the keyboard height, so a page the keyboard covers can scroll', () => {
+    expect(read('src/styles.css')).toMatch(/#root\s*\{[^}]*padding-bottom:\s*var\(--keyboard-height,\s*0px\)/);
+    expect(read('src/main.tsx')).toMatch(/Capacitor\.getPlatform\(\) === 'ios'\)\s*followKeyboardInset/);
+  });
+
   it('raises text fields to 16px on iOS so focusing one does not zoom the page', () => {
     const css = read('src/styles.css');
     const block = /@supports \(-webkit-touch-callout: none\)\s*\{([^}]*\{[^}]*\})\s*\}/.exec(css);
