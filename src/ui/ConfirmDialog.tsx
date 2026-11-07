@@ -91,7 +91,14 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
   }
 
   return (
-    <div className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center" onKeyDown={onKeyDown}>
+    <div
+      className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center"
+      onKeyDown={onKeyDown}
+      onClick={(event) => {
+        // A tap outside the box is Cancel, like Escape; while the action runs it does nothing.
+        if (event.target === event.currentTarget && !holding) onCancel();
+      }}
+    >
       <div
         role="alertdialog"
         aria-modal="true"

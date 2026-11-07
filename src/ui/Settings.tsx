@@ -6,7 +6,7 @@ import type { OfflineStack } from '../app/offline-stack';
 import { useClientState } from '../app/use-client-state';
 import type { TimerPort } from '../collab/timers';
 import { ClearLocalDataControl } from './ClearLocalDataControl';
-import { Button, Screen } from './kit';
+import { BackLink, Button, Screen } from './kit';
 import { AboutSection } from './settings/AboutSection';
 import { DeviceSection } from './settings/DeviceSection';
 import { ExternalLink } from './settings/ExternalLink';
@@ -82,15 +82,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onImport, 
 
   return (
     <Screen wide>
-      <button
-        type="button"
-        aria-label="Back to work list"
-        className="inline-flex min-h-11 items-center gap-1 self-start text-base font-semibold text-ih-primary-text focus-visible:outline-none focus-visible:shadow-ih-focus"
-        onClick={onBack}
-      >
-        <span aria-hidden="true">&lsaquo;</span>
-        <span>Work list</span>
-      </button>
+      <BackLink label="Work list" ariaLabel="Back to work list" onClick={onBack} />
       <h1 ref={heading} tabIndex={-1} className="font-ih-display text-2xl font-bold tracking-tight text-ih-fg-1 focus-visible:outline-none">
         Settings
       </h1>

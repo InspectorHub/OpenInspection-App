@@ -182,7 +182,13 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
 
   switch (screen.kind) {
     case 'setup':
-      return <ServerSetup services={services} onConnected={(origin, notices) => setScreen({ kind: 'sign_in', origin, relogin: false, notices })} />;
+      return (
+        <ServerSetup
+          services={services}
+          onConnected={(origin, notices) => setScreen({ kind: 'sign_in', origin, relogin: false, notices })}
+          {...(screen.back === undefined ? {} : { onBack: () => setScreen(screen.back as Screen) })}
+        />
+      );
     case 'sign_in':
       return (
         <SignIn
@@ -195,7 +201,7 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             // Fails closed: if the lock cannot be evaluated, the data stays behind the lock screen until it can.
             void screenForSignedIn(services, result.origin, identity).then(setScreen, () => setScreen({ kind: 'locked', origin: result.origin, identity, reason: 'expired' }));
           }}
-          onChangeServer={() => setScreen({ kind: 'setup' })}
+          onChangeServer={() => setScreen({ kind: 'setup', back: screen })}
           onWiping={setWiping}
           onBack={
             screen.backToLock

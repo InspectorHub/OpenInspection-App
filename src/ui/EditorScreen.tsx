@@ -23,7 +23,7 @@ import { createGalleryCopier } from '../field/gallery-copy';
 import { useToasts } from './EditorToasts';
 import { editorObserver } from './editor-observer';
 import { EditorStatus } from './EditorStatus';
-import { Body, Button, Heading, Notice, Screen } from './kit';
+import { BackLink, Body, Heading, Notice, Screen } from './kit';
 import { PublishedReportBanner } from './PublishedReportBanner';
 import { useOnline } from './worklist/useOnline';
 import { useBackHandler } from './use-back-handler';
@@ -271,11 +271,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
   if (phase.kind === 'failed') {
     return (
       <Screen>
+        <BackLink label="Work list" ariaLabel="Back to work list" onClick={() => leave.current()} />
         <Heading>Inspection</Heading>
         <Notice tone="bad">{phase.message}</Notice>
-        <Button variant="secondary" onClick={() => leave.current()}>
-          Back to work list
-        </Button>
       </Screen>
     );
   }

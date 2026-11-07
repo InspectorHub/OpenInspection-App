@@ -9,7 +9,8 @@ import type { AppServices } from './compose';
 
 export type Screen =
   | { kind: 'booting' }
-  | { kind: 'setup' }
+  /** `back` is set when the person chose a different server from the sign-in screen: the screen Back returns to. */
+  | { kind: 'setup'; back?: Extract<Screen, { kind: 'sign_in' }> }
   | { kind: 'sign_in'; origin: string; relogin: boolean; notices: CompatNotice[]; /** Set when the person came from the lock screen: the identity that screen was holding, so Back can return to it. */ backToLock?: StoredIdentity }
   | { kind: 'signed_in'; origin: string; identity: StoredIdentity }
   /** Signed in, but the local data is held behind the lock screen. Nothing on it is deleted. */

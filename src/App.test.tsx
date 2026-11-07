@@ -133,4 +133,14 @@ describe('App whole journey', () => {
     await user.click(await screen.findByRole('button', { name: 'Use a different server' }));
     expect(await screen.findByRole('heading', { name: 'Choose your server' })).toBeInTheDocument();
   });
+
+  it('the server step reached from sign-in leads back to sign-in', async () => {
+    const world = await createWorld();
+    const user = userEvent.setup();
+    await world.db.run("INSERT INTO device_state (key, value) VALUES ('server_url', ?)", [world.server.origin]);
+    render(<App open={() => Promise.resolve(world.services)} allowInsecureHttp={false} />);
+    await user.click(await screen.findByRole('button', { name: 'Use a different server' }));
+    await user.click(await screen.findByRole('button', { name: 'Back to sign in' }));
+    expect(await screen.findByRole('button', { name: 'Use a different server' })).toBeInTheDocument();
+  });
 });

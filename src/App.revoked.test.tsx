@@ -64,7 +64,7 @@ describe('a revoked device signs in again', () => {
     expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
     expect(await revokedMarks(world)).toBe(1);
 
-    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Back to lock screen' }));
     expect(await screen.findByRole('heading', { name: REVOKED_HEADING })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
     expect(await dataRows(world)).toEqual(before);
@@ -75,7 +75,7 @@ describe('a revoked device signs in again', () => {
     await openRevoked();
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Sign in again' }));
-    await user.click(await screen.findByRole('button', { name: 'Back' }));
+    await user.click(await screen.findByRole('button', { name: 'Back to lock screen' }));
     expect(await screen.findByRole('heading', { name: REVOKED_HEADING })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
   });
@@ -87,7 +87,7 @@ describe('a revoked device signs in again', () => {
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Clear local data' }));
     await user.click(within(await screen.findByRole('alertdialog', { name: /not uploaded\?$/ })).getByRole('button', { name: 'Delete everything' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to lock screen' })).toBeNull();
   });
 });
 
@@ -96,16 +96,16 @@ describe('Back from the sign-in screen when the stored identity cannot be used',
     const world = await openRevoked();
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Sign in again' }));
-    await screen.findByRole('button', { name: 'Back' });
+    await screen.findByRole('button', { name: 'Back to lock screen' });
     return { world, user };
   }
 
   it('an identity that is gone: Back leaves the dead end for a sign-in screen without Back, and reveals no data', async () => {
     const { world, user } = await openSignInWithBack();
     await world.db.run("DELETE FROM device_state WHERE key = 'user_id'");
-    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Back to lock screen' }));
     await vi.waitFor(() => {
-      expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Back to lock screen' })).toBeNull();
     });
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
@@ -121,7 +121,7 @@ describe('Back from the sign-in screen when the stored identity cannot be used',
     const realQuery = world.db.query.bind(world.db);
     const spy = vi.spyOn(world.db, 'query').mockImplementation((sql, params) => (sql.includes("'user_id'") ? Promise.reject(new Error('read failed')) : realQuery(sql, params)));
     try {
-      await user.click(screen.getByRole('button', { name: 'Back' }));
+      await user.click(screen.getByRole('button', { name: 'Back to lock screen' }));
       expect(await screen.findByRole('heading', { name: 'Verification needed' })).toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: WORK_HEADING })).toBeNull();
       await new Promise<void>((resolve) => setImmediate(resolve));

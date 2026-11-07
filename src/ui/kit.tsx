@@ -61,6 +61,24 @@ export function PanelHeading({ id, children }: { id: string; children: ReactNode
   );
 }
 
+/**
+ * How a full screen is left: a "‹ <where it goes back to>" link at the top left, at least 44px tall. The label names the screen it returns to;
+ * `ariaLabel` is the spoken form and always contains the visible label. A root screen has none.
+ */
+export function BackLink({ label, ariaLabel, onClick }: { label: string; ariaLabel?: string; onClick(): void }) {
+  return (
+    <button
+      type="button"
+      {...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel })}
+      className="inline-flex min-h-11 items-center gap-1 self-start text-base font-semibold text-ih-primary-text focus-visible:outline-none focus-visible:shadow-ih-focus"
+      onClick={onClick}
+    >
+      <span aria-hidden="true">&lsaquo;</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
 type Variant = 'primary' | 'secondary' | 'quiet' | 'danger';
 
 const BUTTON_BASE = 'min-h-11 w-full rounded-ih-button px-4 text-base font-semibold focus-visible:outline-none focus-visible:shadow-ih-focus';

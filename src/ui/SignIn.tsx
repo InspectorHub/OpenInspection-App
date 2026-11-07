@@ -5,7 +5,7 @@ import { isAuthError, type IdentityMismatch } from '../auth/errors';
 import type { SignInResult } from '../auth/pkce-login';
 import { BuildExpiry } from './BuildExpiry';
 import { IdentityMismatchPanel } from './IdentityMismatchPanel';
-import { Body, Button, Heading, Notice, Screen } from './kit';
+import { BackLink, Body, Button, Heading, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NOTICE_MESSAGES } from './messages';
 import { useBackHandler } from './use-back-handler';
@@ -65,6 +65,7 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
 
   return (
     <Screen>
+      {onBack && !busy && <BackLink label="Lock screen" ariaLabel="Back to lock screen" onClick={onBack} />}
       <Heading>{relogin ? 'Sign in again' : 'Sign in'}</Heading>
       <BuildExpiry services={services} />
       <Body>
@@ -113,11 +114,6 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
             <Button variant="quiet" onClick={onChangeServer}>
               Use a different server
             </Button>
-            {onBack && (
-              <Button variant="quiet" onClick={onBack}>
-                Back
-              </Button>
-            )}
           </>
         )}
       </div>
