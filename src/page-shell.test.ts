@@ -15,4 +15,11 @@ describe('page shell', () => {
     expect(block).not.toBeNull();
     expect(block?.[1]).toMatch(/outline:\s*\d+px solid Highlight/);
   });
+  it('raises text fields to 16px on iOS so focusing one does not zoom the page', () => {
+    const css = read('src/styles.css');
+    const block = /@supports \(-webkit-touch-callout: none\)\s*\{([^}]*\{[^}]*\})\s*\}/.exec(css);
+    expect(block).not.toBeNull();
+    expect(block?.[1]).toMatch(/textarea/);
+    expect(block?.[1]).toMatch(/font-size:\s*max\(16px,/);
+  });
 });
