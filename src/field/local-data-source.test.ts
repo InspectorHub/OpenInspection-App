@@ -203,6 +203,13 @@ describe('urls', () => {
     expect(urls.presenceSocket(INSPECTION)).not.toMatch(/token|ticket/i);
   });
 
+  it('points the tag picker at the tag library page of the stored server, with no path, token or inspection in it', async () => {
+    const { source } = await world();
+    const href = source.urls.tagLibrary?.();
+    expect(href).toMatch(/^https:\/\/[^/]+\/library\/tags$/);
+    expect(href).not.toMatch(/token|ticket|inspection/i);
+  });
+
   it('refuses a photo key of another company or inspection, and gives a marked placeholder for one it has no copy of', async () => {
     const index = createMemoryPhotoIndex();
     const { source } = await world({ photoIndex: index });
