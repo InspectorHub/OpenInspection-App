@@ -52,6 +52,8 @@ on_error() {
     tail -40 "$OUT/webview-console.jsonl" || true
   fi
   adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
+  # The picture the flow picked, as the device holds it now: size and checksum next to what was pushed (a damaged copy would show here).
+  { adb shell 'ls -l /sdcard/Pictures/roof-photo.jpg; md5sum /sdcard/Pictures/roof-photo.jpg' ; md5sum maestro/fixtures/roof-photo.jpg; } > "$OUT/fixture-on-device.txt" 2>&1 || true
   adb exec-out screencap -p > "$OUT/screen-at-failure.png" 2>/dev/null || true
   adb shell uiautomator dump /sdcard/ui-failure.xml > /dev/null 2>&1 || true
   adb pull /sdcard/ui-failure.xml "$OUT/ui-at-failure.xml" > /dev/null 2>&1 || true
