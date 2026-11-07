@@ -59,7 +59,7 @@
 @supports (-webkit-touch-callout: none) {
   textarea,
   select,
-  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):not([type='hidden']) {
     font-size: max(16px, 1em);
   }
 }

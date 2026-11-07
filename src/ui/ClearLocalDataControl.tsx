@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import { countAtRisk, type AtRisk } from '../offline/at-risk';
 import { clearLocalData } from '../offline/clear-local-data';
+import { loadStoredOrigin } from '../offline/stored-origin';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExportResult } from './ExportResult';
 import { Button, Notice } from './kit';
@@ -103,8 +104,11 @@ export function ClearLocalDataControl({ services, origin, onCleared, onWiping, l
         }
       }
       onWiping?.(true);
+      // The data may come from another server than the one signed in to now (the mismatch panel): that server's grant is the wiped account's.
+      const dataOrigin = await loadStoredOrigin(services.db).catch(() => null);
       const result = await clearLocalData(services.db, services.files, services.clock.now());
       await services.tokens.signOut(origin).catch(() => undefined);
+      if (dataOrigin !== null && dataOrigin !== origin) await services.tokens.signOut(dataOrigin).catch(() => undefined);
       setStep('closed');
       setBusy(false);
       if (result.filesFailed.length > 0) setLeftover(result.filesFailed.length);

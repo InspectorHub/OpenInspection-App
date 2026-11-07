@@ -4,6 +4,7 @@ import type { IdentityMismatch } from '../auth/errors';
 import { countAtRisk, type AtRisk } from '../offline/at-risk';
 import { atRiskLines, ClearLocalDataControl, COUNT_UNKNOWN } from './ClearLocalDataControl';
 import { Button, Notice, Panel, PanelHeading } from './kit';
+import { loadStoredOrigin } from '../offline/stored-origin';
 
 export interface IdentityMismatchPanelProps {
   services: Pick<AppServices, 'db' | 'files' | 'tokens' | 'clock'>;
@@ -20,13 +21,6 @@ export interface IdentityMismatchPanelProps {
 /** "an owner", "an admin", "a manager": the role named with the right article. */
 function withArticle(role: string): string {
   return `${/^[aeiou]/i.test(role) ? 'an' : 'a'} ${role}`;
-}
-
-/** The server the stored identity last signed in to, or null when this device's data was saved before the app recorded it. */
-async function loadStoredOrigin(db: AppServices['db']): Promise<string | null> {
-  const rows = await db.query<{ value: unknown }>("SELECT value FROM device_state WHERE key = 'identity_origin'");
-  const value = rows[0]?.value;
-  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 interface Facts {

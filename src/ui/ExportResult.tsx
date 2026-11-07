@@ -13,6 +13,7 @@ export interface ExportResultProps {
 export function ExportResult({ title, children, onClose }: ExportResultProps) {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const pressedBackdrop = useRef(false);
 
   useEscapeLayer(onClose);
 
@@ -31,7 +32,12 @@ export function ExportResult({ title, children, onClose }: ExportResultProps) {
     <div
       className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center"
       onKeyDown={onKeyDown}
+      onPointerDown={(event) => {
+        pressedBackdrop.current = event.target === event.currentTarget;
+      }}
       onClick={(event) => {
+        // Only a press that began on the backdrop counts: selecting text and letting go outside the box is not a tap outside.
+        if (!pressedBackdrop.current) return;
         if (event.target === event.currentTarget) onClose();
       }}
     >

@@ -124,7 +124,9 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
 
   useEffect(() => {
     if (screen.kind !== 'locked') setLockedExport(false);
-    if (screen.kind !== 'signed_in') setWiping(false);
+    // A screen change ends any wipe: the wiped marks are gone with the data. This must also fire on the way INTO signed_in, because a
+    // wipe started on the sign-in screen (the account-mismatch panel) never leaves it before the next sign-in.
+    setWiping(false);
   }, [screen.kind]);
 
   const flow = services?.flow;

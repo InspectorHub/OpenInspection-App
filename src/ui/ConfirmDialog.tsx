@@ -32,6 +32,7 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
   const descriptionId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const pressedBackdrop = useRef(false);
 
   // An action that never settles must not trap the person: after the watchdog the dialog can be left, and the action goes on.
   const [stuck, setStuck] = useState(false);
@@ -94,7 +95,12 @@ export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = 
     <div
       className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center"
       onKeyDown={onKeyDown}
+      onPointerDown={(event) => {
+        pressedBackdrop.current = event.target === event.currentTarget;
+      }}
       onClick={(event) => {
+        // Only a press that began on the backdrop counts: selecting text and letting go outside the box is not a tap outside.
+        if (!pressedBackdrop.current) return;
         // A tap outside the box is Cancel, like Escape; while the action runs it does nothing.
         if (event.target === event.currentTarget && !holding) onCancel();
       }}

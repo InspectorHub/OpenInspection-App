@@ -128,6 +128,18 @@ describe('clearing', () => {
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
+  it('signs out the server the data came from as well as the one signed in to now', async () => {
+    const world = await createSignedInWorld();
+    await world.db.run("INSERT OR REPLACE INTO device_state (key, value) VALUES ('identity_origin', ?)", ['https://old.example.test']);
+    const { user, onCleared, signOut } = mount(world);
+    await user.click(screen.getByRole('button', { name: 'Clear local data' }));
+    const dialog = await screen.findByRole('alertdialog');
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Clear local data' })).toBeEnabled());
+    await user.click(within(dialog).getByRole('button', { name: 'Clear local data' }));
+    await waitFor(() => expect(onCleared).toHaveBeenCalledTimes(1));
+    expect(signOut.mock.calls.map((call) => call[0]).sort()).toEqual([world.server.origin, 'https://old.example.test'].sort());
+  });
+
   it('two taps on the second step also clear once', async () => {
     const world = await createSignedInWorld();
     await seedLocalData(world.db);
