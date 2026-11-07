@@ -17,7 +17,11 @@ describe('page shell', () => {
   });
   it('pads the root by the keyboard height, so a page the keyboard covers can scroll', () => {
     expect(read('src/styles.css')).toMatch(/#root\s*\{[^}]*padding-bottom:\s*var\(--keyboard-height,\s*0px\)/);
-    expect(read('src/main.tsx')).toMatch(/Capacitor\.getPlatform\(\) === 'ios'\)\s*followKeyboardInset/);
+    expect(read('src/main.tsx')).toMatch(/Capacitor\.getPlatform\(\) === 'ios'\) \{[^}]*followKeyboardInset/);
+  });
+
+  it('asks the shared UI to pin the page behind a dialog on iOS only, where a scrolled page would push a fixed sheet down', () => {
+    expect(read('src/main.tsx')).toMatch(/Capacitor\.getPlatform\(\) === 'ios'\) \{\s*document\.documentElement\.dataset\.scrollLock = 'pin'/);
   });
 
   it('raises text fields to 16px on iOS so focusing one does not zoom the page', () => {

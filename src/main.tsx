@@ -22,8 +22,13 @@ if (!root) throw new Error('Missing #root element');
 
 followSystemColorScheme(document.documentElement, window.matchMedia('(prefers-color-scheme: dark)'), createSystemBarsSync(SystemBars));
 
-// iOS only: the keyboard covers the web view there (capacitor.config.ts), so the page grows by its height to stay scrollable.
-if (Capacitor.getPlatform() === 'ios') followKeyboardInset(document.documentElement, Keyboard);
+// iOS only: the keyboard covers the web view there (capacitor.config.ts), so the page grows by its height to stay scrollable, and a
+// dialog or sheet pins the page behind it instead of only hiding its overflow (a scrolled page would otherwise push a fixed sheet down
+// when a field in it takes focus). The shared UI pins the page only when asked to, so it stays unchanged in a browser.
+if (Capacitor.getPlatform() === 'ios') {
+  document.documentElement.dataset.scrollLock = 'pin';
+  followKeyboardInset(document.documentElement, Keyboard);
+}
 
 // Registered at start, before the database opens, so a callback that arrives early finds a listener.
 const callbacks = registerCallbackRouter(CapacitorApp);
