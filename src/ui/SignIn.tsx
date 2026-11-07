@@ -108,7 +108,8 @@ export function SignIn({ services, origin, relogin, notices, onSignedIn, onChang
           </>
         ) : (
           <>
-            <Button onClick={() => void latch(signIn)}>Sign in</Button>
+            {/* The panel has its own two ways forward; a second "Sign in" under it would repeat the attempt that was just refused. */}
+            {!mismatch && <Button onClick={() => void latch(signIn)}>Sign in</Button>}
             <Button variant="quiet" onClick={onChangeServer}>
               Use a different server
             </Button>

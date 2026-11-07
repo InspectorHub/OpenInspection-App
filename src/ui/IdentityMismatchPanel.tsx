@@ -17,6 +17,11 @@ export interface IdentityMismatchPanelProps {
   onWiping?(wiping: boolean): void;
 }
 
+/** "an owner", "an admin", "a manager": the role named with the right article. */
+function withArticle(role: string): string {
+  return `${/^[aeiou]/i.test(role) ? 'an' : 'a'} ${role}`;
+}
+
 /** The server the stored identity last signed in to, or null when this device's data was saved before the app recorded it. */
 async function loadStoredOrigin(db: AppServices['db']): Promise<string | null> {
   const rows = await db.query<{ value: unknown }>("SELECT value FROM device_state WHERE key = 'identity_origin'");
@@ -54,8 +59,8 @@ export function IdentityMismatchPanel({ services, origin, mismatch, onKeep, onCl
 
   const lines = facts?.risk ? atRiskLines(facts.risk) : [];
   const who = mismatch.sameCompany
-    ? `You signed in as a different person in the same company (${mismatch.newRole}). The data on this device belongs to a ${mismatch.storedRole}.`
-    : `You signed in to a different company (${mismatch.newRole}). The data on this device belongs to a ${mismatch.storedRole} of another company.`;
+    ? `You signed in as a different person in the same company (as ${withArticle(mismatch.newRole)}). The data on this device belongs to ${withArticle(mismatch.storedRole)}.`
+    : `You signed in to a different company (as ${withArticle(mismatch.newRole)}). The data on this device belongs to ${withArticle(mismatch.storedRole)} of another company.`;
 
   return (
     <Panel tone="watch" role="alert" titleId={titleId}>

@@ -62,6 +62,16 @@ describe('SignIn when the account is not the one whose data is on the device', (
     expect(panel).not.toHaveTextContent(/different server/i);
   });
 
+  it('names the roles with the right article, and shows no second Sign in button under the panel', async () => {
+    const { panel } = await mismatchScreen(OTHER_COMPANY, { unsent: false });
+    expect(panel).toHaveTextContent('belongs to an owner of another company');
+    expect(panel).toHaveTextContent('as an inspector');
+    expect(panel).not.toHaveTextContent(/a owner/);
+    // The panel has its own two ways forward; a Sign in under it would repeat the attempt that was just refused.
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Use a different server' })).toBeEnabled();
+  });
+
   it('data saved before the server was recorded says so instead of guessing', async () => {
     const world = await createWorld();
     await saveIdentity(world.db, { userId: 'u1', tenantId: 't1', role: 'owner' });
