@@ -20,6 +20,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request supersedes the run in progress; a manual run on a ref is never cancelled by a pull request run.
+concurrency:
+  group: android-emulator-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   android-emulator:
     runs-on: ubuntu-latest
@@ -39,6 +44,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      # Restores ~/.gradle (the wrapper distribution, dependencies, build cache). Only a run on the default branch writes the cache;
+      # pull request runs read it. The debug build holds no secret.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - run: npm ci
       - run: npm run build
       - run: npx cap sync android

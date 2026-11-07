@@ -8,12 +8,20 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request supersedes the run in progress. A push to main gets a group of its own (the run id), so it is never
+# cancelled and never replaced while queued: every main commit keeps its own complete result. (Release workflows keep
+# cancel-in-progress: false; this file is not one of them.)
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   ENGINE_CONTRACT_URL: https://raw.githubusercontent.com/InspectorHub/OpenInspection/main/contracts/native-contract.openapi.json
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -38,6 +46,7 @@ jobs:
 
   ios-sync:
     runs-on: macos-26
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
