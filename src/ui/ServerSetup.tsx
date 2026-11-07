@@ -117,6 +117,7 @@ export function ServerSetup({ services, onConnected, onBack, initialUrl = DEFAUL
             id={inputId}
             type="url"
             inputMode="url"
+            enterKeyHint="go"
             autoCapitalize="none"
             autoCorrect="off"
             autoComplete="url"
