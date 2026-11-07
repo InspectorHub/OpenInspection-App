@@ -80,18 +80,6 @@ export const FILE_INPUT_DIAGNOSTIC = `(() => {
     if (input instanceof HTMLInputElement && input.type === 'file') {
       const files = Array.from(input.files ?? []);
       console.info('[file-input-change]', JSON.stringify(files.map(({ type, size }) => ({ type, size }))));
-      // What the picker really handed over: the first bytes and the whole length, read now. A file whose size is right but whose bytes are
-      // not readable or not a JPEG at this moment is what an image that "could not be decoded" would look like (CI runs 42246443039, 42350001379).
-      files.forEach(async (file, index) => {
-        const started = performance.now();
-        try {
-          const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-          const all = await file.arrayBuffer();
-          console.info('[file-input-bytes]', index, 'head', Array.from(head, (b) => b.toString(16).padStart(2, '0')).join(''), 'read', all.byteLength, 'of', file.size, 'in', Math.round(performance.now() - started), 'ms');
-        } catch (error) {
-          console.info('[file-input-bytes]', index, 'unreadable after', Math.round(performance.now() - started), 'ms', String(error));
-        }
-      });
     }
   }, true);
   const now = () => Math.round(performance.now());
