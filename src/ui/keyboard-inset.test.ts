@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { followKeyboardInset, type KeyboardPort } from './keyboard-inset';
 
