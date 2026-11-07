@@ -52,6 +52,8 @@ on_error() {
     tail -40 "$OUT/webview-console.jsonl" || true
   fi
   adb logcat -d > "$OUT/logcat.txt" 2>&1 || true
+  # The picture the flow picked, as the device holds it now: size and checksum next to what was pushed (a damaged copy would show here).
+  { adb shell 'ls -l /sdcard/Pictures/roof-photo.jpg; md5sum /sdcard/Pictures/roof-photo.jpg' ; md5sum maestro/fixtures/roof-photo.jpg; } > "$OUT/fixture-on-device.txt" 2>&1 || true
   adb exec-out screencap -p > "$OUT/screen-at-failure.png" 2>/dev/null || true
   adb shell uiautomator dump /sdcard/ui-failure.xml > /dev/null 2>&1 || true
   adb pull /sdcard/ui-failure.xml "$OUT/ui-at-failure.xml" > /dev/null 2>&1 || true
@@ -121,7 +123,7 @@ image_count="$(grep -c '^Row:' <<< "$images" || true)"
 adb shell pm clear "$APP_ID"
 start_app "Choose your server"
 echo "ok: the app is running, starting part A against $ENGINE_ORIGIN (engine control $CONTROL_URL)"
-timeout 900 maestro --device "$serial" test -e "SERVER_URL=$ENGINE_ORIGIN" -e "CONTROL_URL=$CONTROL_URL" --format junit --output "$OUT/maestro-g3-a.xml" --debug-output "$OUT/maestro-debug-a" maestro/golden/g3-a-offline-photo.yaml
+timeout 900 maestro --device "$serial" test -e "SERVER_URL=$ENGINE_ORIGIN" -e "CONTROL_URL=$CONTROL_URL" --format junit --output "$OUT/maestro-g3-a.xml" --debug-output "$OUT/maestro-debug-a" --test-output-dir "$OUT/maestro-a-files" maestro/golden/g3-a-offline-photo.yaml
 echo "ok: part A passed (the photo was added with the engine off)"
 
 # The engine was off for the whole of part A: nothing may have reached it. A dead control server fails here too, it is not "nothing".

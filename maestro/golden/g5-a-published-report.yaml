@@ -1,0 +1,63 @@
+# G5 part A: a report that was published. It opens for reading only, with a banner that names the version; "Edit and republish" opens it
+# again (the server is asked, the inspection is downloaded again, the editor starts again); a publish with nothing said is answered
+# "nothing changed", with the notice box unticked. What the ENGINE saw is checked by the caller (scripts/lib/report-state.mjs), not by
+# this flow: the screen can say "queued" for a request that never went out. Part B (g5-b-republish-with-notice.yaml) continues from here.
+#
+#   maestro --device <serial> test -e SERVER_URL=http://localhost:8793 maestro/golden/g5-a-published-report.yaml
+#
+# The engine must run with `--scenario published` (inspection insp-7, "77 Test Photo Lane", published as version 3 and locked).
+# Start from a clean, already-running app, as for G2 (scripts/android-emulator-published.sh does it and runs the engine checks between
+# the two parts).
+appId: io.inspectorhub.app
+---
+- runFlow:
+    file: g2-controlled-sign-in.yaml
+    env:
+      SERVER_URL: ${SERVER_URL}
+# The sign-in flow leaves Settings scrolled when its last row was below the fold, and the button sits at the top: scroll back first.
+- scrollUntilVisible:
+    element: "Back to work list"
+    direction: UP
+    timeout: 30000
+- tapOn: "Back to work list"
+- retry:
+    maxRetries: 4
+    commands:
+      - tapOn: "Download today's work"
+      - extendedWaitUntil:
+          visible: "Updated 1 inspection."
+          timeout: 20000
+- tapOn: "Open 77 Test Photo Lane"
+# Published: read-only, with the version in the banner and the one way forward.
+- extendedWaitUntil:
+    visible: "Published as version 3. It cannot change until you choose Edit and republish."
+    timeout: 30000
+- assertVisible: "Edit and republish"
+- assertNotVisible: "Publish update"
+# Reading only: the item opens, but nothing offers to add a photo.
+- tapOn: "ITEMS"
+- tapOn: "A Roof cover"
+- assertNotVisible: "Add photo"
+- scrollUntilVisible:
+    element: "Edit and republish"
+    direction: UP
+    optional: true
+- tapOn: "Edit and republish"
+# The server opened it and the editor started again, now editable and saying what clients still see.
+- extendedWaitUntil:
+    visible: "Editing again. Clients still see version 3 until you publish the update."
+    timeout: 60000
+- assertNotVisible: "Edit and republish"
+- assertVisible: "Publish update"
+# Publish with nothing said: "nothing changed", and the notice box starts unticked.
+- tapOn: "Publish update"
+- extendedWaitUntil:
+    visible: "Send the report-updated notices"
+    timeout: 20000
+# The ticked state of this box is not exposed to the accessibility tree (see part B), so "unticked" is asserted by what the engine
+# receives: no notice choice at all (scripts/android-emulator-published.sh checks notifyClient is null after this flow).
+- tapOn: "Just publish"
+- extendedWaitUntil:
+    visible: "Nothing to publish"
+    timeout: 60000
+- assertVisible: "Nothing changed since version 3, so nothing was published and no notices were sent."

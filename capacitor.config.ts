@@ -1,4 +1,5 @@
 import type { CapacitorConfig } from '@capacitor/cli';
+import { KeyboardResize } from '@capacitor/keyboard';
 
 /** The emulator's own loopback, which `adb reverse` forwards to the Vite dev server on the host. localhost is a secure context, so crypto.randomUUID and crypto.subtle exist; a 10.0.2.2 address is not, and the app would fail at its first device id. */
 const EMULATOR_DEV_SERVER = 'http://localhost:5173';
@@ -20,7 +21,11 @@ const config: CapacitorConfig = {
   server: process.env.OI_EMULATOR_DEV_SERVER === EMULATOR_DEV_SERVER ? { url: EMULATOR_DEV_SERVER, cleartext: true } : undefined,
   plugins: {
     SystemBars: { insetsHandling: 'css' },
-    Keyboard: { resize: 'native', resizeOnFullScreen: true },
+    // iOS only (Android sizes the window itself; resizeOnFullScreen is its own switch). 'none': the soft keyboard covers the web view instead of
+    // shrinking it, and iOS scrolls a covered field into view by itself. With 'native' the web view was resized about 600 ms AFTER the keyboard
+    // started to rise: bars fixed to the bottom were laid out a frame late and flickered, and the strip the web view no longer covered showed
+    // the window's black through the keyboard's rounded corners (measured on an iPhone 12, 2026-11-07).
+    Keyboard: { resize: KeyboardResize.None, resizeOnFullScreen: true },
     CapacitorSQLite: {
       iosDatabaseLocation: 'Library/CapacitorDatabase',
       iosIsEncryption: true,

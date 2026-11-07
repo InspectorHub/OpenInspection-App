@@ -329,7 +329,8 @@ export function createReplayer(deps: ReplayDeps): Replayer {
     if (status === 429) return waiting('rate_limited', res.retryAfterMs);
     if (status === 409 && code === 'IDEMPOTENCY_IN_FLIGHT') return { kind: 'waiting', code: 'in_flight', delayMs: Math.max(IN_FLIGHT_RETRY_MS, delayFor(row, null)), needsCheck: false };
     if (status >= 400 && status < 500 && code !== null && QUOTA_CODE.test(code)) return { kind: 'failed', code: 'quota_refused' };
-    if (status === 409) return { kind: 'failed', code: code === 'ID_CONFLICT' ? 'id_conflict' : 'conflict' };
+    // The report went out after this change was made: the change is kept until the report is opened again ("Edit and republish") and the person retries.
+    if (status === 409) return { kind: 'failed', code: code === 'ID_CONFLICT' ? 'id_conflict' : code === 'REPORT_PUBLISHED' ? 'report_published' : 'conflict' };
     if (status === 422) return { kind: 'failed', code: code === 'IDEMPOTENCY_KEY_REUSED' ? 'key_reused' : 'validation_failed' };
     if (status === 400) {
       if (code === 'HOLIDAY_BLOCKED') return { kind: 'failed', code: 'holiday_blocked' };

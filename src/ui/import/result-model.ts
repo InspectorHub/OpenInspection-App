@@ -174,6 +174,14 @@ function saidNo(h: HeldBack, n: number): Template {
     case 'apply_failed':
       return keep('apply_failed', `The server could not save the data or a change for ${w.these}.`, `Try again later. If it keeps happening, save ${w.them} and give ${w.them} to whoever runs your server.`, true);
     case 'refused':
+      // The report went out after the file was made, so the server takes no change to it until it is opened again. Everything is still in the file.
+      if (h.code === 'REPORT_PUBLISHED') {
+        return keep(
+          'published',
+          n === 1 ? 'This report was published after the file was made.' : 'These reports were published after the file was made.',
+          `Nothing was lost: ${w.them} ${n === 1 ? 'is' : 'are'} still in your file. Open ${n === 1 ? 'the report' : 'each report'} on the web and choose Edit and republish, then import the file again. You can also save ${w.them} to keep the changes until then.`,
+        );
+      }
       return keep('refused', `The server said no to ${w.these} for a reason this app does not know.`, 'Update the app, then try again.');
     case 'too_large_to_split':
       return keep('too_large', n === 1 ? 'This inspection is too big to send in one go.' : 'These are each too big to send in one go.', `Save ${w.them} and make the file again from the device it came from, with fewer photos.`);
@@ -193,6 +201,7 @@ function groupKey(h: HeldBack, outcome: ImportOutcome): string {
     return outcome.stopped === null ? 'no_answer' : 'cut_short';
   }
   if (h.reason === 'package_rejected') return rejected(h).key;
+  if (h.reason === 'refused' && h.code === 'REPORT_PUBLISHED') return 'published';
   return h.reason;
 }
 

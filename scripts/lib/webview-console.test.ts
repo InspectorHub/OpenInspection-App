@@ -4,8 +4,9 @@ import { createServer } from 'node:http';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createContext, runInContext } from 'node:vm';
 import { afterAll, describe, expect, it } from 'vitest';
-import { describeEvent, devtoolsSockets } from './webview-console.mjs';
+import { describeEvent, devtoolsSockets, FILE_INPUT_DIAGNOSTIC } from './webview-console.mjs';
 
 /**
  * The recorder writes what a failed golden flow's page printed. Its two pure parts are tested here: which socket is a WebView's, and how a
@@ -135,4 +136,128 @@ else if (a.startsWith('forward tcp:0')) process.stdout.write('${String(port)}\\n
     server.close();
     expect(stopped).toBe(true);
   }, 20000);
+});
+
+/**
+ * The script the recorder runs inside the page. It is run here in a stand-in page (a plain object with the few globals it touches), so
+ * what is checked is that it times the two browser calls, notes visibility and uncaught errors, and otherwise changes nothing: the
+ * wrappers hand back exactly what the originals do and pass on the arguments they were given.
+ */
+describe('the page diagnostic, run in a stand-in page', () => {
+  interface Page {
+    ctx: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any -- a stand-in for the browser's global object
+    logs: string[];
+    listeners: Map<string, Array<(event: unknown) => void>>;
+    toBlobCalls: unknown[][];
+  }
+
+  function standInPage(options: { bitmap?: (...args: unknown[]) => unknown; withBitmap?: boolean } = {}): Page {
+    const logs: string[] = [];
+    const listeners = new Map<string, Array<(event: unknown) => void>>();
+    const toBlobCalls: unknown[][] = [];
+    const add = (type: string, listener: (event: unknown) => void): void => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    };
+    class Input {
+      type = 'file';
+      files: Array<{ type: string; size: number }> = [];
+    }
+    class Canvas {
+      width = 640;
+      height = 480;
+      toBlob(callback: unknown, ...rest: unknown[]): string {
+        toBlobCalls.push([callback, ...rest]);
+        if (typeof callback === 'function') callback({ size: 18516 });
+        return 'original-return';
+      }
+    }
+    const ctx: Record<string, any> = { // eslint-disable-line @typescript-eslint/no-explicit-any -- the stand-in page
+      console: { info: (...parts: unknown[]) => logs.push(parts.join(' ')) },
+      document: { visibilityState: 'visible', addEventListener: add },
+      performance: { now: () => 1000 },
+      HTMLInputElement: Input,
+      HTMLCanvasElement: Canvas,
+      addEventListener: add,
+      JSON, Math, Array, String,
+    };
+    if (options.withBitmap !== false) ctx.createImageBitmap = options.bitmap ?? (() => Promise.resolve({ width: 640, height: 480 }));
+    ctx.window = ctx;
+    createContext(ctx);
+    expect(runInContext(FILE_INPUT_DIAGNOSTIC, ctx)).toBe(true);
+    return { ctx, logs, listeners, toBlobCalls };
+  }
+
+  it('still reports what a file input handed over (the line the earlier flows read)', () => {
+    const page = standInPage();
+    const input = new page.ctx.HTMLInputElement();
+    input.files = [{ type: 'image/jpeg', size: 17920 }];
+    page.listeners.get('change')?.[0]?.({ target: input });
+    expect(page.logs).toContain('[file-input-change] [{"type":"image/jpeg","size":17920}]');
+  });
+
+  it('times createImageBitmap, passes on its arguments and hands back what it resolved with', async () => {
+    const seen: unknown[][] = [];
+    const bitmap = { width: 640, height: 480 };
+    const page = standInPage({ bitmap: (...args) => { seen.push(args); return Promise.resolve(bitmap); } });
+    const file = { name: 'roof-photo.jpg' };
+    const result = await page.ctx.createImageBitmap(file, { imageOrientation: 'from-image' });
+    await Promise.resolve();
+    expect(result).toBe(bitmap);
+    expect(seen).toEqual([[file, { imageOrientation: 'from-image' }]]);
+    expect(page.logs).toContain('[photo-trace] createImageBitmap start visible');
+    expect(page.logs).toContain('[photo-trace] createImageBitmap resolved after 0 ms 640x480');
+  });
+
+  it('reports a createImageBitmap that rejects, and the caller still sees the same rejection', async () => {
+    const boom = new Error('boom');
+    const page = standInPage({ bitmap: () => Promise.reject(boom) });
+    await expect(page.ctx.createImageBitmap({})).rejects.toBe(boom);
+    await Promise.resolve();
+    expect(page.logs).toContain('[photo-trace] createImageBitmap rejected after 0 ms Error: boom');
+  });
+
+  it('a createImageBitmap that never settles leaves a start line and no end line (the case it exists to expose)', async () => {
+    const page = standInPage({ bitmap: () => new Promise(() => {}) });
+    void page.ctx.createImageBitmap({});
+    await Promise.resolve();
+    expect(page.logs.filter((line) => line.startsWith('[photo-trace] createImageBitmap'))).toEqual(['[photo-trace] createImageBitmap start visible']);
+  });
+
+  it('does nothing to a page that has no createImageBitmap', () => {
+    const page = standInPage({ withBitmap: false });
+    expect(page.ctx.createImageBitmap).toBeUndefined();
+  });
+
+  it('times canvas.toBlob, hands the blob to the caller\'s callback and passes on the other arguments', () => {
+    const page = standInPage();
+    const canvas = new page.ctx.HTMLCanvasElement();
+    const received: unknown[] = [];
+    const returned = canvas.toBlob((blob: unknown) => received.push(blob), 'image/jpeg', 0.8);
+    expect(returned).toBe('original-return');
+    expect(received).toEqual([{ size: 18516 }]);
+    expect(page.toBlobCalls[0]?.slice(1)).toEqual(['image/jpeg', 0.8]);
+    expect(page.logs).toContain('[photo-trace] toBlob start 640x480 visible');
+    expect(page.logs).toContain('[photo-trace] toBlob called back after 0 ms 18516 bytes');
+  });
+
+  it('leaves a toBlob call alone when its first argument is not a function', () => {
+    const page = standInPage();
+    const canvas = new page.ctx.HTMLCanvasElement();
+    expect(canvas.toBlob('not a function', 'image/png')).toBe('original-return');
+    expect(page.toBlobCalls).toEqual([['not a function', 'image/png']]);
+    expect(page.logs.some((line) => line.startsWith('[photo-trace] toBlob'))).toBe(false);
+  });
+
+  it('notes when the page is hidden, and the errors nobody caught', () => {
+    const page = standInPage();
+    page.ctx.document.visibilityState = 'hidden';
+    page.listeners.get('visibilitychange')?.[0]?.({});
+    page.listeners.get('unhandledrejection')?.[0]?.({ reason: 'no decoder' });
+    page.listeners.get('error')?.[0]?.({ message: 'script error' });
+    expect(page.logs).toEqual(expect.arrayContaining([
+      '[photo-trace] visibility hidden',
+      '[photo-trace] unhandledrejection no decoder',
+      '[photo-trace] window error script error',
+    ]));
+  });
 });

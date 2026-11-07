@@ -94,8 +94,8 @@ async function openEditorWithRealHeicHelper(): Promise<void> {
   await seedEditorPackage();
   await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
-  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+  // The editor opens on its first item (field-ui 0.9.0), so there is no item to tap first.
+  await expect(page.getByRole('heading', { name: 'Roof cover', level: 2 })).toBeVisible();
 }
 
 async function openEditorWithNoHeicDecoder(): Promise<void> {
@@ -108,8 +108,8 @@ async function openEditorWithNoHeicDecoder(): Promise<void> {
   await seedEditorPackage();
   await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
-  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+  // The editor opens on its first item (field-ui 0.9.0), so there is no item to tap first.
+  await expect(page.getByRole('heading', { name: 'Roof cover', level: 2 })).toBeVisible();
 }
 
 function withIrotRotation(fixture: Buffer, rotation: 1 | 2 | 3): Buffer {
@@ -150,8 +150,8 @@ test('editor reports a missing Windows codec and keeps supported photos from the
   await seedEditorPackage();
   await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
-  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+  // The editor opens on its first item (field-ui 0.9.0), so there is no item to tap first.
+  await expect(page.getByRole('heading', { name: 'Roof cover', level: 2 })).toBeVisible();
 
   await page.getByRole('button', { name: 'Add photo', exact: true }).first().click();
   const picker = page.waitForEvent('filechooser');
@@ -186,8 +186,8 @@ test('offline import reports an unsupported neighbor and still stores the valid 
   await seedEditorPackage();
   await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
-  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+  // The editor opens on its first item (field-ui 0.9.0), so there is no item to tap first.
+  await expect(page.getByRole('heading', { name: 'Roof cover', level: 2 })).toBeVisible();
 
   await page.getByRole('button', { name: 'Report settings' }).click();
   const originalQuality = page.getByTestId('original-quality-uploads');

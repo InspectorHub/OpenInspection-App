@@ -124,7 +124,9 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
 
   useEffect(() => {
     if (screen.kind !== 'locked') setLockedExport(false);
-    if (screen.kind !== 'signed_in') setWiping(false);
+    // A screen change ends any wipe: the wiped marks are gone with the data. This must also fire on the way INTO signed_in, because a
+    // wipe started on the sign-in screen (the account-mismatch panel) never leaves it before the next sign-in.
+    setWiping(false);
   }, [screen.kind]);
 
   const flow = services?.flow;
@@ -182,7 +184,13 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
 
   switch (screen.kind) {
     case 'setup':
-      return <ServerSetup services={services} onConnected={(origin, notices) => setScreen({ kind: 'sign_in', origin, relogin: false, notices })} />;
+      return (
+        <ServerSetup
+          services={services}
+          onConnected={(origin, notices) => setScreen({ kind: 'sign_in', origin, relogin: false, notices })}
+          {...(screen.back === undefined ? {} : { onBack: () => setScreen(screen.back as Screen) })}
+        />
+      );
     case 'sign_in':
       return (
         <SignIn
@@ -195,7 +203,8 @@ export function App({ open, allowInsecureHttp = true, callbacks, appState, sched
             // Fails closed: if the lock cannot be evaluated, the data stays behind the lock screen until it can.
             void screenForSignedIn(services, result.origin, identity).then(setScreen, () => setScreen({ kind: 'locked', origin: result.origin, identity, reason: 'expired' }));
           }}
-          onChangeServer={() => setScreen({ kind: 'setup' })}
+          onChangeServer={() => setScreen({ kind: 'setup', back: screen })}
+          onWiping={setWiping}
           onBack={
             screen.backToLock
               ? () => {

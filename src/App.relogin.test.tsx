@@ -91,7 +91,7 @@ describe('signing in again from the work list when the session was lost', () => 
     expect(screen.getByText(/saved on this device are kept/)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Back to lock screen' }));
     // The work list is rebuilt once its stack is back, so wait for the screen to settle on the button rather than on the first heading.
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Work list' })).toBeInTheDocument();
@@ -111,7 +111,7 @@ describe('signing in again from the work list when the session was lost', () => 
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Sign in again' }));
     await screen.findByRole('heading', { name: 'Sign in again' });
-    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('button', { name: 'Back to lock screen' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sign in again' })).toBeInTheDocument());
     await waitFor(() => expect(scrollTo.mock.calls.filter(([, y]) => y === 300)).toHaveLength(1));
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -122,7 +122,7 @@ describe('signing in again from the work list when the session was lost', () => 
     await open(true);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Sign in again' }));
-    await user.click(await screen.findByRole('button', { name: 'Back' }));
+    await user.click(await screen.findByRole('button', { name: 'Back to lock screen' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sign in again' })).toBeInTheDocument());
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(scrollTo).not.toHaveBeenCalled();
@@ -135,7 +135,7 @@ describe('signing in again from the work list when the session was lost', () => 
     const user = userEvent.setup();
     // The round trip through the sign-in screen keeps the position in the shared memory and restores it, as it should.
     await user.click(await screen.findByRole('button', { name: 'Sign in again' }));
-    await user.click(await screen.findByRole('button', { name: 'Back' }));
+    await user.click(await screen.findByRole('button', { name: 'Back to lock screen' }));
     await waitFor(() => expect(scrollTo.mock.calls.filter(([, y]) => y === 300)).toHaveLength(1));
     scrollTo.mockClear();
 

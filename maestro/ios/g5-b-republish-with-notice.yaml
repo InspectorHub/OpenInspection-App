@@ -1,0 +1,45 @@
+# G5 part B on the iOS simulator: continues from part A in the same app session. Same as maestro/golden/g5-b-republish-with-notice.yaml except
+# that the ticked state of the notice box is left to the caller (it asks the engine: notifyClient true), as in part A.
+#
+#   maestro --platform ios --device <udid> test -e "SUMMARY=Corrected the roof rating" maestro/ios/g5-b-republish-with-notice.yaml
+appId: io.inspectorhub.app
+---
+- tapOn: "Close"
+# After the publish the editor read the report again: published, so reading only.
+- extendedWaitUntil:
+    visible: "Published as version 3. It cannot change until you choose Edit and republish."
+    timeout: 60000
+- tapOn: "Edit and republish"
+- extendedWaitUntil:
+    visible: "Editing again. Clients still see version 3 until you publish the update."
+    timeout: 60000
+- tapOn: "Publish update"
+- extendedWaitUntil:
+    visible: "Send the report-updated notices"
+    timeout: 20000
+- tapOn: "What changed in this amendment?"
+- inputText: "${SUMMARY}"
+# `hideKeyboard` cannot dismiss the keyboard of a web textarea on iOS ("Couldn't hide the keyboard", seen on CI). Scroll to the box, then
+# tap it to move focus off the field and dismiss the keyboard. The smaller viewport can leave the footer below the fold, so scroll again.
+- swipe:
+    start: 50%, 50%
+    end: 50%, 12%
+- tapOn: "Send the report-updated notices"
+- swipe:
+    start: 50%, 50%
+    end: 50%, 12%
+- extendedWaitUntil:
+    visible: "Just publish"
+    timeout: 20000
+- tapOn: "Just publish"
+- extendedWaitUntil:
+    visible: "Report published"
+    timeout: 60000
+- assertVisible: "The report-updated notices were queued.*"
+- tapOn: "Close"
+- scrollUntilVisible:
+    element: "Published as version 4. It cannot change until you choose Edit and republish."
+    direction: UP
+- extendedWaitUntil:
+    visible: "Published as version 4. It cannot change until you choose Edit and republish."
+    timeout: 60000

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { FieldDataSourceProvider, FieldEditor, escapeWillBeHandled, type EditorData, type FieldDataSource, type FieldHostSlots } from '@inspectorhub/field-ui';
 import { clientPolicy } from '../app/client-state';
 import type { AppServices } from '../app/compose';
@@ -7,12 +7,14 @@ import { editorPorts } from '../app/editor-ports';
 import type { OfflineStack } from '../app/offline-stack';
 import { useClientState } from '../app/use-client-state';
 import { realTimers, type TimerPort } from '../collab/timers';
+import { createAfterWrite } from '../field/after-write';
 import { createApiClient } from '../field/api-client';
-import { EditorLoadError } from '../field/editor-data';
+import { EditorLoadError, NO_REPORT_LOCK, loadReportLock, type ReportLock } from '../field/editor-data';
 import { editorRegistry, type EditorRegistry } from '../field/editor-registry';
 import { createLocalDataSource } from '../field/local-data-source';
 import { MESSAGES } from '../field/messages';
 import { openNetworkFlag } from '../field/network-flag';
+import { reopenReport, type ReopenOutcome } from '../field/reopen-report';
 import { createPhotoCache, type PhotoCache } from '../field/photo-cache';
 import { createUploadedCopyReader } from '../field/photo-urls';
 import { loadSessionInfo } from '../field/session-info';
@@ -21,7 +23,9 @@ import { createGalleryCopier } from '../field/gallery-copy';
 import { useToasts } from './EditorToasts';
 import { editorObserver } from './editor-observer';
 import { EditorStatus } from './EditorStatus';
-import { Body, Button, Heading, Notice, Screen } from './kit';
+import { BackLink, Body, Heading, Notice, Screen } from './kit';
+import { PublishedReportBanner } from './PublishedReportBanner';
+import { useOnline } from './worklist/useOnline';
 import { useBackHandler } from './use-back-handler';
 
 /** What the editor screen reads of the app's services. */
@@ -68,7 +72,43 @@ const browserNetwork: Network = {
   },
 };
 
-type Phase = { kind: 'loading' } | { kind: 'ready'; source: FieldDataSource; data: EditorData } | { kind: 'failed'; message: string };
+type Phase = { kind: 'loading' } | { kind: 'ready'; source: FieldDataSource; data: EditorData; lock: ReportLock } | { kind: 'failed'; message: string };
+
+/**
+ * The banner of a published report, as the editor's slot shows it. It holds the state of the "Edit and republish" request itself:
+ * on success the whole editor session starts again so it reads the report as the server now has it.
+ */
+function ReopenBanner({ lockRef, serverLocked, openPublish, reopen, onReopened, network }: {
+  lockRef: MutableRefObject<ReportLock>;
+  serverLocked: boolean;
+  openPublish(): void;
+  reopen: MutableRefObject<(() => Promise<ReopenOutcome>) | null>;
+  onReopened(): void;
+  network: Network | undefined;
+}) {
+  const online = useOnline(network) !== false;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const editAgain = (): void => {
+    const run = reopen.current;
+    if (run === null || busy) return;
+    setBusy(true);
+    setError(null);
+    void run().then(
+      (outcome) => {
+        setBusy(false);
+        if (!outcome.ok) setError(outcome.error);
+        else if (!outcome.cacheCurrent) setError(MESSAGES.reopenNotCurrent);
+        else onReopened();
+      },
+      () => {
+        setBusy(false);
+        setError(MESSAGES.reopenFailed);
+      },
+    );
+  };
+  return <PublishedReportBanner lock={lockRef.current} serverLocked={serverLocked} online={online} busy={busy} error={error} onEditAgain={editAgain} onPublish={openPublish} />;
+}
 
 const messageOf = (error: unknown): string => (error instanceof EditorLoadError ? error.message : MESSAGES.unavailable);
 
@@ -96,9 +136,18 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
   notify.current = toasts.push;
   const restart = useRef(onRestart);
   restart.current = onRestart;
+  // The report's lock as of the last load, and the "Edit and republish" request (set once the session has an api client).
+  const lockRef = useRef<ReportLock>(NO_REPORT_LOCK);
+  const reopen = useRef<(() => Promise<ReopenOutcome>) | null>(null);
   // One slot object per session, so the editor does not see a new one on every render. The status chip reads its own state.
   const slots = useMemo<FieldHostSlots>(
-    () => ({ humanCheck: 'not-required', renderStatus: () => <EditorStatus db={stack.db} status={stack.status} network={network} timers={timers} /> }),
+    () => ({
+      humanCheck: 'not-required',
+      renderStatus: () => <EditorStatus db={stack.db} status={stack.status} network={network} timers={timers} />,
+      renderPublishBanner: ({ openPublish, locked }) => (
+        <ReopenBanner lockRef={lockRef} serverLocked={locked} openPublish={openPublish} reopen={reopen} onReopened={() => restart.current()} network={network} />
+      ),
+    }),
     [stack, network, timers],
   );
 
@@ -142,6 +191,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           timers,
           localCopy: createUploadedCopyReader(stack.store, services.files),
         });
+        // "Edit and republish": the server opens the report, then this inspection is downloaded again like after any online write.
+        const afterWrite = createAfterWrite({ refresher: stack.refresher, settle: () => stack.idle(), timers });
+        reopen.current = () => reopenReport({ api, isOnline: flag.isOnline, afterWrite }, inspectionId);
         if (!live) photoCache.dispose();
         else if (!orphansSwept) {
           // Once per run of the app: files a crash left without a row.
@@ -160,7 +212,10 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           session,
           origin,
           canEdit: ports.canEdit,
-          onDiagnostic: appDiagnostics.push,
+          onDiagnostic: (code) => {
+            appDiagnostics.push(code);
+            if (import.meta.env.DEV) console.info('[photo-diagnostic]', code);
+          },
           copyToGallery: createGalleryCopier({ setting: services.gallerySetting, gallery: services.photoGallery }),
           platform: services.platform,
           signedAtMs: () => services.clock.now(),
@@ -174,8 +229,9 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           onExit: () => leave.current(),
           onReload: () => {
             source.load(inspectionId).then(
-              (data) => {
-                if (live) setPhase({ kind: 'ready', source, data });
+              async (data) => {
+                const lock = await loadReportLock({ db: stack.db, account: stack.account }, inspectionId);
+                if (live) setPhase({ kind: 'ready', source, data, lock });
               },
               (error: unknown) => {
                 if (live) setPhase({ kind: 'failed', message: messageOf(error) });
@@ -186,7 +242,8 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
         });
         observation?.attach(source);
         const data = await source.load(inspectionId);
-        if (live) setPhase({ kind: 'ready', source, data });
+        const lock = await loadReportLock({ db: stack.db, account: stack.account }, inspectionId);
+        if (live) setPhase({ kind: 'ready', source, data, lock });
       } catch (error) {
         if (live) setPhase({ kind: 'failed', message: messageOf(error) });
       }
@@ -214,14 +271,15 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
   if (phase.kind === 'failed') {
     return (
       <Screen>
+        <BackLink label="Work list" ariaLabel="Back to work list" onClick={() => leave.current()} />
         <Heading>Inspection</Heading>
         <Notice tone="bad">{phase.message}</Notice>
-        <Button variant="secondary" onClick={() => leave.current()}>
-          Back to work list
-        </Button>
       </Screen>
     );
   }
+  // A published report opens for reading only, whatever the account may do: the server refuses every content write until it is reopened.
+  lockRef.current = phase.lock;
+  const readOnly = !canEdit || phase.lock.contentLocked;
   return (
     <>
       {!canEdit && (
@@ -230,7 +288,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
         </div>
       )}
       <FieldDataSourceProvider dataSource={phase.source} slots={slots}>
-        <FieldEditor data={phase.data} readOnly={!canEdit} />
+        <FieldEditor data={phase.data} readOnly={readOnly} />
       </FieldDataSourceProvider>
       {toasts.view}
     </>

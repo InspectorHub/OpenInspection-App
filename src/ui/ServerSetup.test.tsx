@@ -40,6 +40,17 @@ describe('ServerSetup address entry', () => {
     expect(DEFAULT_SERVER_URL).toBe('https://app.inspectorhub.io');
   });
 
+  it('raises the URL keyboard with a Go key, and leaves the address alone (no capitalising, correcting or spellcheck)', async () => {
+    const world = await createWorld();
+    render(<ServerSetup services={world.services} onConnected={vi.fn()} devHttpSwitch={false} />);
+    const input = screen.getByLabelText('Server address');
+    expect(input).toHaveAttribute('inputmode', 'url');
+    expect(input).toHaveAttribute('enterkeyhint', 'go');
+    expect(input).toHaveAttribute('autocapitalize', 'none');
+    expect(input).toHaveAttribute('autocorrect', 'off');
+    expect(input).toHaveAttribute('spellcheck', 'false');
+  });
+
   it('rejects a bad address with the fixed message and makes no network call', async () => {
     const { world, user } = await setup();
     await typeAddress(user, 'ftp://oi.example.test');

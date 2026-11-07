@@ -31,8 +31,9 @@ describe('edge to edge and the system bars', () => {
 });
 
 describe('keyboard', () => {
-  it('shrinks the web view when the keyboard opens, so an input is never behind it', () => {
-    expect(config.plugins?.Keyboard).toMatchObject({ resize: 'native', resizeOnFullScreen: true });
+  it('leaves the iOS web view alone and pads the page by the keyboard height, so an input can be scrolled clear of it (Android resizes the window itself)', () => {
+    expect(config.plugins?.Keyboard).toMatchObject({ resize: 'none', resizeOnFullScreen: true });
+    expect(read('src/main.tsx')).toMatch(/followKeyboardInset\(document\.documentElement, Keyboard\)/);
     expect(pkg.dependencies['@capacitor/keyboard']).toBeDefined();
   });
 });

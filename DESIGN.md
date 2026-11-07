@@ -90,6 +90,15 @@ Screens have one first-level heading and settings sections use second-level head
 
 Forms use app-owned validation and the existing dialog primitives. No browser-native alert, confirm, or prompt UI is allowed. Destructive local-data clearing retains its existing confirmation flow.
 
+**How a surface is left.** Every surface has a visible, worded exit, at least 44px tall; an icon alone is never the only way out, and iOS has no back key to fall back on.
+
+- Full screens: a "‹ <screen it returns to>" link at the top left (`BackLink` in `src/ui/kit.tsx`), whose spoken name contains the visible text. A root screen has none.
+- Informational dialogs: one primary "Close". No corner cross.
+- Confirm and form dialogs: "Cancel" plus the named action. A different cancel word ("Not now", "Keep my data") only where it says what happens to the thing asked about.
+- Finishing a task flow (an import result, a copied-out section) ends with "Done"; "Close" is for reading-only surfaces.
+- Notices: "Dismiss" only when the dismissal is remembered. Toasts leave by themselves.
+- Escape and the Android back key close every overlay. A tap on the backdrop closes it too, except while its action runs and in confirms that guard unsaved data. Screens that have a place to go back to answer the back key with that place, never with leaving the app.
+
 ### Iconography
 
 The host UI uses text labels and small inline glyphs rather than a separate icon package. Icon-like glyphs remain decorative when a text label is available.

@@ -46,7 +46,12 @@ export type PendingEntryFields = Assert<Equal<Extract<PendingMediaRecord, { kind
 export const appSlots: FieldHostSlots = { humanCheck: 'not-required' };
 export const appSlotsWithStatus: FieldHostSlots = { humanCheck: 'not-required', renderStatus: () => null };
 
-const PINNED = '0.7.0';
+// 0.9.0 (2026-11-07): re-read by a diff of the sources of field-ui-v0.8.0 and field-ui-v0.9.0. appendPendingPhoto, appendPhoto, upsertElement
+// and the photo-batch ordering were not touched (none of them appears in the diff). FieldUrls moved to its own file, word for word, and gained
+// one OPTIONAL member, tagLibrary; PhotoSize is unchanged. The changes are the editor opening on an item with Previous / Next, the bottom bars
+// and sheets that end at --keyboard-height, input keyboard attributes, the tag row and picker, the photo studio layout and the shared Button.
+// (0.8.0, 2026-11-05: the publish dialog and flow, the read-only editor and the live-document close handling; the same four were untouched.)
+const PINNED = '0.9.0';
 const REREAD = `@inspectorhub/field-ui is no longer ${PINNED}. Before bumping the pin, re-read: this file, src/field/batch-attach.test.ts (it has its own pin and models the photo-batch ordering of field-ui), src/field/uploader-refusal.test.ts, src/media/pending-doc-append.ts against the package's appendPendingPhoto, and src/field/photo-urls.ts against FieldUrls. Then update PINNED here and in batch-attach.test.ts after re-reading.`;
 
 describe('the installed @inspectorhub/field-ui', () => {

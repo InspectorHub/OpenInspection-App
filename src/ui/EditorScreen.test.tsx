@@ -17,7 +17,12 @@ import { backRegistry, pressBack } from './back-button';
 import { EditorScreen, READ_ONLY_NOTICE } from './EditorScreen';
 import { editorObserver, type EditorObservation, type EditorProbe } from './editor-observer';
 
-const layers = vi.hoisted(() => ({ open: false, showStatusSlot: false }));
+const layers = vi.hoisted(() => ({ open: false, showStatusSlot: false, showBanner: false, serverLocked: false }));
+const reopenMock = vi.hoisted(() => vi.fn());
+const openPublishMock = vi.hoisted(() => vi.fn());
+
+// What "Edit and republish" does on the server is tested with `reopenReport`; here it is a double whose answer each test sets.
+vi.mock('../field/reopen-report', () => ({ reopenReport: (...args: unknown[]) => reopenMock(...args) as unknown }));
 let renderedSource: FieldDataSource | null = null;
 
 // The real editor needs a canvas and a layout engine; what this screen owns is what surrounds it.
@@ -37,6 +42,7 @@ vi.mock('@inspectorhub/field-ui', async (importOriginal) => {
           <p data-testid="read-only">{String(readOnly)}</p>
           <p data-testid="human-check">{slots.humanCheck ?? 'unset'}</p>
           <div data-testid="status-slot">{layers.showStatusSlot ? slots.renderStatus?.() : null}</div>
+          <div data-testid="banner-slot">{layers.showBanner ? slots.renderPublishBanner?.({ openPublish: openPublishMock as () => void, locked: layers.serverLocked }) : null}</div>
           <button type="button" onClick={() => source.exit()}>
             leave
           </button>
@@ -61,6 +67,10 @@ let stack: OfflineStack;
 beforeEach(async () => {
   layers.open = false;
   layers.showStatusSlot = false;
+  layers.showBanner = false;
+  layers.serverLocked = false;
+  reopenMock.mockReset();
+  openPublishMock.mockReset();
   renderedSource = null;
   stackWorld = await createStackWorld();
   world = await createSignedInWorld();
@@ -312,5 +322,78 @@ describe('the editor screen while a required update turns editing off', () => {
     await screen.findByTestId('address');
     expect(screen.queryByText(READ_ONLY_NOTICE)).toBeNull();
     expect(screen.getByTestId('read-only')).toHaveTextContent('false');
+  });
+});
+
+/** Lays the server's lock fields over the cached inspection answer, as the work-package refresher stores them. */
+async function cacheLock(lock: Record<string, unknown>): Promise<void> {
+  const db = stackWorld.replay.db;
+  const key = `/api/inspections/${INSPECTION}`;
+  const rows = await db.query<{ body: string }>('SELECT body FROM resource_cache WHERE key = ?', [key]);
+  const body = JSON.parse(rows[0]!.body) as { data: Record<string, unknown> };
+  await db.run('UPDATE resource_cache SET body = ? WHERE key = ?', [JSON.stringify({ ...body, data: { ...body.data, ...lock } }), key]);
+}
+
+describe('the editor screen for a report that was published', () => {
+  it('opens for reading only and shows the banner with the version and Edit and republish', async () => {
+    await cacheLock({ contentLocked: true, editingAgain: false, publishedVersionNumber: 3 });
+    layers.showBanner = true;
+    render(mount());
+    expect(await screen.findByTestId('read-only')).toHaveTextContent('true');
+    expect(within(screen.getByTestId('banner-slot')).getByText('Published as version 3. It cannot change until you choose Edit and republish.')).toBeInTheDocument();
+    expect(within(screen.getByTestId('banner-slot')).getByRole('button', { name: 'Edit and republish' })).toBeEnabled();
+  });
+
+  it('control: a report that is not published opens editable with no banner', async () => {
+    layers.showBanner = true;
+    render(mount());
+    expect(await screen.findByTestId('read-only')).toHaveTextContent('false');
+    expect(screen.getByTestId('banner-slot')).toBeEmptyDOMElement();
+  });
+
+  it('Edit and republish opens the report on the server, then the editor starts again and reads it as editable', async () => {
+    await cacheLock({ contentLocked: true, editingAgain: false, publishedVersionNumber: 3 });
+    // The refresh after the server answered: the cache now says the report is open again.
+    reopenMock.mockImplementation(async () => {
+      await cacheLock({ contentLocked: false, editingAgain: true, publishedVersionNumber: 3 });
+      return { ok: true, cacheCurrent: true };
+    });
+    layers.showBanner = true;
+    render(mount());
+    await userEvent.click(await within(await screen.findByTestId('banner-slot')).findByRole('button', { name: 'Edit and republish' }));
+    expect(reopenMock).toHaveBeenCalledTimes(1);
+    expect(reopenMock.mock.calls[0]?.[1]).toBe(INSPECTION);
+    await waitFor(() => expect(screen.getByTestId('read-only')).toHaveTextContent('false'));
+    expect(within(screen.getByTestId('banner-slot')).getByText('Editing again. Clients still see version 3 until you publish the update.')).toBeInTheDocument();
+    await userEvent.click(within(screen.getByTestId('banner-slot')).getByRole('button', { name: 'Publish update' }));
+    expect(openPublishMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refusal shows its sentence and the report stays read-only', async () => {
+    await cacheLock({ contentLocked: true, publishedVersionNumber: 3 });
+    reopenMock.mockResolvedValue({ ok: false, error: 'Could not open the report for editing. Try again.' });
+    layers.showBanner = true;
+    render(mount());
+    await userEvent.click(await within(await screen.findByTestId('banner-slot')).findByRole('button', { name: 'Edit and republish' }));
+    expect(await within(screen.getByTestId('banner-slot')).findByRole('alert')).toHaveTextContent('Could not open the report for editing');
+    expect(screen.getByTestId('read-only')).toHaveTextContent('true');
+  });
+
+  it('when the server opened the report but this device did not receive the update, it says to stay connected and does not restart', async () => {
+    await cacheLock({ contentLocked: true, publishedVersionNumber: 3 });
+    reopenMock.mockResolvedValue({ ok: true, cacheCurrent: false });
+    layers.showBanner = true;
+    render(mount());
+    await userEvent.click(await within(await screen.findByTestId('banner-slot')).findByRole('button', { name: 'Edit and republish' }));
+    expect(await within(screen.getByTestId('banner-slot')).findByRole('alert')).toHaveTextContent('has not received the update yet');
+    expect(screen.getByTestId('read-only')).toHaveTextContent('true');
+  });
+
+  it('a report published while the editor was open (the live document closed) offers the same way back', async () => {
+    layers.showBanner = true;
+    layers.serverLocked = true;
+    render(mount());
+    expect(await within(await screen.findByTestId('banner-slot')).findByText(/published from another device/)).toBeInTheDocument();
+    expect(within(screen.getByTestId('banner-slot')).getByRole('button', { name: 'Edit and republish' })).toBeEnabled();
   });
 });

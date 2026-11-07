@@ -438,9 +438,9 @@ The flows wait for elements to appear (`extendedWaitUntil`, `scrollUntilVisible`
 
 The ordered flows above are not run in CI (they need an account on a real engine); the golden flow G2 is, see "Android emulator in CI" below. `npm test` runs `src/maestro-flows.test.ts`, which checks that every flow is well formed, that each text it taps or waits for still exists in the app, and that no flow holds a credential. It does not run Maestro. The email, password and authorize strings come from the engine's own pages and are listed in that test.
 
-## Android emulator in CI (G1 to G4)
+## Android emulator in CI (G1 to G5)
 
-`.github/workflows/android-emulator.yml` runs on pull requests and by hand (`gh workflow run android-emulator.yml --ref main`); **a push to main does not run it**, so a green main CI says nothing about these flows. It starts one emulator and runs three scripts in it (G1, G2, then G3 and G4, described below):
+`.github/workflows/android-emulator.yml` runs on pull requests and by hand (`gh workflow run android-emulator.yml --ref main`); **a push to main does not run it**, so a green main CI says nothing about these flows. It starts one emulator and runs four scripts in it (G1, G2, then G3 and G4, then G5, described below):
 
 - **G1, the launch smoke** (`scripts/android-emulator-smoke.sh`): installs the debug APK with its assets bundled inside, as shipped, starts it, and requires the first screen ("Choose your server"), a live process and no crash.
 - **G2, controlled sign-in** (`scripts/android-emulator-golden.sh` and `maestro/golden/g2-controlled-sign-in.yaml`): the work list with nothing waiting to upload and the status dot Online, reached through the fake engine's sign-in, which completes the browser step by itself.
@@ -449,7 +449,7 @@ Why two APKs: plain http is accepted only by a development bundle served by Vite
 
 On the runner, before the emulator starts: the fake engine on `127.0.0.1:8791` with `--allow-origin http://localhost:5173`, and `vite --host 127.0.0.1 --port 5173`. G2 is not guarded: if the dev-server APK is missing, the job fails rather than skipping the flow. Maestro 2.12.0 comes from its release page (downloaded with retries), checked against a pinned SHA-256 before it is unpacked (to move the version, change `MAESTRO_VERSION` and `MAESTRO_SHA256` together).
 
-G2 starts the app with `adb shell pm clear` and `am start`, because Maestro's own launch does not bring the app to the front on some phones; the flow has no `launchApp`. Evidence (Maestro report, logcat, screenshots, engine and Vite logs) is uploaded as `android-emulator-evidence`.
+G2 starts the app with `adb shell pm clear` and `start_app`, because Maestro's own launch does not bring the app to the front on some phones. `start_app` waits for the first screen and retries if clearing the old task races with launch; the flow has no `launchApp`. Evidence (Maestro report, logcat, screenshots, engine and Vite logs) is uploaded as `android-emulator-evidence`.
 
 **What a green run does not prove yet.** None of the G2 steps had run in CI when this was written; the first run is the real test. Two things in it are a best effort and may need a second attempt: asking Chrome to skip its first-run screen on the emulator image (`chrome-command-line`), and the Maestro flags `--format junit --output ... --debug-output`. If the sign-in hangs in front of Chrome's first-run page, that is the cause.
 
@@ -470,6 +470,20 @@ What is **not** covered: the photo picker is the Android 13+ system picker and t
 
 Running it by hand on a machine with a phone attached: set `ANDROID_SERIAL=emulator-5554`, start the engine yourself (`node e2e/fake-engine/serve.mjs --host 127.0.0.1 --port 8792 --scenario inspection --allow-origin http://localhost:5173`; a fresh one for every run, because its counters are kept), run Vite with `--host 127.0.0.1` (the default `localhost` binds IPv6 only on Windows and `adb reverse` cannot reach it), and pass the printed control url.
 
+### G5: a report that was published (read-only, "Edit and republish", the notice choice)
+
+`scripts/android-emulator-published.sh` runs after G3 and G4 in the same emulator session, on a **third fake engine** (port 8793, `--scenario published`, so the seeded inspection insp-7 has a report published as version 3, locked). It has an engine of its own because the checks depend on that engine's counters (the publishes it has seen) and on the report's state, which a flow that ran before would have changed. The workflow writes the control url the engine printed to `g5-control-url` and passes it in. The script, in order:
+
+1. Asks the engine whether it starts as expected: the report locked at version 3, no publishes (`scripts/lib/report-state.mjs <control> locked 3 '[]'`). A repeated run on the same engine would start from the end of the last one, so the start is checked rather than assumed.
+2. Clears the app, starts it, and runs **part A** (`maestro/golden/g5-a-published-report.yaml`): sign in, download, open the inspection. The report is read-only and a banner names the version; "Edit and republish" opens it; a publish with nothing said answers "Nothing to publish".
+3. Asks the engine what it saw: one publish, with no notice choice and the outcome `unchanged`, and the report still locked at version 3. The screen can say "queued" or "nothing changed" for a request that never went out, so the engine is the judge of what was sent.
+4. Runs **part B** (`g5-b-republish-with-notice.yaml`) in the same app session: publish with a summary and the notice box ticked.
+5. Asks the engine again: version 4, locked, and the second publish carried `notifyClient: true`, the summary and the outcome `new_version`. Then the logcat check: a `FATAL EXCEPTION` in the app's own process fails the run.
+
+To run it locally, use the same pattern as G2 and G3: set `ANDROID_SERIAL` to the emulator, start a fresh engine (`node e2e/fake-engine/serve.mjs --host 127.0.0.1 --port 8793 --scenario published --allow-origin http://localhost:5173`; fresh for every run, because its counters are kept), run Vite with `--host 127.0.0.1`, install the dev-server APK, and run `bash scripts/android-emulator-published.sh <dev-server APK> http://localhost:8793 <the control url the engine printed> <output directory>`. `scripts/lib/android-scripts.test.ts` runs the script whole against stand-in `adb`, `maestro` and control server (a passing run, then a wrong start state, wrong publishes after part A, a failing part A and a crash in logcat), and `scripts/lib/report-state.test.ts` covers the engine questions.
+
+What is **not** covered: iOS on the device itself (the same flow runs on the simulator in the `ios-simulator-published` CI job, see `docs/ios-published-flow.md`; it is not a required check and its first runs are the evidence); the real server's behaviour (the fake engine answers the way the contract in `docs/fake-engine-contract.md` says the engine does, so a difference between the two is not seen here); the notice actually being delivered to a client (the engine's job, not the app's); and a report published by someone else while the app is open.
+
 ## Visual layout baselines
 
 `e2e-electron/layout.visual.spec.ts` takes Playwright `toHaveScreenshot` shots of five screens: the work list, the editor, Settings, the export dialog and the blocking pages (database locked, encryption unavailable, unreadable, key lost). Each is taken in light and dark, at 1280 wide and at 480 wide. **It checks layout only**: a block that moved, overflowed or lost its theme. It does not say a screen is right, and it does not replace looking at the app. The app screens run in the real Electron window against the fake engine (the same harness as the other specs); the blocking pages are rendered from `e2e-electron/fixtures/blocking.html` through a Vite dev server in a Chromium page. Three texts that change between runs (the engine's random port, today's date under "Last verified", "Checked ... ago") are rewritten to fixed text before each shot.

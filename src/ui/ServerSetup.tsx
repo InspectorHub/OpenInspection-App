@@ -6,7 +6,7 @@ import { isAuthError } from '../auth/errors';
 import { parseServerUrl } from '../auth/server-config';
 import { DevDiagnostics } from './dev-diagnostics';
 import { BuildExpiry } from './BuildExpiry';
-import { Body, Button, Heading, INPUT_CLASSES, Notice, Screen } from './kit';
+import { BackLink, Body, Button, Heading, INPUT_CLASSES, Notice, Screen } from './kit';
 import { useActionLatch } from './latch';
 import { messageFor, NATIVE_LOGIN_HELP } from './messages';
 import { useBackHandler } from './use-back-handler';
@@ -18,6 +18,8 @@ export interface ServerSetupProps {
   services: AppServices;
   onConnected(origin: string, notices: CompatNotice[]): void;
   initialUrl?: string;
+  /** Set when the person reached this screen from sign-in: the way back to it. A first-run setup has nothing to go back to. */
+  onBack?(): void;
   /**
    * Lets a test turn the development-only switch off. The switch (plain http to a non-loopback host:
    * an emulator alias, a LAN address) is also gated on the build's own DEV flag, which
@@ -28,7 +30,7 @@ export interface ServerSetupProps {
 
 type Step = { kind: 'edit' } | { kind: 'confirm'; origin: string; busy: boolean };
 
-export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER_URL, devHttpSwitch = true }: ServerSetupProps) {
+export function ServerSetup({ services, onConnected, onBack, initialUrl = DEFAULT_SERVER_URL, devHttpSwitch = true }: ServerSetupProps) {
   const showHttpSwitch = import.meta.env.DEV && devHttpSwitch;
   const inputId = useId();
   const errorId = useId();
@@ -40,8 +42,13 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
   const latch = useActionLatch();
 
   // Back from the address check returns to the address, like "Change address"; while connecting it is used up and does nothing.
+  // From the address itself, back returns to sign-in when that is where the person came from.
   useBackHandler(() => {
-    if (step.kind !== 'confirm') return false;
+    if (step.kind !== 'confirm') {
+      if (!onBack) return false;
+      onBack();
+      return true;
+    }
     if (!step.busy) setStep({ kind: 'edit' });
     return true;
   });
@@ -98,6 +105,7 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
 
   return (
     <Screen>
+      {onBack && <BackLink label="Sign in" ariaLabel="Back to sign in" onClick={onBack} />}
       <Heading>Choose your server</Heading>
       <BuildExpiry services={services} />
       <form className="flex flex-col gap-4" onSubmit={review} noValidate>
@@ -109,6 +117,7 @@ export function ServerSetup({ services, onConnected, initialUrl = DEFAULT_SERVER
             id={inputId}
             type="url"
             inputMode="url"
+            enterKeyHint="go"
             autoCapitalize="none"
             autoCorrect="off"
             autoComplete="url"

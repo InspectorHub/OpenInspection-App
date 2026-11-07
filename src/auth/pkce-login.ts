@@ -7,7 +7,7 @@ import { AuthError, isAuthError } from './errors';
 import type { Http } from './http';
 import type { Registrar } from './registration';
 import { recordVerified, setRevoked } from '../offline/lock-state';
-import { fetchSession, loadIdentity, saveIdentity, serverEndpoints, type SessionInfo } from './server-config';
+import { fetchSession, loadIdentity, saveIdentity, serverEndpoints, writeDeviceState, type SessionInfo } from './server-config';
 import { NATIVE_SCOPE, oauthErrorCode, parseTokenResponse, type TokenManager, type TokenResponse } from './tokens';
 
 export { PENDING_LOGIN_TTL_MS };
@@ -149,12 +149,19 @@ export function createLoginFlow(deps: LoginDeps): LoginFlow {
         if (sameIdentity) await setRevoked(deps.db).catch(() => undefined);
         throw new AuthError('session_role_not_allowed');
       }
-      if (stored && !sameIdentity) throw new AuthError('identity_mismatch');
+      if (stored && !sameIdentity) {
+        throw new AuthError('identity_mismatch', undefined, {
+          sameCompany: stored.tenantId === session.tenantId,
+          storedRole: stored.role,
+          newRole: session.role,
+        });
+      }
       await deps.tokens.adopt(origin, tokens);
       try {
         if (!stored || stored.role !== session.role) {
           await saveIdentity(deps.db, { userId: session.userId, tenantId: session.tenantId, role: session.role });
         }
+        await writeDeviceState(deps.db, 'identity_origin', origin);
         await recordVerified(deps.db, deps.clock.now(), session.offlineMaxDays, result.serverDateMs, result.serverNowMs);
       } catch (err) {
         await deps.tokens.signOut(origin);

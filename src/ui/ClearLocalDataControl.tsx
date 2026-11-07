@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import { countAtRisk, type AtRisk } from '../offline/at-risk';
 import { clearLocalData } from '../offline/clear-local-data';
+import { loadStoredOrigin } from '../offline/stored-origin';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExportResult } from './ExportResult';
 import { Button, Notice } from './kit';
@@ -17,6 +18,8 @@ export interface ClearLocalDataControlProps {
    * The app stops its lock checks while it is true: a device whose verification marks were just removed is not "expired".
    */
   onWiping?(wiping: boolean): void;
+  /** The text on the button that opens the question. The questions themselves are the same whatever it says. */
+  label?: string;
 }
 
 const FIRST_DESCRIPTION = 'This permanently removes the inspections, photos and changes stored on this device. This cannot be undone.';
@@ -50,7 +53,7 @@ interface Counted {
  * before a single-step clear, so work that arrived while the dialog was open sends the person to the second step instead of being
  * removed. Signing out follows the clear (the sign-in belongs to the data that was removed). Never `window.confirm`.
  */
-export function ClearLocalDataControl({ services, origin, onCleared, onWiping }: ClearLocalDataControlProps) {
+export function ClearLocalDataControl({ services, origin, onCleared, onWiping, label = 'Clear local data' }: ClearLocalDataControlProps) {
   const [step, setStep] = useState<'closed' | 'first' | 'second'>('closed');
   const [opening, setOpening] = useState(0);
   const [counted, setCounted] = useState<Counted | null>(null);
@@ -101,8 +104,11 @@ export function ClearLocalDataControl({ services, origin, onCleared, onWiping }:
         }
       }
       onWiping?.(true);
+      // The data may come from another server than the one signed in to now (the mismatch panel): that server's grant is the wiped account's.
+      const dataOrigin = await loadStoredOrigin(services.db).catch(() => null);
       const result = await clearLocalData(services.db, services.files, services.clock.now());
       await services.tokens.signOut(origin).catch(() => undefined);
+      if (dataOrigin !== null && dataOrigin !== origin) await services.tokens.signOut(dataOrigin).catch(() => undefined);
       setStep('closed');
       setBusy(false);
       if (result.filesFailed.length > 0) setLeftover(result.filesFailed.length);
@@ -151,7 +157,7 @@ export function ClearLocalDataControl({ services, origin, onCleared, onWiping }:
   return (
     <>
       <Button ref={trigger} variant="secondary" onClick={open}>
-        Clear local data
+        {label}
       </Button>
       {step === 'first' && (
         <ConfirmDialog

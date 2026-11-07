@@ -1525,17 +1525,32 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
 
   it('runs G2 on the dev-server APK after the launch smoke, in the same emulator session, with no guard that could skip it', () => {
     const lines = String(emuJob.steps[runnerAt]?.with?.script).split('\n').map((l) => l.trim()).filter((l) => l !== '');
-    expect(lines).toHaveLength(3);
+    // Four lines now: the launch smoke, G2, G3 + G4 and G5 (it was three before G5; each line is one script run, so the count is exact).
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toContain('scripts/android-emulator-smoke.sh');
     expect(lines[1]).toBe('bash scripts/android-emulator-golden.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8791 "$RUNNER_TEMP/android-smoke/g2"');
     // G3 and G4 follow G2 in the same session, on their own engine (port 8792, the inspection scenario) whose control url the workflow wrote down.
     expect(lines[2]).toBe('bash scripts/android-emulator-offline-photo.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8792 "$(cat "$RUNNER_TEMP/android-smoke/g3-control-url")" "$RUNNER_TEMP/android-smoke/g3"');
+    // G5 comes last, on its own third engine (port 8793, the published scenario) whose control url the workflow wrote down in its own file.
+    expect(lines[3]).toBe('bash scripts/android-emulator-published.sh "$RUNNER_TEMP/apk/app-debug-devserver.apk" http://localhost:8793 "$(cat "$RUNNER_TEMP/android-smoke/g5-control-url")" "$RUNNER_TEMP/android-smoke/g5"');
+    expect(lines.at(-1)).toBe(lines[3]);
     // A missing APK must fail the job, never skip a flow.
     for (const line of lines.slice(1)) expect(line).not.toMatch(/\[ !? -f|\|\||if /);
     // The fake engine is reached at the emulator's localhost (adb reverse in the golden script), on the port the workflow started it on.
     const engines = String(emuJob.steps[indexOfStep('Start the fake engine and the Vite dev server on the runner')]?.run);
     expect(engines).toContain('--port 8791');
     expect(engines).toMatch(/--port 8792 --scenario inspection --allow-origin http:\/\/localhost:5173/);
+    // The third engine: G5's published report, with its log and control url apart from G3's, and waited for like the others.
+    expect(engines).toContain('--port 8793 --scenario published --allow-origin http://localhost:5173 > "$RUNNER_TEMP/android-smoke/fake-engine-g5.log"');
+    expect(engines).toContain('curl -fsS http://127.0.0.1:8793/api/client/compat');
+    expect(engines).toContain('> "$RUNNER_TEMP/android-smoke/g5-control-url"');
+    expect(engines.split('--scenario published')).toHaveLength(2); // exactly one engine runs it
+    expect(engines).toContain('> "$RUNNER_TEMP/android-smoke/g3-control-url"'); // G3's own file is still written
+    expect(engines).not.toContain('0.0.0.0');
+    // The three engines use three different ports (and Vite its own, 5173).
+    expect(new Set(engines.match(/--port [0-9]+/g))).toEqual(new Set(['--port 5173', '--port 8791', '--port 8792', '--port 8793']));
+    // The step's display name names G5 too.
+    expect(String(emuJob.steps[runnerAt]?.name)).toContain('G5');
   });
 
   it('both emulator scripts deal with a system "isn\'t responding" dialog instead of failing on it', () => {
@@ -1554,13 +1569,13 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(loop.indexOf('dismiss_not_responding')).toBeGreaterThan(0);
     expect(loop.indexOf('dismiss_not_responding')).toBeLessThan(loop.indexOf('Choose your server'));
     expect(loop).toMatch(/dismiss_not_responding "\$OUT\/ui\.xml"; then[\s\S]*?continue/);
-    // The golden flow checks once BEFORE Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
+    // The golden flow checks before Maestro starts and never while it runs: two uiautomator clients at once is what crashed UiAutomation.
     expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeGreaterThan(0);
     expect(golden.indexOf('dismiss_not_responding "$OUT/ui-preflight.xml"')).toBeLessThan(golden.indexOf('maestro --device'));
     // A dialog that would come up LATER, while Maestro runs and nothing may look at the screen, is prevented: error dialogs are hidden
     // before the app is started (a crash of the app is still found by the logcat check).
     expect(golden).toContain('settings put global hide_error_dialogs 1');
-    expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('adb shell am start -n'));
+    expect(golden.indexOf('settings put global hide_error_dialogs 1')).toBeLessThan(golden.indexOf('start_app "Choose your server"'));
     // After the loop, a last press is followed by one more look, so the checks read the screen and not the dialog that was pressed.
     const after = smoke.slice(smoke.indexOf('until [ "$attempts" -ge "$MAX_UI_ATTEMPTS" ]'));
     expect(after).toContain('dismissed=1');
@@ -1581,7 +1596,7 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     }
   });
 
-  it('the golden script starts the app from a cleared state with pm clear and am start, then runs the G2 flow with the engine address', () => {
+  it('the golden script starts the app from a cleared state with the shared screen-aware launcher, then runs G2 with the engine address', () => {
     expect(golden.startsWith('#!/usr/bin/env bash')).toBe(true);
     for (const needle of ['set -Eeuo pipefail', 'FATAL EXCEPTION', 'screencap', 'logcat', 'uiautomator dump', 'maestro/golden/g2-controlled-sign-in.yaml', '-e "SERVER_URL=$ENGINE_ORIGIN"']) expect(golden, needle).toContain(needle);
     // The emulator's localhost is made to reach the runner: without these two the WebView and the app would find nothing on it.
@@ -1591,11 +1606,14 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
     expect(reverseEngine).toBeGreaterThan(0);
     expect(golden).not.toContain('10.0.2.2');
     const clear = golden.indexOf('adb shell pm clear "$APP_ID"');
-    const start = golden.indexOf('adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"');
+    const start = golden.indexOf('start_app "Choose your server"');
     const flow = golden.indexOf('maestro --device "$serial" test');
+    const launcher = readFileSync(join(ROOT, 'scripts', 'lib', 'android-start-app.sh'), 'utf8');
     expect(clear).toBeGreaterThan(Math.max(reverseVite, reverseEngine));
     expect(start).toBeGreaterThan(clear);
     expect(flow).toBeGreaterThan(start);
+    expect(launcher).toContain('adb shell am start -n "$APP_ID/io.inspectorhub.app.MainActivity"');
+    expect(launcher).toContain('wait_for_screen_text "$pattern"');
     // Maestro never launches the app itself: the flow file names the app id but has no launchApp step.
     expect(readFileSync(join(ROOT, 'maestro', 'golden', 'g2-controlled-sign-in.yaml'), 'utf8')).not.toContain('launchApp');
     // No credential, token or account is typed or passed by the script.
@@ -1616,6 +1634,17 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     expect(off).toBeGreaterThan(0);
     expect(off).toBeLessThan(flowA.indexOf('tapOn: "Add photo"'));
     expect(flowA.indexOf('tapOn: "Add photo"')).toBeLessThan(flowA.indexOf('Add from library'));
+    expect(flowA.indexOf('visible: "Add media"')).toBeGreaterThan(flowA.indexOf('tapOn: "Add photo"'));
+    expect(flowA.indexOf('visible: "Add media"')).toBeLessThan(flowA.indexOf('tapOn: "Add from library"'));
+    const photoSelected = flowA.indexOf('text: "Photo taken on.*"');
+    const selectedScreenshot = flowA.indexOf('path: g3-photo-selected', photoSelected);
+    const confirmation = flowA.indexOf("text: 'Done|Add", selectedScreenshot);
+    const uploading = flowA.indexOf('visible: "UPLOADING"', confirmation);
+    expect(photoSelected).toBeGreaterThan(0);
+    expect(selectedScreenshot).toBeGreaterThan(photoSelected);
+    expect(confirmation).toBeGreaterThan(selectedScreenshot);
+    expect(uploading).toBeGreaterThan(confirmation);
+    expect(g3).toContain('--test-output-dir "$OUT/maestro-a-files"');
     // The picture is in the media index (checked by a query, not a sleep) before Maestro starts: Maestro's addMedia raced the index on API 34.
     expect(stepsOf(flowA)).not.toContain('addMedia'); // the comment may name it, a step may not
     const pushed = g3.indexOf('adb push maestro/fixtures/roof-photo.jpg');
@@ -1637,6 +1666,12 @@ describe('Android emulator golden flows G3 and G4 (offline photo, restart, uploa
     const started = g3.indexOf('webview-console.mjs" collect "$OUT/webview-console.jsonl" &');
     expect(started).toBeGreaterThan(g3.indexOf('adb install -r "$APK"'));
     expect(started).toBeLessThan(g3.indexOf('start_app "Choose your server"'));
+    const recorder = readFileSync(join(ROOT, 'scripts', 'lib', 'webview-console.mjs'), 'utf8');
+    expect(recorder).toContain("'[file-input-change]'");
+    expect(recorder).toContain('files.map(({ type, size }) => ({ type, size }))');
+    expect(recorder).not.toContain('file.slice');
+    expect(recorder).not.toContain("'[file-input-readable]'");
+    expect(recorder).not.toContain("'[file-input-read-error]'");
     expect(g3).toContain('trap stop_console EXIT');
     const onError = g3.slice(g3.indexOf('on_error() {'), g3.indexOf('trap on_error ERR'));
     // The snapshot is taken while the recorder still runs, then the recorder is stopped and its tail is printed into the job log.
@@ -1757,5 +1792,27 @@ describe('CI verify job: the fake engine is checked against the engine contract'
     // control: the Windows shards do not set it (they would skip the check, which is fine there: verify is the one that requires it)
     const win = job(ci.wf, 'windows').steps.find((s) => (s.run ?? '').startsWith('npx vitest run'));
     expect(win?.env?.REQUIRE_ENGINE_CONTRACT).toBeUndefined();
+  });
+});
+
+describe('the evidence uploads keep the hidden directory Maestro writes its debug output into', () => {
+  // Maestro puts the failing step's screenshot and the commands it ran under <debug dir>/.maestro/. upload-artifact leaves hidden files out
+  // unless asked, so without this the debug directory is empty in every artifact and a failed flow leaves only its junit file behind.
+  const uploadOf = (wf: Workflow, artifact: string): Step => {
+    const found = allSteps(wf).find((s) => s.uses?.startsWith('actions/upload-artifact@') === true && s.with?.name === artifact);
+    if (found === undefined) throw new Error(`no upload step for ${artifact}`);
+    return found;
+  };
+
+  it('the iOS published-report job uploads hidden files', () => {
+    expect(uploadOf(ci.wf, 'ios-simulator-published-evidence').with?.['include-hidden-files']).toBe(true);
+  });
+
+  it('the Android emulator job uploads hidden files', () => {
+    expect(uploadOf(load('android-emulator').wf, 'android-emulator-evidence').with?.['include-hidden-files']).toBe(true);
+  });
+
+  it('control: an upload that does not ask for them (the iOS screenshots) is left as it was', () => {
+    expect(uploadOf(ci.wf, 'ios-simulator-screenshots-${{ matrix.device }}').with?.['include-hidden-files']).toBeUndefined();
   });
 });

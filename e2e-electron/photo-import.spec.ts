@@ -121,8 +121,8 @@ async function seedEditorPackage(): Promise<void> {
   });
   await expect(page.getByRole('button', { name: 'Open 77 Test Photo Lane' })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Open 77 Test Photo Lane' }).click();
-  await expect(page.getByRole('button', { name: 'Open Roof cover' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Roof cover' }).click();
+  // The editor opens on its first item (field-ui 0.9.0), so there is no item to tap first.
+  await expect(page.getByRole('heading', { name: 'Roof cover', level: 2 })).toBeVisible();
 }
 
 async function mediaRows(): Promise<Array<{ pending_id: string; path: string; content_type: string }>> {

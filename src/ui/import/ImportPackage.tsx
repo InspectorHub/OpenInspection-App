@@ -4,7 +4,7 @@ import type { Api } from '../../field/api-client';
 import { tenantMatches } from '../../offline/import-package';
 import { ACCEPT_PACKAGE_FILES, formatSize } from '../../offline/package-source';
 import { ConfirmDialog } from '../ConfirmDialog';
-import { Button, Notice, Screen } from '../kit';
+import { BackLink, Button, Notice, Screen } from '../kit';
 import { useActionLatch } from '../latch';
 import { useBackHandler } from '../use-back-handler';
 import {
@@ -96,17 +96,7 @@ export function ImportPackage({ api, tenantId, share, now, onClose, onSignInAgai
 
   return (
     <Screen wide>
-      {!running && (
-        <button
-          type="button"
-          aria-label="Back to settings"
-          className="inline-flex min-h-11 items-center gap-1 self-start text-base font-semibold text-ih-primary-text focus-visible:outline-none focus-visible:shadow-ih-focus"
-          onClick={onClose}
-        >
-          <span aria-hidden="true">&lsaquo;</span>
-          <span>Settings</span>
-        </button>
-      )}
+      {!running && <BackLink label="Settings" ariaLabel="Back to settings" onClick={onClose} />}
       <h1 ref={heading} tabIndex={-1} className="font-ih-display text-2xl font-bold tracking-tight text-ih-fg-1 focus-visible:outline-none">
         {IMPORT_TITLE}
       </h1>

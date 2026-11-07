@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from 'react';
-import { Button, Heading, Notice, Screen } from './kit';
+import { BackLink, Heading, Notice, Screen } from './kit';
 
 export const EDITOR_UNAVAILABLE = 'The editor could not be opened. Your work on this device is safe.';
 
@@ -20,11 +20,9 @@ export class EditorBoundary extends Component<Props, { failed: boolean }> {
     if (!this.state.failed) return this.props.children;
     return (
       <Screen>
+        <BackLink label="Work list" ariaLabel="Back to work list" onClick={this.props.onBack} />
         <Heading>Inspection</Heading>
         <Notice tone="bad">{EDITOR_UNAVAILABLE}</Notice>
-        <Button variant="secondary" onClick={this.props.onBack}>
-          Back to work list
-        </Button>
       </Screen>
     );
   }

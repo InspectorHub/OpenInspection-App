@@ -371,6 +371,8 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
       // Presence is off (the session names no user), so the editor never opens this; it must still be a string.
       presenceSocket: (inspectionId) => `${PRESENCE_OFF_ORIGIN}/${encodeURIComponent(inspectionId)}`,
       editorPath: (inspectionId) => `/inspections/${encodeURIComponent(inspectionId)}/edit`,
+      // The tag picker links here when the company has no tags yet; the editor hands it to `openUrl`, which opens it in the system browser.
+      tagLibrary: () => new URL('/library/tags', deps.origin).href,
     },
     resources: { ...resources, video: videoAdapter.video },
     platform: fieldPlatformOf(deps.platform),

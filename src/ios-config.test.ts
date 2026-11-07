@@ -201,3 +201,12 @@ describe('iOS backup exclusion', () => {
     expect(project.replaceAll('BackupExclusion.swift in Sources', 'x')).not.toMatch(/BackupExclusion\.swift in Sources/); // control
   });
 });
+
+describe('the soft keyboard', () => {
+  // 'native' resized the web view about 600 ms after the keyboard began to rise (bars fixed to the bottom flickered; the window showed black
+  // through the keyboard's rounded corners). 'none' leaves the web view alone and iOS scrolls a covered field into view.
+  it('covers the web view instead of resizing it (iOS only: Android sizes the window itself)', () => {
+    expect(read('capacitor.config.ts')).toMatch(/Keyboard:\s*\{[^}]*resize:\s*KeyboardResize\.None/);
+    expect(read('capacitor.config.ts')).not.toMatch(/resize:\s*(KeyboardResize\.(Native|Body|Ionic)|'(native|body|ionic)')/);
+  });
+});

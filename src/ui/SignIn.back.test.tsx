@@ -21,14 +21,14 @@ describe('SignIn Back', () => {
     const { world } = await worldWithHeldSignIn();
     render(<SignIn services={world.services} origin={ORIGIN} relogin={false} notices={[]} onSignedIn={vi.fn()} onChangeServer={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to lock screen' })).toBeNull();
   });
 
   it('calls onBack when the caller can go back', async () => {
     const { world } = await worldWithHeldSignIn();
     const onBack = vi.fn<() => void>();
     render(<SignIn services={world.services} origin={ORIGIN} relogin notices={[]} onSignedIn={vi.fn()} onChangeServer={vi.fn()} onBack={onBack} />);
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Back' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Back to lock screen' }));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
@@ -37,6 +37,6 @@ describe('SignIn Back', () => {
     render(<SignIn services={world.services} origin={ORIGIN} relogin notices={[]} onSignedIn={vi.fn()} onChangeServer={vi.fn()} onBack={vi.fn()} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(held()?.opened).toBe(1));
-    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to lock screen' })).toBeNull();
   });
 });

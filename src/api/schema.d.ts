@@ -612,6 +612,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inspections/{id}/edit-again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Edit a published report again (Edit and republish)
+         * @description Lifts the publish lock on one report so its content can be changed again: until then every content write answers 409 REPORT_PUBLISHED. The report is NOT withdrawn: no client link expires, nothing is sent, and clients keep reading the latest published version until a new publish freezes the next one. Use the unpublish route to withdraw a report instead. Calling it on a report that is already being edited again answers the same 200. An inspection with no report row (not yet backfilled) answers 404, as the collaborative editor does. Requires the publish capability, like publishing. You must be on this inspection or hold the scheduleOthers permission; otherwise 403.
+         */
+        post: operations["editPublishedReportAgain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inspections/{id}/inspector-signature": {
         parameters: {
             query?: never;
@@ -943,7 +963,7 @@ export interface paths {
         put?: never;
         /**
          * Publish inspection for current tenant
-         * @description Publish an inspection report: sets reportStatus to published and returns the report URL. Fires the workspace's report.published automation rules (report.amended when the report was published before), so any client or agent notification is decided by those rules, not by this request; a first publish close to a sibling report's delivery may be coalesced into that notification. Also applies the automatic signature if one is configured, saves a frozen version snapshot (best effort, recorded with the optional summary), writes an inspection.published audit entry, and in the background queues the Summary and Full PDFs (only when the PDF pipeline is enabled), produces the optional courtesy translation, and syncs the report link to an ISN connection if one exists (isnSync). The theme, requireSignature, requirePayment, recipients and sendAgreementCopy fields are accepted but not used. This call does not check publish readiness; read the readiness route first. Calling it again republishes and creates a new version, except when nothing has changed: if the results, the report status and the summary are the same as in the latest version and no translation is requested, the call answers 200 in the same shape without publishing again (no new version, automation, audit entry, translation, PDF or ISN sync; isnSync is null). Requires the publish capability on top of the owner, manager or inspector role. You must be on this inspection or hold the scheduleOthers permission; otherwise 403.
+         * @description Publish an inspection report: sets reportStatus to published and returns the report URL. Fires the workspace's report.published automation rules on a first publish, so any client or agent notification is decided by those rules; a first publish close to a sibling report's delivery may be coalesced into that notification. A re-publish of a report that was opened with edit-again (clients still read its last version) is an amendment: it fires the report.amended rules only when notifyClient is true (default false). The choice covers every report-updated rule, not just the client's: with false none fire (the client's, the buyer's agent's, any custom or in-app one) and the report's notified-at stamp is left untouched, so an API or MCP caller that omits notifyClient on an amendment sends no report-updated notices. The response does not say whether notices were suppressed. When the publish is answered as unchanged, unchangedSinceVersion names the version still current. A republish after a retract is a fresh delivery and is decided by the rules as a first publish is. Also applies the automatic signature if one is configured, saves a frozen version snapshot (recorded with the optional summary; a report whose frozen copy would exceed 1 MB is refused with 413 before anything is published; the snapshot write is retried once and a second failure is logged as an error without failing the publish), writes an inspection.published audit entry, and in the background queues the Summary and Full PDFs (only when the PDF pipeline is enabled), produces the optional courtesy translation, and syncs the report link to an ISN connection if one exists (isnSync). The theme, requireSignature, requirePayment, recipients and sendAgreementCopy fields are accepted but not used. This call does not check publish readiness; read the readiness route first. Calling it again republishes and creates a new version, except when nothing has changed: if the results, the report status and the summary are the same as in the latest version and no translation is requested, the call answers 200 in the same shape without publishing again (no new version, automation, audit entry, translation, PDF or ISN sync; isnSync is null). Requires the publish capability on top of the owner, manager or inspector role. You must be on this inspection or hold the scheduleOthers permission; otherwise 403.
          */
         post: operations["publishInspection"];
         delete?: never;
@@ -1619,6 +1639,11 @@ export interface components {
             sortOrder: number;
             /** @description True for the built-in maintenance/recommendation/safety rows (not user-deletable). */
             isSeed: boolean;
+            /**
+             * Format: date-time
+             * @description When the category was created (ISO 8601).
+             */
+            createdAt?: string;
         };
         Inspection: {
             /**
@@ -1670,6 +1695,60 @@ export interface components {
              */
             createdAt: string;
         };
+        InspectionListEntry: {
+            /**
+             * @description Inspection id.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            id: string;
+            /**
+             * @description Street address of the inspected property.
+             * @example 123 Main St, Anytown
+             */
+            propertyAddress: string;
+            /**
+             * @description Name of the primary client, or null when none is recorded.
+             * @example John Doe
+             */
+            clientName: string | null;
+            /**
+             * Format: email
+             * @description Email address of the primary client, or null when none is recorded.
+             * @example john@example.com
+             */
+            clientEmail: string | null;
+            /**
+             * @description Lifecycle status of the inspection.
+             * @example requested
+             * @enum {string}
+             */
+            status: "requested" | "scheduled" | "confirmed" | "completed" | "cancelled";
+            /**
+             * @description Scheduled inspection date.
+             * @example 2024-03-20
+             */
+            date: string;
+            /**
+             * @description Assigned inspector (users.id).
+             * @example 550e8400-e29b-41d4-a716-446655440001
+             */
+            inspectorId: string | null;
+            /**
+             * @description Id of the template the inspection is built from, or null when none is attached.
+             * @example 550e8400-e29b-41d4-a716-446655440002
+             */
+            templateId: string | null;
+            /**
+             * Format: date-time
+             * @description When the inspection record was created (ISO 8601).
+             * @example 2024-03-20T10:00:00Z
+             */
+            createdAt: string;
+            /** @description The version of the report clients read, or null while clients see none (never published, or retracted). */
+            publishedVersionNumber: number | null;
+            /** @description True while a published report is open for "Edit and republish": clients still read publishedVersionNumber and the inspector has unpublished edits. */
+            editingAgain: boolean;
+        };
         InspectionListResponse: {
             /**
              * @description True when the request succeeded.
@@ -1677,7 +1756,7 @@ export interface components {
              */
             success: boolean;
             /** @description Response payload */
-            data: components["schemas"]["Inspection"][];
+            data: components["schemas"]["InspectionListEntry"][];
             /** @description Error detail; present only when the request failed. */
             error?: {
                 /**
@@ -1695,6 +1774,213 @@ export interface components {
             };
             /** @description Optional response metadata, such as pagination information. */
             meta?: unknown;
+        };
+        InspectionRecord: components["schemas"]["Inspection"] & {
+            /** @description Place identifier returned by the address autocomplete, or null. */
+            addressPlaceId?: string | null;
+            /** @description Street line of the geocoded address, or null. */
+            addressStreet?: string | null;
+            /** @description City of the geocoded address, or null. */
+            addressCity?: string | null;
+            /** @description State or region code of the geocoded address, or null. */
+            addressState?: string | null;
+            /** @description Postal code of the geocoded address, or null. */
+            addressZip?: string | null;
+            /** @description County as the address autocomplete returned it, or null. The Property Facts county is `county`. */
+            addressCounty?: string | null;
+            /** @description Latitude of the geocoded address, or null. */
+            addressLat?: number | null;
+            /** @description Longitude of the geocoded address, or null. */
+            addressLng?: number | null;
+            /**
+             * Format: date-time
+             * @description When the address was geocoded (ISO 8601), or null.
+             */
+            addressGeocodedAt?: string | null;
+            /** @description Suite or unit designation of the inspected property, or null. */
+            unit?: string | null;
+            /** @description County as the Property Facts strip edits it, or null. */
+            county?: string | null;
+            /** @description What kind of property was inspected: single_family, multi_unit or commercial, or null when it was never classified. Other values may be present on older rows. */
+            propertyType?: string | null;
+            /** @description Commercial property subtype, or null. Only meaningful when the property type is commercial. */
+            commercialSubtype?: string | null;
+            /** @description Year the property was built, or null. */
+            yearBuilt?: number | null;
+            /** @description Floor area in square feet, or null. */
+            sqft?: number | null;
+            /** @description Foundation type, or null. */
+            foundationType?: string | null;
+            /** @description Number of bedrooms, or null. */
+            bedrooms?: number | null;
+            /** @description Number of bathrooms (may be fractional), or null. */
+            bathrooms?: number | null;
+            /** @description Lot size as free text, such as "0.25 acres", or null. */
+            lotSize?: string | null;
+            /** @description The Property Facts values (year built, size, foundation and the like), or null when none are stored. */
+            propertyFacts?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * @description Where the report is in its life: in_progress, submitted or published.
+             * @enum {string}
+             */
+            reportStatus?: "in_progress" | "submitted" | "published";
+            /**
+             * @description How much of the order has been paid.
+             * @enum {string}
+             */
+            paymentStatus?: "unpaid" | "partial" | "paid";
+            /** @description Whether payment is required before the report is released. */
+            paymentRequired?: boolean;
+            /** @description Whether a signed agreement is required before the report is released. */
+            agreementRequired?: boolean;
+            /** @description Whether the inspector signature is applied automatically when the report is published. */
+            autoSignOnPublish?: boolean;
+            /** @description True when automations are switched off for this inspection. */
+            disableAutomations?: boolean;
+            /** @description True when the inspection is worked by a team. */
+            teamMode?: boolean;
+            /**
+             * Format: date-time
+             * @description When the client confirmed the booking (ISO 8601), or null.
+             */
+            confirmedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description Start of the scheduled time slot, or null. An ISO 8601 string here, unlike the epoch-millisecond number the schedule request takes.
+             */
+            scheduledStartMs?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the scheduled time slot, or null. An ISO 8601 string here, unlike the epoch-millisecond number the schedule request takes.
+             */
+            scheduledEndMs?: string | null;
+            /** @description Expected duration in minutes, or null. */
+            durationMin?: number | null;
+            /** @description Id of the booking request this inspection came from, or null. */
+            requestId?: string | null;
+            /** @description Status of the concierge booking flow for this inspection, or null. */
+            conciergeStatus?: string | null;
+            /** @description External order or reference number, or null. */
+            referenceNumber?: string | null;
+            /** @description Free-text label for the referral channel, or null. */
+            referralSource?: string | null;
+            /** @description Contact who referred this job, or null. */
+            referredByContactId?: string | null;
+            /** @description Closing date of the property sale (YYYY-MM-DD), or null. */
+            closingDate?: string | null;
+            /** @description Private notes for the company; never shown to the client. */
+            internalNotes?: string | null;
+            /** @description Denormalized price cache in cents. ABSENT without the inspectionFees capability. */
+            price?: number;
+            /** @description Discount applied to the order, in cents, or null. ABSENT without the inspectionFees capability. */
+            discountAmount?: number | null;
+            /** @description Id of the discount code applied to the order, or null. */
+            discountCodeId?: string | null;
+            /** @description Deposit owed on this order, in integer cents, or null. ABSENT without the inspectionFees capability. */
+            depositRequiredCents?: number | null;
+            /** @description True when an operator set the deposit by hand, so a later re-resolve does not replace it. */
+            depositOverridden?: boolean;
+            /**
+             * @description Why the inspection was cancelled, or null when it was not.
+             * @enum {string|null}
+             */
+            cancelReason?: "client_cancelled" | "no_show" | "weather" | "inspector_unavailable" | "property_unavailable" | "rescheduled" | "other" | null;
+            /** @description Free-text note stored with a cancellation, or null. */
+            cancelNotes?: string | null;
+            /** @description Storage key of the photo chosen as the report cover, or null when none is chosen. */
+            coverPhotoId?: string | null;
+            /** @description The crop rectangle chosen for the cover photo, or null. It is only meaningful against the current cover photo. */
+            coverCrop?: {
+                /** @enum {string} */
+                aspect: "3:2" | "16:9" | "1.91:1" | "4:3";
+                /** @enum {string} */
+                orientation: "landscape" | "portrait";
+                x: number;
+                y: number;
+                width: number;
+                height: number;
+            } | null;
+            /** @description Storage key of the cropped cover image the report uses when set, or null. */
+            coverImageKey?: string | null;
+            /**
+             * @description Report tier of a commercial inspection, or null for none.
+             * @enum {string|null}
+             */
+            reportTier?: "light_commercial" | "full_pca" | null;
+            /**
+             * @description Forced photo presentation mode, or null to derive it from the report tier.
+             * @enum {string|null}
+             */
+            reportPhotoMode?: "appendix" | "inline" | null;
+            /** @description Photo grid columns for this report (1-4), or null to inherit the profile. */
+            reportPhotoColumns?: number | null;
+            /** @description Appearance profile id for this report, or null to inherit. */
+            profileOverride?: string | null;
+            /**
+             * @description Credential badge layout for this report, or null to inherit the profile.
+             * @enum {string|null}
+             */
+            badgeLayoutOverride?: "strip" | "inline" | null;
+            /**
+             * @description Which defect fields the publish gate requires for this inspection, or null to inherit the company default.
+             * @enum {string|null}
+             */
+            requireDefectFieldsOverride?: "none" | "location" | "trade" | "both" | null;
+            /**
+             * Format: date-time
+             * @description When the report files were last generated (ISO 8601), or null.
+             */
+            reportsGeneratedAt?: string | null;
+            /** @description The template structure frozen onto this inspection, or null when it has none or the stored value is not a readable object. The editor reads it to render the checklist. */
+            templateSnapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Version of the template at the time the snapshot was taken, or null. */
+            templateSnapshotVersion?: number | null;
+            /** @description The stored PCA report narrative blocks by key, or null when none are stored. Blocks left empty fall back to seed copy when the report renders. */
+            pcaNarrative?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * @description Whether findings are tagged with a location or recorded per unit.
+             * @enum {string}
+             */
+            unitInspectionMode?: "tagged" | "per_unit";
+            /** @description Locations a finding can be tagged with in tagged mode, or null. */
+            locationOptions?: string[] | null;
+            /** @description What was sampled and what was not, or null. */
+            samplingDeclaration?: {
+                /** @enum {string} */
+                samplingMethod: "exhaustive" | "representative";
+                unitsTotal?: number;
+                unitsInspected?: number;
+                basis?: string;
+            } | null;
+            /** @description Deviations from the standard guide, or null when none are recorded. */
+            deviations?: {
+                id: string;
+                area: string;
+                baselineRequirement: string;
+                deviation: string;
+                reason: string;
+            }[] | null;
+            /** @description Inspection this one was created from, or null. */
+            sourceInspectionId?: string | null;
+            /** @description First inspection of a re-inspection chain, or null. */
+            rootInspectionId?: string | null;
+            /** @description Position in a re-inspection chain, or null. */
+            reinspectionRound?: number | null;
+            /**
+             * Format: date-time
+             * @description When the published report was unlocked for editing (ISO 8601), or null.
+             */
+            unlockedAt?: string | null;
+            /** @description Id of the person who unlocked the report, or null. */
+            unlockedBy?: string | null;
+            /** @description Reason given for unlocking the report, or null. */
+            unlockReason?: string | null;
         };
         /** @description The signature image and the time the inspector signed. */
         InspectorSignature: {
@@ -1887,6 +2173,11 @@ export interface components {
             summary?: string;
             /** @description Report to publish; defaults to the inspection primary report. */
             reportId?: string;
+            /**
+             * @description Amendments only (a re-publish of a report reopened with edit-again): true fires the report-updated notification rules for this publish (every one of them: the client rule, the buyer agent rule, custom and in-app rules), false (the default) fires none. Ignored on a first publish and on a republish after a retract, where the report.published rules decide as before.
+             * @default false
+             */
+            notifyClient: boolean;
             /** @description BCP-47 locale to produce a courtesy translation in on this publish, e.g. es-419. Absent means none. The English report is the inspection record either way. 2-20 characters. */
             translateTo?: string;
         };
@@ -1932,8 +2223,7 @@ export interface components {
             data: components["schemas"]["Recommendation"][];
         };
         /** @description Response payload */
-        ReportData: {
-            /** @description Header facts about the inspection. */
+        ReportDataFull: {
             inspection: {
                 /** @description Inspection id. */
                 id: string;
@@ -1945,6 +2235,223 @@ export interface components {
                 status: string;
                 /** @description Name of the inspector, or null. */
                 inspectorName: string | null;
+                /**
+                 * @description Assigned inspector (users.id).
+                 * @example 550e8400-e29b-41d4-a716-446655440001
+                 */
+                inspectorId?: string | null;
+                /**
+                 * @description Id of the template the inspection is built from, or null when none is attached.
+                 * @example 550e8400-e29b-41d4-a716-446655440002
+                 */
+                templateId?: string | null;
+                /**
+                 * Format: date-time
+                 * @description When the inspection record was created (ISO 8601).
+                 * @example 2024-03-20T10:00:00Z
+                 */
+                createdAt?: string;
+                /** @description Place identifier returned by the address autocomplete, or null. */
+                addressPlaceId?: string | null;
+                /** @description Street line of the geocoded address, or null. */
+                addressStreet?: string | null;
+                /** @description City of the geocoded address, or null. */
+                addressCity?: string | null;
+                /** @description State or region code of the geocoded address, or null. */
+                addressState?: string | null;
+                /** @description Postal code of the geocoded address, or null. */
+                addressZip?: string | null;
+                /** @description County as the address autocomplete returned it, or null. The Property Facts county is `county`. */
+                addressCounty?: string | null;
+                /** @description Latitude of the geocoded address, or null. */
+                addressLat?: number | null;
+                /** @description Longitude of the geocoded address, or null. */
+                addressLng?: number | null;
+                /**
+                 * Format: date-time
+                 * @description When the address was geocoded (ISO 8601), or null.
+                 */
+                addressGeocodedAt?: string | null;
+                /** @description Suite or unit designation of the inspected property, or null. */
+                unit?: string | null;
+                /** @description County as the Property Facts strip edits it, or null. */
+                county?: string | null;
+                /** @description What kind of property was inspected: single_family, multi_unit or commercial, or null when it was never classified. Other values may be present on older rows. */
+                propertyType?: string | null;
+                /** @description Commercial property subtype, or null. Only meaningful when the property type is commercial. */
+                commercialSubtype?: string | null;
+                /** @description Year the property was built, or null. */
+                yearBuilt?: number | null;
+                /** @description Floor area in square feet, or null. */
+                sqft?: number | null;
+                /** @description Foundation type, or null. */
+                foundationType?: string | null;
+                /** @description Number of bedrooms, or null. */
+                bedrooms?: number | null;
+                /** @description Number of bathrooms (may be fractional), or null. */
+                bathrooms?: number | null;
+                /** @description Lot size as free text, such as "0.25 acres", or null. */
+                lotSize?: string | null;
+                /** @description The Property Facts values (year built, size, foundation and the like), or null when none are stored. */
+                propertyFacts?: {
+                    [key: string]: unknown;
+                } | null;
+                /**
+                 * @description Where the report is in its life: in_progress, submitted or published.
+                 * @enum {string}
+                 */
+                reportStatus?: "in_progress" | "submitted" | "published";
+                /**
+                 * @description How much of the order has been paid.
+                 * @enum {string}
+                 */
+                paymentStatus?: "unpaid" | "partial" | "paid";
+                /** @description Whether payment is required before the report is released. */
+                paymentRequired?: boolean;
+                /** @description Whether a signed agreement is required before the report is released. */
+                agreementRequired?: boolean;
+                /** @description Whether the inspector signature is applied automatically when the report is published. */
+                autoSignOnPublish?: boolean;
+                /** @description True when automations are switched off for this inspection. */
+                disableAutomations?: boolean;
+                /** @description True when the inspection is worked by a team. */
+                teamMode?: boolean;
+                /**
+                 * Format: date-time
+                 * @description When the client confirmed the booking (ISO 8601), or null.
+                 */
+                confirmedAt?: string | null;
+                /**
+                 * Format: date-time
+                 * @description Start of the scheduled time slot, or null. An ISO 8601 string here, unlike the epoch-millisecond number the schedule request takes.
+                 */
+                scheduledStartMs?: string | null;
+                /**
+                 * Format: date-time
+                 * @description End of the scheduled time slot, or null. An ISO 8601 string here, unlike the epoch-millisecond number the schedule request takes.
+                 */
+                scheduledEndMs?: string | null;
+                /** @description Expected duration in minutes, or null. */
+                durationMin?: number | null;
+                /** @description Id of the booking request this inspection came from, or null. */
+                requestId?: string | null;
+                /** @description Status of the concierge booking flow for this inspection, or null. */
+                conciergeStatus?: string | null;
+                /** @description External order or reference number, or null. */
+                referenceNumber?: string | null;
+                /** @description Free-text label for the referral channel, or null. */
+                referralSource?: string | null;
+                /** @description Contact who referred this job, or null. */
+                referredByContactId?: string | null;
+                /** @description Closing date of the property sale (YYYY-MM-DD), or null. */
+                closingDate?: string | null;
+                /** @description Discount applied to the order, in cents, or null. ABSENT without the inspectionFees capability. */
+                discountAmount?: number | null;
+                /** @description Id of the discount code applied to the order, or null. */
+                discountCodeId?: string | null;
+                /** @description Deposit owed on this order, in integer cents, or null. ABSENT without the inspectionFees capability. */
+                depositRequiredCents?: number | null;
+                /** @description True when an operator set the deposit by hand, so a later re-resolve does not replace it. */
+                depositOverridden?: boolean;
+                /**
+                 * @description Why the inspection was cancelled, or null when it was not.
+                 * @enum {string|null}
+                 */
+                cancelReason?: "client_cancelled" | "no_show" | "weather" | "inspector_unavailable" | "property_unavailable" | "rescheduled" | "other" | null;
+                /** @description Free-text note stored with a cancellation, or null. */
+                cancelNotes?: string | null;
+                /** @description Storage key of the photo chosen as the report cover, or null when none is chosen. */
+                coverPhotoId?: string | null;
+                /** @description The crop rectangle chosen for the cover photo, or null. It is only meaningful against the current cover photo. */
+                coverCrop?: {
+                    /** @enum {string} */
+                    aspect: "3:2" | "16:9" | "1.91:1" | "4:3";
+                    /** @enum {string} */
+                    orientation: "landscape" | "portrait";
+                    x: number;
+                    y: number;
+                    width: number;
+                    height: number;
+                } | null;
+                /** @description Storage key of the cropped cover image the report uses when set, or null. */
+                coverImageKey?: string | null;
+                /**
+                 * @description Report tier of a commercial inspection, or null for none.
+                 * @enum {string|null}
+                 */
+                reportTier?: "light_commercial" | "full_pca" | null;
+                /**
+                 * @description Forced photo presentation mode, or null to derive it from the report tier.
+                 * @enum {string|null}
+                 */
+                reportPhotoMode?: "appendix" | "inline" | null;
+                /** @description Photo grid columns for this report (1-4), or null to inherit the profile. */
+                reportPhotoColumns?: number | null;
+                /** @description Appearance profile id for this report, or null to inherit. */
+                profileOverride?: string | null;
+                /**
+                 * @description Credential badge layout for this report, or null to inherit the profile.
+                 * @enum {string|null}
+                 */
+                badgeLayoutOverride?: "strip" | "inline" | null;
+                /**
+                 * @description Which defect fields the publish gate requires for this inspection, or null to inherit the company default.
+                 * @enum {string|null}
+                 */
+                requireDefectFieldsOverride?: "none" | "location" | "trade" | "both" | null;
+                /**
+                 * Format: date-time
+                 * @description When the report files were last generated (ISO 8601), or null.
+                 */
+                reportsGeneratedAt?: string | null;
+                /** @description The template structure frozen onto this inspection, or null when it has none or the stored value is not a readable object. The editor reads it to render the checklist. */
+                templateSnapshot?: {
+                    [key: string]: unknown;
+                } | null;
+                /** @description Version of the template at the time the snapshot was taken, or null. */
+                templateSnapshotVersion?: number | null;
+                /** @description The stored PCA report narrative blocks by key, or null when none are stored. Blocks left empty fall back to seed copy when the report renders. */
+                pcaNarrative?: {
+                    [key: string]: string;
+                } | null;
+                /**
+                 * @description Whether findings are tagged with a location or recorded per unit.
+                 * @enum {string}
+                 */
+                unitInspectionMode?: "tagged" | "per_unit";
+                /** @description Locations a finding can be tagged with in tagged mode, or null. */
+                locationOptions?: string[] | null;
+                /** @description What was sampled and what was not, or null. */
+                samplingDeclaration?: {
+                    /** @enum {string} */
+                    samplingMethod: "exhaustive" | "representative";
+                    unitsTotal?: number;
+                    unitsInspected?: number;
+                    basis?: string;
+                } | null;
+                /** @description Deviations from the standard guide, or null when none are recorded. */
+                deviations?: {
+                    id: string;
+                    area: string;
+                    baselineRequirement: string;
+                    deviation: string;
+                    reason: string;
+                }[] | null;
+                /** @description Inspection this one was created from, or null. */
+                sourceInspectionId?: string | null;
+                /** @description First inspection of a re-inspection chain, or null. */
+                rootInspectionId?: string | null;
+                /** @description Position in a re-inspection chain, or null. */
+                reinspectionRound?: number | null;
+                /**
+                 * Format: date-time
+                 * @description When the published report was unlocked for editing (ISO 8601), or null.
+                 */
+                unlockedAt?: string | null;
+                /** @description Id of the person who unlocked the report, or null. */
+                unlockedBy?: string | null;
+                /** @description Reason given for unlocking the report, or null. */
+                unlockReason?: string | null;
             };
             /** @description Resolved report appearance profile (Report Style Presets) */
             styleProfile: {
@@ -1977,7 +2484,155 @@ export interface components {
                 defect: number;
             };
             /** @description Report sections in display order. */
-            sections: components["schemas"]["ReportSection"][];
+            sections: {
+                /** @description Section id. */
+                id: string;
+                /** @description Section title. */
+                title: string;
+                /** @description Icon name for the section, or null. */
+                icon?: string | null;
+                /** @description Number of items in the section rated as defects. */
+                defectCount: number;
+                /** @description Disclaimer printed under the section heading, or null when the template sets none. */
+                disclaimerText?: string | null;
+                /** @description True when the section always starts on a new page. */
+                alwaysPageBreak?: boolean;
+                /** @description Items in the section. */
+                items: {
+                    /** @description Item id. */
+                    id: string;
+                    /** @description Item label as shown in the report. */
+                    label: string;
+                    /** @description Rating level id chosen for the item, or null when unrated. */
+                    rating: string | null;
+                    /** @description Display colour of the chosen rating level. */
+                    ratingColor: string;
+                    /** @description Display label of the chosen rating level, or null when unrated. */
+                    ratingLabel: string | null;
+                    /**
+                     * @description Report grouping the rating falls into.
+                     * @enum {string}
+                     */
+                    severityBucket: "satisfactory" | "monitor" | "defect" | "other";
+                    /** @description Inspector notes for the item, or null. */
+                    notes: string | null;
+                    /** @description Photos attached to the item. */
+                    photos: {
+                        /** @description Storage key of the photo as the report shows it (the annotated or cropped copy when there is one). The public report states it relative to the company (`inspections/<inspectionId>/...`); the staff payload carries the full key. The public photo route accepts both forms. */
+                        key: string;
+                        /** @description Download URL of the photo. */
+                        url: string;
+                        /** @description Storage key of the photo as it was first uploaded, before any crop or annotation. Stated like `key`: relative to the company in the public report, in full in the staff payload. */
+                        originalKey?: string;
+                        /** @description How a video entry is presented (player, poster with a link, or a plain image). Present when the report is built with video context, as the public report is. */
+                        media?: {
+                            /**
+                             * @description Which presentation applies.
+                             * @enum {string}
+                             */
+                            kind: "image" | "video-player" | "video-poster" | "r2-video-player" | "r2-video-poster";
+                            /** @description Image source (image). */
+                            src?: string;
+                            /** @description Storage key (image). */
+                            key?: string;
+                            /** @description Stream video id (video-player, video-poster). */
+                            streamUid?: string;
+                            /** @description Stored video id (r2-video-player, r2-video-poster). */
+                            mediaId?: string;
+                            /** @description Poster image URL (all video kinds). */
+                            posterUrl?: string;
+                            /** @description Player source URL (video-player, r2-video-player). */
+                            playerSrc?: string;
+                            /** @description Link to the player page (video-poster). */
+                            playerLinkUrl?: string;
+                            /** @description Video duration in seconds. */
+                            durationSec?: number;
+                            /** @description True when the poster carries a QR code to the player (video-poster). */
+                            qr?: boolean;
+                        };
+                        /** @description Continuous photo number in render order, used by the photo appendix. Present once the report numbers its photos. */
+                        photoNo?: number;
+                    }[];
+                    /** @description Recommendation text attached to the item, if any. */
+                    recommendation?: string | null;
+                    /** @description How the item is filled in: one of rich, boolean, text, textarea, number, select, multi_select, date, photo_only. rich is a rating with canned-comment tabs, the others capture a value. A template item that names no type is rich. A client must treat a type it does not know as a plain captured value. */
+                    type?: string;
+                    /** @description Id of the item this one hangs under, or null for a top-level item. */
+                    parentId?: string | null;
+                    /**
+                     * @description Which kind of not-applicable rating the item carries, or null when it carries none.
+                     * @enum {string|null}
+                     */
+                    naKind?: "not_inspected" | "not_present" | null;
+                    /** @description Why the item was not inspected, as the inspector wrote it, or null. */
+                    notInspectedReason?: string | null;
+                    /** @description Unit of the captured value for a number item (from the template item options), or null. */
+                    unit?: string | null;
+                    /** @description The value captured for a non-rich item: text, a date or a choice as a string, a number, a yes or no, or the choices of a multi-select (a comma-separated string from the web editor, a list of strings from other clients). Null when nothing was captured or the stored value is of another shape. */
+                    value?: (string | null) | number | boolean | string[];
+                    /** @description The rating labels offered at the top of the item card, or null when the template sets none. */
+                    ratingOptions?: string[] | null;
+                    /** @description The baseline finding of a re-inspection, or null on a normal report. */
+                    original?: {
+                        /** @description Rating the item carried in the inspection this one follows up on, or null. */
+                        rating: string | null;
+                        /** @description Notes the item carried in that earlier inspection, or null. */
+                        notes: string | null;
+                        /** @description Photos of the item from that earlier inspection. */
+                        photos: {
+                            /** @description Storage key of the photo as the report shows it (the annotated or cropped copy when there is one). The public report states it relative to the company (`inspections/<inspectionId>/...`); the staff payload carries the full key. The public photo route accepts both forms. */
+                            key: string;
+                            /** @description Download URL of the photo. */
+                            url: string;
+                            /** @description Storage key of the photo as it was first uploaded, before any crop or annotation. Stated like `key`: relative to the company in the public report, in full in the staff payload. */
+                            originalKey?: string;
+                            /** @description How a video entry is presented (player, poster with a link, or a plain image). Present when the report is built with video context, as the public report is. */
+                            media?: {
+                                /**
+                                 * @description Which presentation applies.
+                                 * @enum {string}
+                                 */
+                                kind: "image" | "video-player" | "video-poster" | "r2-video-player" | "r2-video-poster";
+                                /** @description Image source (image). */
+                                src?: string;
+                                /** @description Storage key (image). */
+                                key?: string;
+                                /** @description Stream video id (video-player, video-poster). */
+                                streamUid?: string;
+                                /** @description Stored video id (r2-video-player, r2-video-poster). */
+                                mediaId?: string;
+                                /** @description Poster image URL (all video kinds). */
+                                posterUrl?: string;
+                                /** @description Player source URL (video-player, r2-video-player). */
+                                playerSrc?: string;
+                                /** @description Link to the player page (video-poster). */
+                                playerLinkUrl?: string;
+                                /** @description Video duration in seconds. */
+                                durationSec?: number;
+                                /** @description True when the poster carries a QR code to the player (video-poster). */
+                                qr?: boolean;
+                            };
+                            /** @description Continuous photo number in render order, used by the photo appendix. Present once the report numbers its photos. */
+                            photoNo?: number;
+                        }[];
+                    } | null;
+                    /** @description Follow-up status recorded for the item in a re-inspection, or null. */
+                    followupStatus?: string | null;
+                    /** @description Follow-up notes recorded for the item in a re-inspection, or null. */
+                    followupNotes?: string | null;
+                    /** @description Attached repair items snapshotted on this finding (dollars, not cents). */
+                    repairItems?: {
+                        summary: string;
+                        estimateMin: number | null;
+                        estimateMax: number | null;
+                        contractorType: string | null;
+                    }[];
+                    /** @description The canned-comment tabs of the template item (information, limitations, defects), or null. Its shape is not written down yet. */
+                    tabs?: unknown;
+                    /** @description The canned comments per tab with the choices of this inspection applied: information, limitations and defects. Its shape is not written down yet. */
+                    resolvedTabs?: unknown;
+                }[];
+            }[];
             /** @description Rating levels available to the report, in display order. */
             ratingLevels: {
                 /** @description Rating level id. */
@@ -1993,53 +2648,72 @@ export interface components {
                 /** @description True when items with this rating count as defects. */
                 isDefect: boolean;
             }[];
-        };
-        ReportItem: {
-            /** @description Item id. */
-            id: string;
-            /** @description Item label as shown in the report. */
-            label: string;
-            /** @description Rating level id chosen for the item, or null when unrated. */
-            rating: string | null;
-            /** @description Display colour of the chosen rating level. */
-            ratingColor: string;
-            /** @description Display label of the chosen rating level, or null when unrated. */
-            ratingLabel: string | null;
+            /** @description Versions of the report published so far and whether it was amended. Its shape is not written down yet. */
+            amendmentTrail?: unknown;
+            /** @description The re-inspection summary, or null on a normal report. Its shape is not written down yet. */
+            reinspection?: unknown;
+            /** @description Download URL of the report cover image, or null when none is chosen. */
+            coverPhotoUrl?: string | null;
+            /** @description Table of contents of a commercial report; empty for residential reports. */
+            outline?: unknown[];
             /**
-             * @description Report grouping the rating falls into.
+             * @description Where photos are shown: inline with the findings or in a central appendix.
              * @enum {string}
              */
-            severityBucket: "satisfactory" | "monitor" | "defect" | "other";
-            /** @description Inspector notes for the item, or null. */
-            notes: string | null;
-            /** @description Photos attached to the item. */
-            photos: {
-                /** @description Storage key of the photo. */
-                key: string;
-                /** @description Download URL of the photo. */
-                url: string;
-            }[];
-            /** @description Recommendation text attached to the item, if any. */
-            recommendation?: string | null;
-            /** @description Attached repair items snapshotted on this finding (dollars, not cents). */
-            repairItems?: {
-                summary: string;
-                estimateMin: number | null;
-                estimateMax: number | null;
-                contractorType: string | null;
-            }[];
-        };
-        ReportSection: {
-            /** @description Section id. */
-            id: string;
-            /** @description Section title. */
-            title: string;
-            /** @description Icon name for the section, or null. */
-            icon?: string | null;
-            /** @description Number of items in the section rated as defects. */
-            defectCount: number;
-            /** @description Items in the section. */
-            items: components["schemas"]["ReportItem"][];
+            photoMode?: "appendix" | "inline";
+            /** @description The numbered photo appendix of a commercial report. */
+            photoAppendix?: unknown[];
+            /** @description Whether repair estimates are shown in the report. */
+            showEstimates?: boolean;
+            /** @description Whether the client may export the repair list. */
+            enableCustomerRepairExport?: boolean;
+            /** @description IANA time zone the report dates are shown in. */
+            reportTimeZone?: string;
+            /** @description The Property Facts values (year built, size, foundation and the like), or null. */
+            propertyFacts?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Report tier of a commercial inspection (light_commercial or full_pca), or null. */
+            reportTier?: string | null;
+            /** @description The cost tables of a commercial report, or null. Its shape is not written down yet. */
+            costTables?: unknown;
+            /** @description What kind of property was inspected: single_family, multi_unit or commercial, or null when it was never classified. Other values may be present on older rows. */
+            propertyType?: string | null;
+            /** @description Commercial property subtype, or null. */
+            commercialSubtype?: string | null;
+            /** @description Building profile rows of a commercial report. */
+            buildingProfile?: unknown[];
+            /** @description The property condition report block of a commercial inspection, or null. Its shape is not written down yet. */
+            pcaReport?: unknown;
+            /**
+             * @description Whether findings are tagged with a location or recorded per unit.
+             * @enum {string}
+             */
+            unitInspectionMode?: "tagged" | "per_unit";
+            /** @description The unit tree of a per-unit inspection; empty otherwise. */
+            units?: unknown[];
+            /** @description Units by systems condition matrix; empty outside per-unit mode. */
+            unitConditionMatrix?: unknown[];
+            /** @description Defect counts keyed by unit; empty outside per-unit mode. Its shape is not written down yet. */
+            defectCountsByUnit?: unknown;
+            /** @description What was sampled and what was not, or null. Its shape is not written down yet. */
+            samplingDeclaration?: unknown;
+            /** @description True when the report has been published. */
+            isPublished?: boolean;
+            /** @description The inspector signature block of a published report, or null. Its shape is not written down yet. */
+            signature?: unknown;
+            /** @description The verification block of a published report, or null. Its shape is not written down yet. */
+            verification?: unknown;
+            /** @description The ASTM conformance summary of a commercial report, or null. Its shape is not written down yet. */
+            astmConformance?: unknown;
+            /** @description Sign-offs recorded for the report. */
+            reportSignoffs?: unknown[];
+            /** @description The pre-survey questionnaire status and answers, or null. Its shape is not written down yet. */
+            psq?: unknown;
+            /** @description Documents requested and reviewed for the report. */
+            documentReview?: unknown[];
+            /** @description The reliance wording printed in a commercial report, or null. Its shape is not written down yet. */
+            relianceText?: unknown;
         };
         SessionContextResponse: {
             /**
@@ -2984,7 +3658,7 @@ export interface operations {
                         success: boolean;
                         /** @description Response payload */
                         data: {
-                            inspection: components["schemas"]["Inspection"] & unknown;
+                            inspection: components["schemas"]["InspectionRecord"] & unknown;
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -3020,7 +3694,7 @@ export interface operations {
                         success: boolean;
                         /** @description Response payload */
                         data: {
-                            inspection: components["schemas"]["Inspection"] & unknown;
+                            inspection: components["schemas"]["InspectionRecord"] & unknown;
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -3098,6 +3772,8 @@ export interface operations {
                             retiredReason: "superseded" | "uninstalled" | null;
                             /** @description The state or country whose rules this template is written to, or null when it is written to none */
                             jurisdiction: string | null;
+                            /** @description Id of the marketplace library this template was installed from, or null for a template the company wrote */
+                            marketplaceLibraryId?: string | null;
                         }[];
                         meta: {
                             total: number;
@@ -4868,24 +5544,20 @@ export interface operations {
                         /** @description Response payload */
                         data: {
                             /** @description The inspection record. */
-                            inspection: components["schemas"]["Inspection"] & {
-                                /** @description The template structure frozen onto this inspection, or null when it has none or the stored value is not a readable object. The editor reads it to render the checklist. */
-                                templateSnapshot?: {
-                                    [key: string]: unknown;
-                                } | null;
-                                /** @description Storage key of the photo chosen as the report cover, or null when none is chosen. */
-                                coverPhotoId?: string | null;
-                                /** @description The Property Facts values (year built, size, foundation and the like), or null when none are stored. */
-                                propertyFacts?: {
-                                    [key: string]: unknown;
-                                } | null;
-                                /** @description The stored PCA report narrative blocks by key, or null when none are stored. Blocks left empty fall back to seed copy when the report renders. */
-                                pcaNarrative?: {
-                                    [key: string]: string;
-                                } | null;
+                            inspection: components["schemas"]["InspectionRecord"] & {
+                                /** @description Phone number of the primary client, or null when none is recorded. */
+                                clientPhone?: string | null;
+                                /** @description True when the client has signed an agreement for this inspection. */
+                                signedByClient?: boolean;
                             };
                             /** @description The associated template schema */
                             template?: unknown;
+                            /** @description The version of the primary report that clients read, or null while clients see none (never published, or retracted). */
+                            publishedVersionNumber: number | null;
+                            /** @description True while the published primary report is open for "Edit and republish": clients still read publishedVersionNumber and the inspector has unpublished edits. */
+                            editingAgain: boolean;
+                            /** @description True when a write to the primary report content is refused (409 REPORT_PUBLISHED): the report and the order are both published. The editor opens read-only exactly then. */
+                            contentLocked: boolean;
                             /** @description Id of the primary report of this inspection, or null when it has none yet. A native device writes it into the manifest of an exported package; the importer refuses a package for an existing inspection whose report id differs from this one. The key is always present on a server that supports it; a missing key means an older server. */
                             primaryReportId: string | null;
                             /** @description How the inspection date sits against the statutory form revision its template produces. Present only for an inspection whose template declares a statutory form and names its revision; absent means there is nothing to say, never that nobody looked. It changes with the date and with the current time, so a cached copy can show an earlier answer. */
@@ -6218,6 +6890,90 @@ export interface operations {
             };
         };
     };
+    editPublishedReportAgain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Inspection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Which report to open for editing. Absent: the inspection's primary report. */
+                    reportId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The report is open for editing */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description True when the request succeeded.
+                         * @example true
+                         */
+                        success: boolean;
+                        /** @description Response payload */
+                        data: {
+                            /** @description The report that is open for editing. */
+                            reportId: string;
+                            /**
+                             * @description The report is being edited; clients still see its latest published version.
+                             * @enum {string}
+                             */
+                            state: "editing";
+                        };
+                        /** @description Error detail; present only when the request failed. */
+                        error?: {
+                            /**
+                             * @description Human-readable description of the error.
+                             * @example Error message
+                             */
+                            message: string;
+                            /**
+                             * @description Stable machine-readable error code.
+                             * @example ERROR_CODE
+                             */
+                            code: string;
+                            /** @description Optional structured context for the error, such as per-field validation failures. */
+                            details?: unknown;
+                        };
+                        /** @description Optional response metadata, such as pagination information. */
+                        meta?: unknown;
+                    };
+                };
+            };
+            /** @description The report is not published, so there is nothing to unlock */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing publish capability, or not on this inspection */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such report on this inspection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     createInspectionInspectorSignature: {
         parameters: {
             query?: never;
@@ -6985,6 +7741,8 @@ export interface operations {
                                 isnReportId?: string;
                                 error?: string;
                             } | null;
+                            /** @description Present only when nothing had changed since this version, so nothing was published: no new version, no notices. Absent on a real publish. */
+                            unchangedSinceVersion?: number;
                         };
                         /** @description Error detail; present only when the request failed. */
                         error?: {
@@ -7077,7 +7835,7 @@ export interface operations {
                          * @example true
                          */
                         success: boolean;
-                        data: components["schemas"]["ReportData"];
+                        data: components["schemas"]["ReportDataFull"];
                         /** @description Error detail; present only when the request failed. */
                         error?: {
                             /**

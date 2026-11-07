@@ -51,7 +51,7 @@
     "@capacitor/share": "^8.0.3",
     "@capgo/capacitor-file-sharer": "^8.1.16",
     "@capgo/capacitor-uploader": "^8.3.23",
-    "@inspectorhub/field-ui": "~0.7.0",
+    "@inspectorhub/field-ui": "~0.9.0",
     "@inspectorhub/offline-package": "~0.2.1",
     "better-sqlite3-multiple-ciphers": "13.0.3",
     "electron-updater": "6.8.12",

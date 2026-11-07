@@ -173,3 +173,118 @@ jobs:
           path: .superpowers/sdd/plan-d2-windows-electron/test-results/
           if-no-files-found: warn
           retention-days: 7
+
+  # Golden flow G5 (a published report) on the iOS simulator, driven by Maestro against the fake engine over HTTPS. NOT one of the required
+  # checks. The build has no App Transport Security exception, so the engine is HTTPS and its throwaway certificate is trusted in the
+  # simulator by scripts/ios-simulator-published.sh. See docs/ios-published-flow.md.
+  ios-simulator-published:
+    name: ios-simulator-published (iphone)
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      MAESTRO_VERSION: '2.12.0'
+      MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # Maestro is a Java program (17 or newer).
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run build
+      # No Capacitor logging here: src/release-workflows.test.ts lets only the ios-simulator job turn it on (it prints plugin calls and callback URLs).
+      - run: npx cap sync ios
+      - name: Xcode is version 26 or newer
+        run: |
+          xcodebuild -version
+          major="$(xcodebuild -version | sed -n 's/^Xcode \([0-9][0-9]*\).*/\1/p')"
+          echo "Xcode major version: $major"
+          test "$major" -ge 26
+      - name: Restore the Swift package checkouts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: ${{ runner.temp }}/ios-build/SourcePackages
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}
+      - name: Compile for the iOS simulator
+        run: >-
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/ios-build" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build
+      - name: GNU timeout, which the scripts use to bound every call to the simulator (macOS has none; coreutils provides gtimeout)
+        run: command -v timeout || command -v gtimeout || brew install coreutils
+      - name: Install Maestro (pinned release, checksum verified before it is unpacked)
+        run: |
+          set -eu
+          curl -fsSL --max-time 300 --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+          echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
+      - name: Make a throwaway TLS certificate for localhost and 127.0.0.1
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/ios-published"
+          mkdir -p "$dir"
+          cat > "$dir/openssl.cnf" <<'CNF'
+          [req]
+          distinguished_name = dn
+          x509_extensions = ext
+          prompt = no
+          [dn]
+          CN = localhost
+          [ext]
+          basicConstraints = critical, CA:TRUE
+          keyUsage = critical, digitalSignature, keyEncipherment, keyCertSign
+          extendedKeyUsage = serverAuth
+          subjectAltName = DNS:localhost, IP:127.0.0.1
+          CNF
+          openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 -config "$dir/openssl.cnf" -keyout "$dir/key.pem" -out "$dir/cert.pem"
+          openssl x509 -in "$dir/cert.pem" -noout -subject -enddate
+          openssl x509 -in "$dir/cert.pem" -noout -text | grep -A1 "Subject Alternative Name"
+      - name: Start the fake engine (scenario published) over HTTPS
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/ios-published"
+          mkdir -p "$dir/out"
+          nohup node e2e/fake-engine/serve.mjs --host 127.0.0.1 --port 0 --scenario published --tls-cert "$dir/cert.pem" --tls-key "$dir/key.pem" > "$dir/out/fake-engine.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if [ -s "$dir/out/fake-engine.log" ] && head -1 "$dir/out/fake-engine.log" | grep -q '"control"'; then break; fi
+            sleep 1
+          done
+          if ! { [ -s "$dir/out/fake-engine.log" ] && head -1 "$dir/out/fake-engine.log" | grep -q '"control"'; }; then
+            echo "::error::the fake engine did not print its start line"; cat "$dir/out/fake-engine.log" || true; exit 1
+          fi
+          line="$(head -1 "$dir/out/fake-engine.log")"
+          echo "engine said: $line"
+          origin="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).origin)' "$line")"
+          control="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).control)' "$line")"
+          port="${origin##*:}"
+          case "$origin" in https://*) ;; *) echo "::error::the engine is not serving https: $origin"; cat "$dir/out/fake-engine.log"; exit 1 ;; esac
+          echo "https://localhost:${port}" > "$dir/engine-origin"
+          echo "$control" > "$dir/control-url"
+          # From the host: the certificate verifies (with a control: the same request WITHOUT the certificate must fail).
+          curl -fsS --max-time 30 --cacert "$dir/cert.pem" "https://localhost:${port}/api/client/compat" > /dev/null
+          if curl -fsS --max-time 30 "https://localhost:${port}/api/client/compat" > /dev/null 2>&1; then echo "::error::the certificate verified without being trusted"; exit 1; fi
+          echo "the engine answers over https on port ${port}"
+      - name: Golden flow G5 on the simulator (published report), engine side checked between the parts
+        run: >-
+          bash scripts/ios-simulator-published.sh
+          "$RUNNER_TEMP/ios-build/Build/Products/Debug-iphonesimulator/App.app"
+          "$(cat "$RUNNER_TEMP/ios-published/engine-origin")"
+          "$(cat "$RUNNER_TEMP/ios-published/control-url")"
+          "$RUNNER_TEMP/ios-published/cert.pem"
+          "$RUNNER_TEMP/ios-published/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ios-simulator-published-evidence
+          path: ${{ runner.temp }}/ios-published/out
+          if-no-files-found: warn
+          retention-days: 7
+          # Maestro writes its per-step debug output (the failing step's screenshot, the commands it ran) under a hidden .maestro
+          # directory, and upload-artifact leaves hidden files out unless asked. Only Maestro's own output is in this directory.
+          include-hidden-files: true

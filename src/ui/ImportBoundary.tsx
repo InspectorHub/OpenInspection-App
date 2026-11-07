@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from 'react';
-import { Body, Button, Heading, Notice, Screen } from './kit';
+import { BackLink, Body, Heading, Notice, Screen } from './kit';
 import { useBackHandler } from './use-back-handler';
 
 export const IMPORT_UNAVAILABLE = 'The import could not be opened. Nothing was sent, and your work on this device is safe.';
@@ -22,11 +22,9 @@ export class ImportBoundary extends Component<Props, { failed: boolean }> {
     if (!this.state.failed) return this.props.children;
     return (
       <Screen>
+        <BackLink label="Settings" ariaLabel="Back to settings" onClick={this.props.onBack} />
         <Heading>Import a package</Heading>
         <Notice tone="bad">{IMPORT_UNAVAILABLE}</Notice>
-        <Button variant="secondary" aria-label="Back to settings" onClick={this.props.onBack}>
-          Back to settings
-        </Button>
       </Screen>
     );
   }

@@ -481,6 +481,7 @@ describe('P0-9 triage: one test per answer', () => {
 
   it.each([
     ['409 ID_CONFLICT', failure(409, 'ID_CONFLICT'), 'id_conflict'],
+    ['409 REPORT_PUBLISHED', failure(409, 'REPORT_PUBLISHED'), 'report_published'],
     ['409 anything else', failure(409, 'SOMETHING_ELSE'), 'conflict'],
     ['409 without a body', reply(409), 'conflict'],
     ['422 IDEMPOTENCY_KEY_REUSED', failure(422, 'IDEMPOTENCY_KEY_REUSED'), 'key_reused'],
@@ -590,6 +591,28 @@ describe('unreadable rows are failed and kept; the loop goes on', () => {
     w.server.script.push(failure(422, 'VALIDATION_ERROR'));
     await w.replayer.replay();
     expect(await w.replayer.discard(row.idempotencyKey, { confirmed: true })).toEqual({ kind: 'discarded' });
+    expect(await w.rows()).toEqual([]);
+  });
+});
+
+describe('a change made before the report was published', () => {
+  it('is kept when the server says the report is published, and goes through once the report is opened again and the person retries', async () => {
+    const w = await createReplayWorld();
+    seed(w, 'a');
+    const row = await w.queue('inspection.update', UPDATE('a'));
+    w.server.script.push(failure(409, 'REPORT_PUBLISHED'));
+    await w.replayer.replay();
+    // Stopped for a person, with its own reason, and the change itself is untouched.
+    const kept = await state(w, row.idempotencyKey);
+    expect(kept).toMatchObject({ state: 'failed', lastError: 'report_published' });
+    expect((await readOutboxRow(w.db, row.idempotencyKey))?.payload).toBe(row.payload);
+    // Nothing is retried by itself: replaying again sends nothing while it waits for the person.
+    const sentBefore = w.server.requests.length;
+    await w.replayer.replay();
+    expect(w.server.requests.length).toBe(sentBefore);
+    // The report is opened again on the server; the person retries and the same change is sent.
+    expect(await retryRow(w.db, row.idempotencyKey)).toBe(true);
+    await w.replayer.replay();
     expect(await w.rows()).toEqual([]);
   });
 });

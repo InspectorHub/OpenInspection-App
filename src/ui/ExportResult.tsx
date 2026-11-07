@@ -13,6 +13,7 @@ export interface ExportResultProps {
 export function ExportResult({ title, children, onClose }: ExportResultProps) {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const pressedBackdrop = useRef(false);
 
   useEscapeLayer(onClose);
 
@@ -28,7 +29,18 @@ export function ExportResult({ title, children, onClose }: ExportResultProps) {
   }
 
   return (
-    <div className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center" onKeyDown={onKeyDown}>
+    <div
+      className="safe-pad fixed inset-0 z-50 flex items-end justify-center bg-ih-backdrop md:items-center"
+      onKeyDown={onKeyDown}
+      onPointerDown={(event) => {
+        pressedBackdrop.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        // Only a press that began on the backdrop counts: selecting text and letting go outside the box is not a tap outside.
+        if (!pressedBackdrop.current) return;
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="flex max-h-[90dvh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-ih-modal border border-ih-border bg-ih-bg-card p-6 shadow-ih-popover">
         <h2 id={titleId} className="font-ih-display text-xl font-bold tracking-tight text-ih-fg-1">
           {title}

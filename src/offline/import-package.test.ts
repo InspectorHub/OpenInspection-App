@@ -170,6 +170,39 @@ describe('importing: the shared import over the transport', () => {
     expect(rig.calls).toHaveLength(1);
   });
 
+  it('a package with inspections whose report was published meanwhile is cut around them: the others are imported, those are held back with the server code', async () => {
+    // The engine refuses a package that names a published inspection and lists every one it found (`inspectionIds`), writing nothing.
+    const sent: string[][] = [];
+    const rig = scripted((_n, ids, bytes) => {
+      sent.push(ids);
+      const locked = ids.filter((id) => id === 'insp-1' || id === 'insp-3');
+      return locked.length > 0
+        ? refused(409, 'REPORT_PUBLISHED', { inspectionId: locked[0], inspectionIds: locked })
+        : ok(confirmedBody(bytes));
+    });
+    const made = makePackage({ inspections: 5 });
+    const { report } = await importPackage(made.zip, deps(rig.api));
+    expect(report.imported.sort()).toEqual(['insp-0', 'insp-2', 'insp-4']);
+    expect(report.heldBack.map((h) => [h.id, h.reason, h.status, h.code]).sort()).toEqual([
+      ['insp-1', 'refused', 409, 'REPORT_PUBLISHED'],
+      ['insp-3', 'refused', 409, 'REPORT_PUBLISHED'],
+    ]);
+    expect(() => expectPartition(report, made.ids)).not.toThrow();
+    // The first request carried everything and was turned down; no later request carried a published inspection.
+    expect(sent[0]).toHaveLength(5);
+    for (const ids of sent.slice(1)) expect(ids.filter((id) => id === 'insp-1' || id === 'insp-3')).toEqual([]);
+    expect(sent.length).toBeGreaterThan(1);
+  });
+
+  it('control: when none is published, the same package goes through in one request', async () => {
+    const rig = scripted((_n, _ids, bytes) => ok(confirmedBody(bytes)));
+    const made = makePackage({ inspections: 5 });
+    const { report } = await importPackage(made.zip, deps(rig.api));
+    expect(report.imported).toHaveLength(5);
+    expect(report.heldBack).toEqual([]);
+    expect(rig.calls).toHaveLength(1);
+  });
+
   it('reports a partition of the input across mixed outcomes (property over several scripts)', async () => {
     const scripts: Respond[] = [
       confirm,

@@ -21,6 +21,13 @@
   html {
     background-color: var(--ih-bg-app);
   }
+  /*
+   * The soft keyboard's height (set by src/ui/keyboard-inset.ts on iOS, absent elsewhere): where the keyboard covers the web view the page grows
+   * by that much, so what the keyboard covers can be scrolled up above it.
+   */
+  #root {
+    padding-bottom: var(--keyboard-height, 0px);
+  }
   body {
     @apply bg-ih-bg-app font-ih-body text-ih-fg-1;
     -webkit-text-size-adjust: 100%;
@@ -47,5 +54,19 @@
   :focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 2px;
+  }
+}
+
+/*
+ * iOS WebKit zooms the page when a text field under 16px takes focus, and leaves it zoomed (or flickers while it zooms in and
+ * out). The field-ui package sets 13-14px on some of its fields, so the app raises every text field to 16px on iOS rather than
+ * forbidding zoom, which would also take pinch-zoom away from people who need it. Unlayered on purpose: it outranks the
+ * package's utilities. -webkit-touch-callout exists only in iOS WebKit.
+ */
+@supports (-webkit-touch-callout: none) {
+  textarea,
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):not([type='hidden']) {
+    font-size: max(16px, 1em);
   }
 }

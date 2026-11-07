@@ -23,7 +23,7 @@ const only = (type: FieldCommand['type'], index = 0): FieldCommand => {
 describe('online: publish', () => {
   it('completes, sets the sign flag, then publishes with a trimmed summary, in that order', async () => {
     const { api, result } = await send(only('publish'));
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, data: { unchangedSinceVersion: null } });
     expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /api/inspections/i1/complete', 'PATCH /api/inspections/i1', 'POST /api/inspections/i1/publish']);
     expect(api.calls[1]?.json).toEqual({ autoSignOnPublish: true });
     expect(api.calls[2]?.json).toEqual({ summary: 'Fixed roof' });

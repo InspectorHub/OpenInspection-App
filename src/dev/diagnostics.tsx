@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppServices } from '../app/compose';
 import { appDiagnostics } from '../app/diagnostics';
 import { appTimings } from '../app/timings';
-import { Body, Button, Heading, INPUT_CLASSES, Screen } from '../ui/kit';
+import { BackLink, Body, Button, Heading, INPUT_CLASSES, Screen } from '../ui/kit';
+import { useBackHandler } from '../ui/use-back-handler';
 import { useActionLatch } from '../ui/latch';
 import { CHECKS, EXTRAS, stopDesktopKillSession, stopKillSession } from './checks';
 import type { CheckDef, CheckResult, DiagContext, DiagDeps } from './checks/types';
@@ -57,6 +58,11 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
   const [running, setRunning] = useState<string | null>(null);
   const [inspectionId, setInspectionId] = useState(readStoredInspectionId);
   const latch = useActionLatch();
+  // The back key leaves the diagnostics instead of the app.
+  useBackHandler(() => {
+    onClose();
+    return true;
+  });
   const inspectionRef = useRef(inspectionId);
   inspectionRef.current = inspectionId;
 
@@ -107,6 +113,7 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-ih-bg-card">
       <Screen>
+        <BackLink label="Close diagnostics" onClick={onClose} />
         <Heading>Diagnostics (development only)</Heading>
         <Body>Runs the device checks through the real adapters. Results are also written to the console as lines starting with the diag marker.</Body>
         <div className="flex flex-col gap-2">
@@ -180,9 +187,6 @@ export function Diagnostics({ services, origin, onClose, deps }: DiagnosticsProp
             ))
           )}
         </section>
-        <Button variant="quiet" onClick={onClose}>
-          Close diagnostics
-        </Button>
       </Screen>
     </div>
   );

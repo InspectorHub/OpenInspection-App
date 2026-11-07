@@ -287,6 +287,8 @@ export const DEVICE_STATE_KEYS = [
   'user_id',
   'tenant_id',
   'role',
+  /** The server the stored identity last signed in to; named when a different account signs in over this device's data. */
+  'identity_origin',
   'sync_days',
   'locked_reason',
   'install_marker',
@@ -346,6 +348,7 @@ export const OUTBOX_ERROR_CODES = [
   'inspection_cancelled',
   'quota_refused',
   'conflict',
+  'report_published',
   'id_conflict',
   'key_reused',
   'rejected',
