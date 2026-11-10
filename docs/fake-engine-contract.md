@@ -4,7 +4,7 @@ The golden flows (Android G2 to G4), the Electron end-to-end tests and several u
 
 ## The contract
 
-The real engine's contract is `contracts/native-contract.openapi.json` in the engine repository (`InspectorHub/OpenInspection`). It is generated from the engine's route definitions (`npm run native:contract`), not written by hand. These engine-side checks keep that file current. They were read from the engine's scripts and test headers, and were not run for this page:
+The real engine's contract is `contracts/native-contract.openapi.json` in the engine repository (`InspectorHub/OpenInspection`). It is generated from the engine's route definitions (the engine's native:contract script), not written by hand. These engine-side checks keep that file current. They were read from the engine's scripts and test headers, and were not run for this page:
 
 - `tests/unit/native/contract-drift.spec.ts` regenerates the document and fails when the committed file is stale.
 - `lint:native-contract` (push rung) checks that the registry of endpoints the native app calls and the committed file agree.
