@@ -2002,6 +2002,8 @@ export interface components {
             annotated: boolean;
             /** @description Defect id when the photo hangs off a canned/custom defect rather than the item */
             defectId?: string;
+            /** @description Unit the finding belongs to; "_default" is the common scope */
+            unitId?: string;
         };
         MediaCenterPoolPhoto: {
             id: string;
