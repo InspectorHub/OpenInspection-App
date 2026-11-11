@@ -75,7 +75,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
         with:
           path: node_modules
-          key: node-modules-macos-${{hashFiles('package-lock.json')}}
+          key: node-modules-macos-${{hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json')}}
       - run: npm ci
       - run: npm run build
       - name: Sync iOS with Capacitor logging on (this simulator job only)
@@ -101,8 +101,8 @@ jobs:
       - name: Pre-warm the iOS simulator (boot before the test script needs it)
         run: |
           set -eu
-          # Pick the same device the test script will use: newest available iPhone or iPad,
-          # matching matrix.device (pick_device in ios-simulator-smoke.sh uses the same prefix).
+          # Pick the same device the smoke test will use: newest available iPhone or iPad,
+          # matching matrix.device (the smoke script's pick_device uses the same prefix).
           case "${{matrix.device}}" in
             iphone) prefix="iPhone" ;;
             ipad)   prefix="iPad" ;;
@@ -245,7 +245,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
         with:
           path: node_modules
-          key: node-modules-macos-${{hashFiles('package-lock.json')}}
+          key: node-modules-macos-${{hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json')}}
       - run: npm ci
       - run: npm run build
       # No Capacitor logging here: src/release-workflows.test.ts lets only the ios-simulator job turn it on (it prints plugin calls and callback URLs).
