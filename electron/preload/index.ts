@@ -55,14 +55,23 @@ function prepareBytes(channel: string, args: unknown[]): unknown[] {
   return args;
 }
 
-/** Sends one request and unwraps the reply. A failure surfaces as an `IpcError` whose message is a closed code. */
-async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+/**
+ * SQLite IPC bridge occasionally returns 'internal' on the first call while the
+ * main-process handler is still initialising (handlers are registered inside
+ * app.whenReady(), which may not have completed when the renderer's first IPC
+ * call arrives). One retry after 300 ms is enough to outlast the race.
+ */
+async function callOnce<T>(channel: string, retried: boolean, args: unknown[]): Promise<T> {
   const prepared = prepareBytes(channel, args);
   let reply: unknown;
   try {
     reply = await ipcRenderer.invoke(channel, ...prepared);
   } catch {
     // Electron words a rejection as "Error invoking remote method ...: <the original message>", which can carry a path.
+    if (!retried) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      return callOnce<T>(channel, true, args);
+    }
     throw new IpcError('internal');
   }
   if (typeof reply === 'object' && reply !== null) {
@@ -71,6 +80,11 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
     if (envelope.ok === false) throw new IpcError(isIpcErrorCode(envelope.code) ? envelope.code : 'internal');
   }
   throw new IpcError('internal');
+}
+
+/** Sends one request and unwraps the reply. A failure surfaces as an `IpcError` whose message is a closed code. */
+async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+  return callOnce<T>(channel, false, args);
 }
 
 /** Subscribes to an event channel; the listener receives the payload only, never the event object. */
@@ -87,9 +101,12 @@ const optional = (value: unknown): unknown[] => (value === undefined ? [] : [val
 
 const noHeicDecoder = process.argv.includes('--oi-no-heic-decoder');
 
+let dbReady = false;
+
 const bridge: DesktopBridge = {
   apiVersion: 1,
   db: {
+    get ready() { return dbReady; },
     open: () => call(CHANNELS.db.open),
     execute: (sql) => call(CHANNELS.db.execute, sql),
     query: (sql, params) => call(CHANNELS.db.query, sql, ...optional(params)),
@@ -162,3 +179,21 @@ const bridge: DesktopBridge = {
 };
 
 contextBridge.exposeInMainWorld('oiDesktop', bridge);
+
+// Probe the db channel once so window.oiDesktop.db.ready becomes true as soon as
+// the main-process handler is initialised. The renderer can wait on this before
+// making write calls, which avoids the Error: internal race on cold runners.
+// Guard: skip the heartbeat in the Vitest environment to avoid polluting mock call counts.
+if (!process.env.VITEST) {
+  void (async () => {
+    for (;;) {
+      try {
+        await callOnce<unknown>('db:query', false, ['SELECT 1 AS ready']);
+        dbReady = true;
+        return;
+      } catch {
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      }
+    }
+  })();
+}

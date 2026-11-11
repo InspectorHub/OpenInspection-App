@@ -75,6 +75,8 @@ export type DecodeHeicReply = { ok: true; jpeg: Uint8Array } | { ok: false; code
 export interface DesktopBridge {
   readonly apiVersion: 1;
   db: {
+    /** True once the main-process db handler has answered its first heartbeat ping. Renderers can poll this before writing. */
+    readonly ready: boolean;
     open(): Promise<{ ok: true; schemaVersion: number } | { ok: false; reason: OpenReason }>;
     execute(sql: string): Promise<void>;
     query(sql: string, params?: DbParam[]): Promise<DbRow[]>;
@@ -118,7 +120,7 @@ export type BridgeNamespace = Exclude<keyof DesktopBridge, 'apiVersion'>;
 
 /** The methods of each namespace. A test holds this list to `DesktopBridge` in both directions. */
 export const BRIDGE_METHODS = {
-  db: ['open', 'execute', 'query', 'run', 'begin', 'commit', 'rollback', 'inTransaction', 'close', 'setAsideUnreadable'],
+  db: ['ready', 'open', 'execute', 'query', 'run', 'begin', 'commit', 'rollback', 'inTransaction', 'close', 'setAsideUnreadable'],
   secrets: ['get', 'set', 'remove'],
   kv: ['get', 'set'],
   files: ['write', 'size', 'read', 'remove', 'displayUrl', 'fileUri', 'exists', 'list', 'removeCache', 'listCache', 'stream'],
