@@ -39,35 +39,45 @@ appId: io.inspectorhub.app
     env:
       CONTROL_URL: ${CONTROL_URL}
       UNAVAILABLE: "true"
-- tapOn: "Add photo"
-- extendedWaitUntil:
-    visible: "Add media"
-    timeout: 10000
-- tapOn: "Add from library"
-# The system photo picker (Android 13+). The script pushed the fixture to /sdcard/Pictures and waited until the media index listed it BEFORE
-# this flow started (Maestro's own addMedia put the file in just before the picker opened, and on API 34 the picker then said "No photos or
-# videos": CI run 41415156795), so the one tile is ours.
-- extendedWaitUntil:
-    visible: "Photo taken on.*"
-    timeout: 30000
-- tapOn:
-    text: "Photo taken on.*"
-    index: 0
-- takeScreenshot:
-    path: g3-photo-selected
-# The picker confirms a selection with "Done" on API 36 and with "Add (1)" on API 34 (seen in CI run 41413632011); a version that returns at
-# once has no button at all. Maestro matches the whole text, so the count in "Add (1)" is part of the pattern. Either way the next step is
-# a hard wait for the tile.
-- tapOn:
-    text: 'Done|Add \(\d+\)'
-    optional: true
-# Added while the engine is off: the tile shows the picture and says it is still on its way. Nothing was lost on the way in.
-# The device link is still up (the app's online flag is link state only), so the photo first takes the upload path, and the server's silence
-# is noticed when that request fails. The tile, its caption and the offline notice therefore settle one after another; each is waited for
-# instead of judged at a single instant (a local run on a slow machine saw the tile first and the caption about a minute later).
-- extendedWaitUntil:
-    visible: "UPLOADING"
-    timeout: 90000
+# The system photo picker sometimes hands the app a file it cannot read (CI recorder: the decode fails within milliseconds and the app then says the
+# photo could not be read and the item still shows "No photos yet"). A person picks again, so the flow does too. The pick runs only while the item
+# has no photo, so a slow first attempt that did land is never added twice; the wait for the tile is short so a failed attempt is repeated early.
+- retry:
+    maxRetries: 3
+    commands:
+      - runFlow:
+          when:
+            visible: "No photos yet"
+          commands:
+            - tapOn: "Add photo"
+            - extendedWaitUntil:
+                visible: "Add media"
+                timeout: 10000
+            - tapOn: "Add from library"
+            # The system photo picker (Android 13+). The script pushed the fixture to /sdcard/Pictures and waited until the media index listed it BEFORE
+            # this flow started (Maestro's own addMedia put the file in just before the picker opened, and on API 34 the picker then said "No photos or
+            # videos": CI run 41415156795), so the one tile is ours.
+            - extendedWaitUntil:
+                visible: "Photo taken on.*"
+                timeout: 30000
+            - tapOn:
+                text: "Photo taken on.*"
+                index: 0
+            - takeScreenshot:
+                path: g3-photo-selected
+            # The picker confirms a selection with "Done" on API 36 and with "Add (1)" on API 34 (seen in CI run 41413632011); a version that returns at
+            # once has no button at all. Maestro matches the whole text, so the count in "Add (1)" is part of the pattern. Either way the next step is
+            # a hard wait for the tile.
+            - tapOn:
+                text: 'Done|Add \(\d+\)'
+                optional: true
+      # Added while the engine is off: the tile shows the picture and says it is still on its way. Nothing was lost on the way in.
+      # The device link is still up (the app's online flag is link state only), so the photo first takes the upload path, and the server's silence
+      # is noticed when that request fails. The tile, its caption and the offline notice therefore settle one after another; each is waited for
+      # instead of judged at a single instant (a local run on a slow machine saw the tile first and the caption about a minute later).
+      - extendedWaitUntil:
+          visible: "UPLOADING"
+          timeout: 15000
 - extendedWaitUntil:
     visible: "1 photo"
     timeout: 90000
