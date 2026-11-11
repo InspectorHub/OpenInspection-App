@@ -20,6 +20,10 @@ describe('relatedCandidates', () => {
       'scripts/check-release-bundle.mjs', 'src\\ui\\Win.tsx', 'src/é.ts',
     ])).toEqual(['src/export/copy.ts', 'src/ui/ExportFlow.tsx', 'electron/main/index.ts', 'e2e/flows/a.test.ts', 'src/ui/Win.tsx', 'src/é.ts']);
   });
+  it('drops declaration files: they carry no runtime, so no test can import them (control: the .ts beside them stays)', () => {
+    expect(relatedCandidates(['src/api/schema.d.ts', 'src/types/globals.d.ts', 'electron/preload.d.ts', 'src/api/client.ts']))
+      .toEqual(['src/api/client.ts']);
+  });
 });
 
 describe('vitestArgs', () => {
@@ -88,6 +92,9 @@ describe('classify', () => {
   const none = (): string[] => [];
   it('skips when only docs changed', () => {
     expect(classify({ changed: ['README.md'], deleted: [] }, none).files).toEqual([]);
+  });
+  it('skips a push that only regenerates a declaration file: there is nothing a test could cover, and the drift check owns it', () => {
+    expect(classify({ changed: ['src/api/schema.d.ts'], deleted: [] }, none).files).toEqual([]);
   });
   it('a dependency or config change always adds the field-ui contract test, and says why', () => {
     for (const f of ['package.json', 'package-lock.json', 'vite.config.ts', 'tsconfig.json', 'electron/tsconfig.json']) {
