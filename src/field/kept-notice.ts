@@ -1,5 +1,5 @@
 import type { TimerPort } from '../collab/timers';
-import { photosKeptMessage } from './messages';
+import { MESSAGES, photosKeptMessage } from './messages';
 
 export type KeptKind = 'item' | 'defect';
 
@@ -33,5 +33,25 @@ export function createKeptNotice(deps: KeptNoticeDeps): (inspectionId: string, k
       deps.say(photosKeptMessage(kind, count));
     }, KEPT_WINDOW_MS);
     open[kind] = true;
+  };
+}
+
+/**
+ * The notice for a picked photo the app could not read at all (nothing was stored, so nothing is waiting): the person is
+ * asked to pick it again. The first one is shown at once; the others of the same burst are the same sentence and are dropped.
+ */
+export function createUnreadableNotice(deps: KeptNoticeDeps): () => void {
+  let open = false;
+  return () => {
+    if (open) return;
+    deps.say(MESSAGES.photoUnreadable);
+    try {
+      deps.timers.setTimeout(() => {
+        open = false;
+      }, KEPT_WINDOW_MS);
+      open = true;
+    } catch {
+      // No window: the next photo says it again, which is better than never.
+    }
   };
 }

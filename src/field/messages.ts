@@ -46,6 +46,7 @@ export const MESSAGES = {
   photoTooLarge: 'This photo is larger than 10 MB and cannot be uploaded.',
   photoTypeUnsupported: 'Only JPEG, PNG and HEIC photos can be uploaded.',
   photoNotPrepared: 'The photo could not be prepared for upload. Try again.',
+  photoUnreadable: 'That photo could not be read. Pick it again.',
   photoUploadFailed: 'The photo could not be uploaded. Try again.',
   photoKeptNotAdded: 'The photo is saved on this device, but it has not been added to the inspection.',
   photoGone: 'The photo this change belongs to is no longer in the inspection.',
