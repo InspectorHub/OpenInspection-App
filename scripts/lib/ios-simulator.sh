@@ -144,9 +144,12 @@ boot_simulator() {
       simulator_answers "$udid" "${SMOKE_ANSWER_QUICK:-30}" "$label" && return 0
     else
       echo "::warning::$label: bootstatus gave up (attempt $attempt of 3); leaving the boot alone and waiting for the simulator to answer"
-      simulator_answers "$udid" "${SMOKE_ANSWER_LIMIT:-240}" "$label" && return 0
+      if simulator_answers "$udid" "${SMOKE_ANSWER_LIMIT:-240}" "$label"; then
+        return 0
+      fi
+      echo "::warning::$label: the simulator never answered after bootstatus gave up (attempt $attempt of 3); will reset and retry"
     fi
-    # Nothing to reset for: after the last attempt the failure is reported with the simulator as it is.
+    # After the last attempt the failure is reported with the simulator as it is.
     [ "$attempt" -lt 3 ] || break
     echo "::warning::$label: the simulator never answered (attempt $attempt of 3); resetting CoreSimulator"
     xcrun simctl shutdown all 2>/dev/null || true
