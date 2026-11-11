@@ -8,6 +8,8 @@ import { realTimers, type TimerPort } from '../collab/timers';
 import { createApiClient } from '../field/api-client';
 import { recordRejected } from '../field/item-tags-notice';
 import { createItemTagSync } from '../field/item-tags-sync';
+import type { PrefsStore } from '../field/prefs-store';
+import { createPrefs } from '../field/resources-library';
 import { createNativeUploader, type NativeUploader } from '../media/native-uploader';
 import { createDefectResolver, createWithDoc, createPendingResolver, type WithDoc } from '../media/pending-doc';
 import { createMediaReconciler, type MediaReconciler } from '../media/reconcile';
@@ -195,6 +197,8 @@ export interface OfflineStack {
   /** The collaboration connector. Connections opened through it are destroyed when the stack stops. */
   readonly connector: NativeCollabConnector;
   readonly userActions: BoundUserActions;
+  /** The company's editor preferences as this device holds them, and the sender of a change made offline (`field/prefs-store.ts`). */
+  readonly prefs: PrefsStore;
   /** True while the server speaks an older contract than this app needs. For the data source and the api client of the editor. */
   serverTooOld(): boolean;
   /** The answer every flow that talks to the server is given: locked, stopped, or the server too old. */
@@ -616,6 +620,22 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       void recordRejected(db, bound, count).catch(report('tags_error'));
     },
   });
+  // The company's editor preferences: a change made without a connection is sent by the same triggers, in the same run.
+  let linkOnline = false;
+  let linkStamp = 0; // bumped by every network event, so a slow first answer cannot overwrite a newer one
+  const prefsStore = createPrefs({
+    api: createApiClient({
+      http,
+      tokens,
+      origin,
+      clientHeaders,
+      gate: async () => !(await stackLocked()),
+      serverTooOld: () => deps.serverTooOld?.get() === true,
+    }),
+    db,
+    account: bound,
+    isOnline: () => linkOnline,
+  });
   let tagsStarted = false;
   let tagRun: Promise<void> | null = null;
   let tagAgain = false;
@@ -626,7 +646,18 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       if ((await account()) === null) return;
       tagsOnline = await network.online().catch(() => false);
       if (!tagsOnline) return;
-      await tagSync.flush();
+      linkOnline = true;
+      try {
+        await tagSync.flush();
+      } catch {
+        report('tags_error')();
+      }
+      // The waiting preference change is sent whether or not the tag flush succeeded: neither blocks the other.
+      try {
+        await prefsStore.flush();
+      } catch {
+        report('tags_error')();
+      }
     } catch {
       report('tags_error')();
     }
@@ -657,8 +688,18 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   function startTags(): void {
     if (stopped || tagsStarted) return;
     tagsStarted = true;
+    // The preferences' link flag follows the network from here on (before the start nothing listens or asks).
+    const asked = linkStamp;
+    void network.online().then(
+      (online) => {
+        if (linkStamp === asked) linkOnline = online;
+      },
+      () => undefined,
+    );
     teardown.push(
       network.onChange((online) => {
+        linkStamp += 1;
+        linkOnline = online;
         if (online) triggerTags();
       }),
     );
@@ -1008,6 +1049,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     store,
     connector: trackedConnector,
     userActions,
+    prefs: prefsStore,
     enqueue: enqueueAndTrigger,
     serverTooOld: () => deps.serverTooOld?.get() === true,
     syncBlocked,

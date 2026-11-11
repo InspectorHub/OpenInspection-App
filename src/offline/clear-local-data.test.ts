@@ -66,6 +66,16 @@ describe('clearLocalData', () => {
     expect(keys).toContain('client_id:https://other.example.test');
   });
 
+  it('wipes an inspection_prefs:* copy (with its pending change) while the client_id:* registrations stay', async () => {
+    await seed();
+    await db.run('INSERT INTO device_state (key, value) VALUES (?, ?)', ['inspection_prefs:tenant-1:alice', '{"prefs":null,"pending":{"autoAdvance":"off"}}']);
+    expect(await stateKeys()).toContain('inspection_prefs:tenant-1:alice');
+    await clearLocalData(db, createMemoryFiles(), NOW);
+    const keys = await stateKeys();
+    expect(keys).not.toContain('inspection_prefs:tenant-1:alice');
+    expect(keys).toContain('client_id:https://oi.example.test');
+  });
+
   it('the survivor list is declared device_state keys and everything else is removed (identity, lock marks, verification)', async () => {
     expect([...DEVICE_STATE_SURVIVORS].sort()).toEqual(['device_id', 'install_marker', 'server_url']);
     expect(DEVICE_STATE_SURVIVOR_PREFIXES).toEqual(['client_id:']);

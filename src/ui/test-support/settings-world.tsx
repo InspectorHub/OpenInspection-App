@@ -4,6 +4,7 @@ import type { OfflineStack } from '../../app/offline-stack';
 import type { World } from '../../app/test-support/world';
 import type { CompatInfo } from '../../auth/server-config';
 import { createManualTimers } from '../../collab/test-support/manual-timers';
+import { DEFAULT_INSPECTION_PREFS } from '../../field/resources-library';
 import { Settings, type SettingsProps } from '../Settings';
 import { refreshSummary } from './worklist-render';
 
@@ -14,7 +15,13 @@ export function compat(patch: Partial<CompatInfo> = {}): CompatInfo {
 export function stackWith(refresh = vi.fn(() => Promise.resolve(refreshSummary({ refreshed: 1 })))): OfflineStack & { refresh: typeof refresh } {
   const mediaReconciler = { idle: () => Promise.resolve(), recheckMissing: vi.fn(), countUnreferenced: () => 0, removeUnreferenced: () => Promise.resolve({ removed: 0, attached: 0, skipped: 0 }) };
   const store = { listRows: () => Promise.resolve([]) };
-  return Object.assign({ refresher: { refresh }, mediaReconciler, store } as unknown as OfflineStack, { refresh });
+  const prefs = {
+    read: () => Promise.resolve({ prefs: DEFAULT_INSPECTION_PREFS, pending: false }),
+    peek: () => Promise.resolve({ prefs: DEFAULT_INSPECTION_PREFS, pending: false }),
+    patch: () => Promise.resolve({ ok: true as const }),
+    subscribe: () => () => undefined,
+  };
+  return Object.assign({ refresher: { refresh }, mediaReconciler, store, prefs } as unknown as OfflineStack, { refresh });
 }
 
 export async function open(world: World, props: Partial<SettingsProps> = {}) {
