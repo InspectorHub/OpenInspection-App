@@ -29,7 +29,7 @@ import type { MediaReconciler } from '../media/reconcile';
 import { hasQueuedWrites, unsentPhotos } from './queued-writes';
 import { createResources } from './resources';
 import type { WithDoc } from '../media/pending-doc';
-import { createKeptNotice } from './kept-notice';
+import { createKeptNotice, createUnreadableNotice } from './kept-notice';
 import { takeRejected } from './item-tags-notice';
 import { createStoredBlobReader, createUploaderFactory, type UploaderDeps } from './uploader';
 import { createForegroundUploads } from './uploader-foreground';
@@ -243,6 +243,7 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     ...(deps.onDiagnostic === undefined ? {} : { onDiagnostic: deps.onDiagnostic }),
     ...(deps.copyToGallery === undefined ? {} : { copyToGallery: deps.copyToGallery }),
     onKept: createKeptNotice({ timers: deps.timers, say: (message) => say(message, 'info') }),
+    onUnreadable: createUnreadableNotice({ timers: deps.timers, say: (message) => say(message, 'error') }),
   });
 
   const uploader: typeof sendPhoto = (inspectionId, doc) => {
