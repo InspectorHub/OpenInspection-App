@@ -3,6 +3,7 @@ import { apiPath, apiRoute } from './api-client';
 import { bodyData, isRec, isSuccess } from './commands-shared';
 import { MESSAGES, blockedOf, failureOf, needsConnectionResult } from './messages';
 import { asList, cachedData, readBody, text, writeFailure, type ResourceDeps } from './resources-shared';
+import { createPrefsStore, type PrefsStore, type PrefsStoreDeps } from './prefs-store';
 
 /**
  * The tenant-level libraries: editor preferences, the canned-comment library, the repair-item catalogue, and the cost
@@ -12,7 +13,7 @@ import { asList, cachedData, readBody, text, writeFailure, type ResourceDeps } f
 /** What the editor behaves like until the tenant's own preferences arrive (the web editor's defaults). */
 export const DEFAULT_INSPECTION_PREFS: InspectionPrefs = {
   cloneDefault: 'rating_notes',
-  autoAdvance: 'always',
+  autoAdvance: 'keyboard',
   autoAdvanceDelayMs: 200,
   pinnedTagIds: [],
   requireDefectFields: 'none',
@@ -20,10 +21,10 @@ export const DEFAULT_INSPECTION_PREFS: InspectionPrefs = {
   reportLinkTtl: 'never',
 };
 
-const PREFS_ROUTE = '/api/tenant/inspection-prefs';
 const COMMENTS_ROUTE = '/api/admin/comments';
 const SEVERITIES: readonly string[] = ['good', 'marginal', 'significant', 'minor'];
 
+const PREF_FIELDS = ['cloneDefault', 'autoAdvance', 'autoAdvanceDelayMs', 'pinnedTagIds', 'requireDefectFields', 'agentRepairAccess', 'reportLinkTtl'] as const;
 const CLONE_DEFAULTS: readonly string[] = ['rating', 'rating_notes', 'all'];
 const AUTO_ADVANCE: readonly string[] = ['always', 'keyboard', 'off'];
 const REQUIRE_FIELDS: readonly string[] = ['none', 'location', 'trade', 'both'];
@@ -38,6 +39,9 @@ function copyPrefs(prefs: InspectionPrefs): InspectionPrefs {
 /** The server's preferences over the defaults, field by field: a field of the wrong type or an unknown value is ignored. */
 function prefsFrom(json: unknown): InspectionPrefs | null {
   if (!isRec(json)) return null;
+  // An answer that carries none of the preference fields (an empty object, an acknowledgement) is no answer: it must not replace
+  // the stored copy with the defaults.
+  if (!PREF_FIELDS.some((field) => field in json)) return null;
   const prefs = copyPrefs(DEFAULT_INSPECTION_PREFS);
   if (typeof json.cloneDefault === 'string' && CLONE_DEFAULTS.includes(json.cloneDefault)) prefs.cloneDefault = json.cloneDefault as InspectionPrefs['cloneDefault'];
   if (typeof json.autoAdvance === 'string' && AUTO_ADVANCE.includes(json.autoAdvance)) prefs.autoAdvance = json.autoAdvance as InspectionPrefs['autoAdvance'];
@@ -53,27 +57,13 @@ function prefsFrom(json: unknown): InspectionPrefs | null {
   return prefs;
 }
 
-export function createPrefs(deps: ResourceDeps): NonNullable<FieldResources['prefs']> {
-  /** The last answer the server gave, so the editor keeps the tenant's choices while the connection is down. */
-  let last: InspectionPrefs = copyPrefs(DEFAULT_INSPECTION_PREFS);
-  return {
-    load: async () => {
-      if (!deps.isOnline()) return copyPrefs(last);
-      const body = await readBody(deps.api, { method: 'GET', path: PREFS_ROUTE });
-      const prefs = body === null ? null : prefsFrom(body.json);
-      if (prefs !== null) last = prefs;
-      return copyPrefs(last);
-    },
-    patch: async (delta): Promise<CommandResult<InspectionPrefs>> => {
-      if (!deps.isOnline()) return needsConnectionResult();
-      const outcome = await deps.api.send({ method: 'PATCH', path: PREFS_ROUTE, json: delta });
-      if (outcome.kind === 'problem' || !isSuccess(outcome.status)) return writeFailure(outcome, MESSAGES.prefsNotSaved);
-      const prefs = prefsFrom(outcome.json);
-      if (prefs === null) return { ok: true };
-      last = prefs;
-      return { ok: true, data: copyPrefs(prefs) };
-    },
-  };
+/**
+ * The editor's preference store (`prefs-store.ts`): reads the company's value, keeps the last one it read on the device, and
+ * keeps a change made without a connection until it can be sent. `deps` needs only the request, the database, the account and
+ * the link state, so the offline stack builds the same object to send what is waiting while no editor is open.
+ */
+export function createPrefs(deps: PrefsStoreDeps): PrefsStore {
+  return createPrefsStore(deps, { parse: prefsFrom, defaults: () => copyPrefs(DEFAULT_INSPECTION_PREFS) });
 }
 
 function commentRow(value: unknown): CommentsLibraryRow | null {
