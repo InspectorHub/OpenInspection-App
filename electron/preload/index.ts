@@ -66,9 +66,16 @@ async function callOnce<T>(channel: string, retried: boolean, args: unknown[]): 
   let reply: unknown;
   try {
     reply = await ipcRenderer.invoke(channel, ...prepared);
-  } catch {
-    // Electron words a rejection as "Error invoking remote method ...: <the original message>", which can carry a path.
-    if (!retried) {
+  } catch (e) {
+    // Electron words an unregistered-handler rejection as "Error invoking remote method '...': No handler registered for '...'".
+    // This specific error means the main-process handler was not yet registered when the renderer called (the app.whenReady()
+    // race). One retry after 300 ms is enough to outlast it. Any other error (I/O failure, corrupt DB, etc.) is re-thrown
+    // immediately so it surfaces as the real failure rather than being silently delayed.
+    const isHandlerNotReady =
+      !retried &&
+      e instanceof Error &&
+      e.message.includes('No handler registered');
+    if (isHandlerNotReady) {
       await new Promise<void>((resolve) => setTimeout(resolve, 300));
       return callOnce<T>(channel, true, args);
     }
@@ -188,7 +195,7 @@ if (!process.env.VITEST) {
   void (async () => {
     for (;;) {
       try {
-        await callOnce<unknown>('db:query', false, ['SELECT 1 AS ready']);
+        await callOnce<unknown>(CHANNELS.db.query, false, ['SELECT 1 AS ready']);
         dbReady = true;
         return;
       } catch {
