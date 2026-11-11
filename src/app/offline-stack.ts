@@ -383,6 +383,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     db,
     files,
     isBlocked,
+    ...timers,
     onStored: () => {
       mediaReconciler?.recheckMissing();
     },

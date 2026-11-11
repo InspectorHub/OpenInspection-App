@@ -5,12 +5,13 @@ import type {
   PhotoCropMeta,
   PhotoUploadMeta,
 } from '@inspectorhub/field-ui';
+import { realTimers, type TimerPort } from '../collab/timers';
 import type { Db } from '../platform/db';
 import type { Files } from '../platform/files';
 import { assertMediaState, type MediaState } from '../platform/schema';
 import { isValidMediaId, MediaError } from './errors';
 import { defectTargetOfMeta } from './defect-target';
-import { MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, MEDIA_CONTENT_TYPES, PHOTO_CONTENT_TYPES, VIDEO_CONTENT_TYPES, VIDEO_MAX_SECONDS, type MediaContentType, type VideoContentType } from './media-types';
+import { MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, MEDIA_CONTENT_TYPES, PHOTO_CONTENT_TYPES, PHOTO_READ_RETRY_DELAY_MS, VIDEO_CONTENT_TYPES, VIDEO_MAX_SECONDS, type MediaContentType, type VideoContentType } from './media-types';
 
 /** Bytes per piece when a Blob is streamed to disk. */
 export const VIDEO_CHUNK_BYTES = 1024 * 1024;
@@ -165,6 +166,8 @@ export interface MediaStoreDeps {
    * forgets it does not compile. The row insert itself also refuses a blocked package, atomically (see `insertRow`).
    */
   isBlocked: (inspectionId: string) => Promise<boolean>;
+  /** What the one retry of a failed read of the picked file waits with. Defaults to the real timers; tests inject their own. */
+  timers?: TimerPort;
 }
 
 const COLUMNS = 'pending_id, inspection_id, kind, path, content_type, meta, state, attempts, uploaded_key, created_at';
@@ -322,6 +325,7 @@ class SourceFailure extends Error {}
 
 export function createMediaStore(deps: MediaStoreDeps): MediaStore {
   const { db, files } = deps;
+  const timers = deps.timers ?? realTimers;
   /** A put for an id waits for the one before it, so two puts of one id never write the file at the same time. */
   const putChain = new Map<string, Promise<void>>();
 
@@ -393,7 +397,11 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
       bytes = new Uint8Array(await rec.blob.arrayBuffer());
     } catch {
       // A local read of the picked file can fail once for a reason that is gone a moment later (a file handle that is not
-      // ready yet, a device under load). It is read again exactly once; a second failure is the refusal it always was.
+      // ready yet, a device under load). It is read again exactly once, after a short wait (inside this id's put lock, so only a put of
+      // the same id waits); a second failure is the refusal it always was.
+      await new Promise<void>((resolve) => {
+        timers.setTimeout(resolve, PHOTO_READ_RETRY_DELAY_MS);
+      });
       try {
         bytes = new Uint8Array(await rec.blob.arrayBuffer());
       } catch {

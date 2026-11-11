@@ -90,3 +90,6 @@ export function sniffMediaKind(bytes: Uint8Array): 'jpeg' | 'png' | 'heic' | nul
   if (brands.some((brand) => AVIF_BRANDS.includes(brand))) return null;
   return brands.some((brand) => (HEIF_BRANDS as readonly string[]).includes(brand)) ? 'heic' : null;
 }
+
+/** How long a failed local read of a picked photo waits before its one retry: long enough for a file handle or content URI that is not ready yet, short enough not to be felt. */
+export const PHOTO_READ_RETRY_DELAY_MS = 150;
