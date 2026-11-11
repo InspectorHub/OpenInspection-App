@@ -10,7 +10,7 @@ appId: io.inspectorhub.app
 # After the publish the editor read the report again: published, so reading only.
 - extendedWaitUntil:
     visible: "Published as version 3. It cannot change until you choose Edit and republish."
-    timeout: 60000
+    timeout: 90000  # prefs.load adds a GET /api/tenant/inspection-prefs round-trip on this transition; was 60000
 - tapOn: "Edit and republish"
 - extendedWaitUntil:
     visible: "Editing again. Clients still see version 3 until you publish the update."
