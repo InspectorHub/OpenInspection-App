@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import type { TimerPort } from '../../collab/timers';
 import { createManualTimers, type ManualTimers } from '../../collab/test-support/manual-timers';
 import { createNativeUploader, type NativeUploader } from '../../media/native-uploader';
 import { createFakePlugin, createMediaWorld, ORIGIN, type FakePlugin, type MediaWorld } from '../../media/test-support/fakes';
@@ -36,8 +37,8 @@ export interface UploaderWorld {
 }
 
 /** The real photo store, a fake plugin and the real background uploader, with a scripted Bearer client for the foreground calls. */
-export async function createUploaderWorld(options: { api?: ScriptedApi } = {}): Promise<UploaderWorld> {
-  const world = await createMediaWorld();
+export async function createUploaderWorld(options: { api?: ScriptedApi; mediaTimers?: TimerPort } = {}): Promise<UploaderWorld> {
+  const world = await createMediaWorld(options.mediaTimers);
   const plugin = createFakePlugin({ engine: world.engine, files: world.files });
   const timers = createManualTimers();
   const locked = { value: false };

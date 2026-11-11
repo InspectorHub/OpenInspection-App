@@ -1,9 +1,9 @@
 import type * as Y from 'yjs';
 import type { MediaFileResult, MediaUploader, PendingMediaRecord } from '@inspectorhub/field-ui';
-import type { TimerPort } from '../collab/timers';
+import { realTimers, type TimerPort } from '../collab/timers';
 import { defectTargetOf } from '../media/defect-target';
 import { isMediaError } from '../media/errors';
-import { sniffMediaKind } from '../media/media-types';
+import { PHOTO_READ_RETRY_DELAY_MS, sniffMediaKind } from '../media/media-types';
 import type { NativeUploader, UploadFailureCode } from '../media/native-uploader';
 import type { WithDoc } from '../media/pending-doc';
 import type { MediaStore } from '../media/store';
@@ -147,12 +147,15 @@ function storeFailure(error: unknown): Result {
  * Bytes that are not a supported image (sniff finds nothing) are left exactly as they are: this does not decide to refuse
  * them. If the store then cannot write them, the old behaviour stands (one direct upload, where the server decides).
  */
-async function withRealType(rec: Extract<PendingMediaRecord, { kind: 'photo' }>): Promise<Extract<PendingMediaRecord, { kind: 'photo' }>> {
+async function withRealType(rec: Extract<PendingMediaRecord, { kind: 'photo' }>, timers: TimerPort): Promise<Extract<PendingMediaRecord, { kind: 'photo' }>> {
   let kind: ReturnType<typeof sniffMediaKind>;
   try {
     kind = sniffMediaKind(new Uint8Array(await rec.blob.slice(0, 4096).arrayBuffer()));
   } catch {
-    // One transient local read failure is read again once (the store does the same); a second one leaves the record as it is.
+    // One transient local read failure is read again once, after a short wait (the store does the same); a second one leaves the record as it is.
+    await new Promise<void>((resolve) => {
+      timers.setTimeout(resolve, PHOTO_READ_RETRY_DELAY_MS);
+    });
     try {
       kind = sniffMediaKind(new Uint8Array(await rec.blob.slice(0, 4096).arrayBuffer()));
     } catch {
@@ -328,7 +331,7 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
   async function route(inspectionId: string, doc: Y.Doc | null, rec: PendingMediaRecord): Promise<Result> {
     switch (rec.kind) {
       case 'photo':
-        return storedPhoto(inspectionId, await withRealType(rec));
+        return storedPhoto(inspectionId, await withRealType(rec, deps.timers ?? realTimers));
       case 'crop':
         return deps.foreground.crop(rec, doc);
       case 'annotate':

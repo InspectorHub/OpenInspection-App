@@ -1,3 +1,4 @@
+import type { TimerPort } from '../../collab/timers';
 import type { Http, HttpRequest, HttpResponse } from '../../auth/http';
 import { createMemoryFiles, type MemoryFiles } from '../../app/test-support/memory-files';
 import type { Db } from '../../platform/db';
@@ -242,11 +243,12 @@ export interface MediaWorld {
   engine: FakeEngine;
 }
 
-export async function createMediaWorld(): Promise<MediaWorld> {
+/** `timers` is what the store waits with between a failed read of a picked photo and its one retry. */
+export async function createMediaWorld(timers?: TimerPort): Promise<MediaWorld> {
   const db = await createSqlJsDb();
   await migrate(db, 0);
   const files = createMemoryFiles();
-  const store = createMediaStore({ isBlocked: neverBlocked, db, files });
+  const store = createMediaStore({ isBlocked: neverBlocked, db, files, ...(timers === undefined ? {} : { timers }) });
   return { db, files, store, engine: createFakeEngine() };
 }
 
