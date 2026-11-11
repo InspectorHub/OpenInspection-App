@@ -21,10 +21,10 @@ test('a hard-stopped signed-in desktop reopens its existing encrypted profile', 
 test('a killed SQLite transaction rolls back on restart, and the real db-tx and yjs-persist checks pass', async () => {
   test.setTimeout(90_000);
   const doc = 'e2e-mid-transaction';
-  await desktop.page.waitForFunction(
-    () => window.oiDesktop?.db?.ready === true,
-    { timeout: 15_000 },
-  );
+  // Measure A: the whole setup block is wrapped in expect.poll so any Error: internal
+  // (IPC handler not yet registered on a cold runner) retries the entire block.
+  // Measure C (db.ready heartbeat) does not work across contextBridge: getters are
+  // deep-copied at expose time, so the renderer never sees the updated value. Removed.
   await expect.poll(
     () => desktop.page.evaluate(async (docName) => {
       await window.oiDesktop.db.run('DELETE FROM ydoc_updates WHERE doc_name = ?', [docName]);

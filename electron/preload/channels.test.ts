@@ -58,7 +58,7 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['updater.installAndRestart', [], CHANNELS.updater.installAndRestart],
   ['media.decodeHeic', [{ bytes: new ArrayBuffer(8), maxLongEdge: 2560 }], CHANNELS.media.decodeHeic],
 ];
-const NOT_INVOKES = ['db.ready', 'files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState'];
+const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState'];
 
 describe('every bridge method reaches its own channel', () => {
   beforeEach(() => {
