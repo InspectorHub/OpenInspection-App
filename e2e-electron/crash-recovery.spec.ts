@@ -21,17 +21,21 @@ test('a hard-stopped signed-in desktop reopens its existing encrypted profile', 
 test('a killed SQLite transaction rolls back on restart, and the real db-tx and yjs-persist checks pass', async () => {
   test.setTimeout(90_000);
   const doc = 'e2e-mid-transaction';
-  await expect.poll(
-    () => desktop.page.evaluate(() => window.oiDesktop.db.query('SELECT 1 AS ready')),
+  await desktop.page.waitForFunction(
+    () => window.oiDesktop?.db?.ready === true,
     { timeout: 15_000 },
-  ).toEqual([{ ready: 1 }]);
-  await desktop.page.evaluate(async (docName) => {
-    await window.oiDesktop.db.run('DELETE FROM ydoc_updates WHERE doc_name = ?', [docName]);
-    await window.oiDesktop.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [docName, new Uint8Array([1])]);
-    await window.oiDesktop.db.begin();
-    await window.oiDesktop.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [docName, new Uint8Array([2])]);
-    window.dbCrashStarted = true;
-  }, doc);
+  );
+  await expect.poll(
+    () => desktop.page.evaluate(async (docName) => {
+      await window.oiDesktop.db.run('DELETE FROM ydoc_updates WHERE doc_name = ?', [docName]);
+      await window.oiDesktop.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [docName, new Uint8Array([1])]);
+      await window.oiDesktop.db.begin();
+      await window.oiDesktop.db.run('INSERT INTO ydoc_updates (doc_name, data) VALUES (?, ?)', [docName, new Uint8Array([2])]);
+      window.dbCrashStarted = true;
+      return true;
+    }, doc),
+    { timeout: 15_000, intervals: [200, 500, 1000] },
+  ).toBe(true);
   await expect.poll(() => desktop.page.evaluate(() => window.dbCrashStarted)).toBe(true);
 
   await desktop.restartAfterForceKill();
