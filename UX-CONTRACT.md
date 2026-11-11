@@ -11,7 +11,7 @@ This contract records only user-visible behavior verified in the native client. 
 | Signed-in work list and Settings entry | `src/ui/SignedIn.tsx`, `src/ui/Settings.tsx` |
 | Lock and local-data recovery | `src/ui/Locked.tsx`, `src/ui/ClearLocalDataControl.tsx` |
 | Electron bridge and renderer origin | `electron/shared/ipc-contract.ts`, `electron/main/app-origin.ts` |
-| Task 12 desktop renderer decision | `.superpowers/sdd/plan-d2-windows-electron/task-12-brief.md` |
+| Desktop renderer entry and composition | `index-electron.html`, `src/desktop/compose-desktop.ts` |
 
 ## Verified routes and flows
 

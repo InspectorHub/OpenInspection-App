@@ -10,6 +10,10 @@ import { fileURLToPath } from 'node:url';
 
 const ZERO = /^0+$/;
 const SOURCE = /^(src|electron|e2e)\/.+\.tsx?$/;
+// A declaration file (a generated `src/api/schema.d.ts`, a hand-written `globals.d.ts`) has no runtime: imports of it
+// are erased at build time, so `vitest related` can never find a test for it and the guard would fail every such push
+// as "nothing verified". Types are checked by the type-check and, for the generated schema, by `api:types:check`.
+const DECLARATION = /\.d\.[cm]?tsx?$/;
 const TEST_FILE = /\.test\.tsx?$/;
 // A change here can break tests without touching a source file they import.
 const CONFIG = /^(package\.json|package-lock\.json|vite[^/]*\.ts|vitest[^/]*|tsconfig[^/]*\.json|electron\/tsconfig[^/]*\.json|scripts\/[^/]+\.mjs)$/;
@@ -17,9 +21,9 @@ export const CONTRACT_TEST = 'src/field/field-ui-contract.test.ts';
 
 const norm = (f) => f.replaceAll('\\', '/');
 
-/** Changed paths worth feeding to `vitest related`: ts/tsx under src, electron and e2e. */
+/** Changed paths worth feeding to `vitest related`: ts/tsx under src, electron and e2e, declaration files excluded. */
 export function relatedCandidates(files) {
-  return files.map(norm).filter((f) => SOURCE.test(f));
+  return files.map(norm).filter((f) => SOURCE.test(f) && !DECLARATION.test(f));
 }
 
 /**

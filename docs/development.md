@@ -19,7 +19,7 @@ Set two user-level variables once: `ANDROID_HOME` and `GRADLE_USER_HOME` (Gradle
 . .\scripts\dev-env.ps1
 ```
 
-Machine-specific paths go in `scripts/dev-env.local.ps1` (gitignored).
+Machine-specific paths go in a gitignored override file named dev-env.local.ps1, next to `scripts/dev-env.ps1`, which loads it when present.
 
 ## Running Gradle on Windows
 

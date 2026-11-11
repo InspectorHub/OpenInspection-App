@@ -68,6 +68,8 @@ export interface UploaderDeps {
   foreground: ForegroundUploads;
   /** Called once for every answer that carries `kept`: the photo is on the device and the document names it. Never throws into the answer. */
   onKept?(inspectionId: string, kind: 'item' | 'defect'): void;
+  /** Called once for a photo the device could not read (or that held no bytes) and so was not stored: the person must pick it again. Never throws into the answer. */
+  onUnreadable?(inspectionId: string): void;
   /** Something that did not stop the answer: a row that could not be removed, an entry that could not be written. */
   onError?(error: unknown): void;
   /** Spaces the tries to write the document entry while the editor's document is not available. */
@@ -202,6 +204,14 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
     }
   }
 
+  function announceUnreadable(inspectionId: string): void {
+    try {
+      deps.onUnreadable?.(inspectionId);
+    } catch (error) {
+      deps.onError?.(error);
+    }
+  }
+
   async function removeRow(pendingId: string): Promise<void> {
     try {
       await deps.store.delete(pendingId);
@@ -214,11 +224,12 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
    * The device store refused the bytes. Disk, database or write trouble gets one direct upload and is never permanent;
    * only the store's own decision about the type or size (a policy refusal) is permanent, and that is never sent.
    */
-  async function afterStoreFailure(rec: Extract<PendingMediaRecord, { kind: 'photo' }>, error: unknown): Promise<Result> {
+  async function afterStoreFailure(inspectionId: string, rec: Extract<PendingMediaRecord, { kind: 'photo' }>, error: unknown): Promise<Result> {
     const code = isMediaError(error) ? error.code : 'UNKNOWN';
     if (!isStoreTrouble(error)) {
       const refused = storeFailure(error);
       if (!refused.ok && refused.permanent !== true) lost('store_refused', code);
+      if (code === 'READ_FAILED' || code === 'EMPTY') announceUnreadable(inspectionId);
       return refused;
     }
     const direct = await (rec.meta.targetType === 'defect' ? deps.foreground.defectPhoto(rec) : deps.foreground.itemPhotoDirect(rec));
@@ -235,7 +246,7 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       try {
         await deps.store.put(rec);
       } catch (error) {
-        return await afterStoreFailure(rec, error);
+        return await afterStoreFailure(inspectionId, rec, error);
       }
     } else if (existing.inspectionId !== inspectionId || existing.kind !== 'photo' || (defectTargetOf(existing) !== null) !== isDefect) {
       // The id belongs to another record (or to a photo of the other sort): nothing here may be sent or removed under it.
