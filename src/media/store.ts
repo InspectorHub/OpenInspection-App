@@ -392,7 +392,13 @@ export function createMediaStore(deps: MediaStoreDeps): MediaStore {
     try {
       bytes = new Uint8Array(await rec.blob.arrayBuffer());
     } catch {
-      throw new MediaError('READ_FAILED');
+      // A local read of the picked file can fail once for a reason that is gone a moment later (a file handle that is not
+      // ready yet, a device under load). It is read again exactly once; a second failure is the refusal it always was.
+      try {
+        bytes = new Uint8Array(await rec.blob.arrayBuffer());
+      } catch {
+        throw new MediaError('READ_FAILED');
+      }
     }
     if (bytes.length === 0) throw new MediaError('EMPTY');
     if (bytes.length > MAX_MEDIA_BYTES) throw new MediaError('TOO_LARGE');

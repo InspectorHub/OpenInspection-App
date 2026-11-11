@@ -152,7 +152,12 @@ async function withRealType(rec: Extract<PendingMediaRecord, { kind: 'photo' }>)
   try {
     kind = sniffMediaKind(new Uint8Array(await rec.blob.slice(0, 4096).arrayBuffer()));
   } catch {
-    return rec;
+    // One transient local read failure is read again once (the store does the same); a second one leaves the record as it is.
+    try {
+      kind = sniffMediaKind(new Uint8Array(await rec.blob.slice(0, 4096).arrayBuffer()));
+    } catch {
+      return rec;
+    }
   }
   if (kind === null) return rec;
   const real = `image/${kind}`;
