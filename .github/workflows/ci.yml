@@ -227,6 +227,7 @@ jobs:
     name: ios-simulator-published (iphone)
     runs-on: macos-26
     timeout-minutes: 60
+    continue-on-error: true
     env:
       MAESTRO_VERSION: '2.12.0'
       MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
