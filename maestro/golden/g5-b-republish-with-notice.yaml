@@ -7,7 +7,11 @@
 appId: io.inspectorhub.app
 ---
 - tapOn: "Close"
-# After the publish the editor read the report again: published, so reading only.
+# Wait for the "Nothing to publish" sheet to fully dismiss before asserting the banner.
+- extendedWaitUntil:
+    notVisible: "Nothing to publish"
+    timeout: 10000
+# After the publish the editor reads the report again: published, so reading only.
 - extendedWaitUntil:
     visible: "Published as version 3. It cannot change until you choose Edit and republish."
     timeout: 90000  # prefs.load adds a GET /api/tenant/inspection-prefs round-trip on this transition; was 60000
