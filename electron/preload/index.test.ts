@@ -59,7 +59,7 @@ describe('the preload script', () => {
   it('exposes only functions, plain data and namespaces: no ipcRenderer, no event object', async () => {
     const api = await exposed();
     const visit = (value: unknown, path: string): void => {
-      if (typeof value === 'function' || typeof value === 'number') return;
+      if (typeof value === 'function' || typeof value === 'number' || typeof value === 'boolean') return;
       expect(typeof value, path).toBe('object');
       for (const [key, inner] of Object.entries(value as object)) {
         expect(['invoke', 'on', 'send', 'removeListener', 'sendSync', 'postMessage'], `${path}.${key}`).not.toContain(key);

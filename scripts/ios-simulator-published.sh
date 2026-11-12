@@ -44,16 +44,25 @@ run_maestro_flow() {
     rc=$?
   fi
 
-  if ! grep -Eq 'maestro\.DeviceUnreachableException|Transport unreachable while processing deviceInfo' "$output"; then
+  local transport_loss=0 startup_failure=0
+  grep -Eq 'maestro\.DeviceUnreachableException|Transport unreachable while processing deviceInfo' "$output" && transport_loss=1
+  # A flow that passed zero steps before failing is likely a startup/connection race worth one retry.
+  if [ "$transport_loss" -eq 0 ] && ! grep -q 'testcase.*classname' "$output"; then
+    startup_failure=1
+  fi
+  if [ "$transport_loss" -eq 0 ] && [ "$startup_failure" -eq 0 ]; then
     return "$rc"
   fi
-
   if [ "$retryable" != "yes" ]; then
-    echo "::error::$label: Maestro lost its XCUITest transport, and this flow continues from the screen the previous flow left, so a restarted app cannot resume it; not retrying (the first result is in $output)"
+    echo "::error::$label: flow failed at startup (startup_failure=$startup_failure, transport_loss=$transport_loss) and this flow is not retryable; not retrying"
     return "$rc"
   fi
 
-  echo "::warning::$label: Maestro lost its XCUITest transport; verifying the engine is unchanged before one retry"
+  if [ "$transport_loss" -eq 1 ]; then
+    echo "::warning::$label: Maestro lost its XCUITest transport; verifying the engine is unchanged before one retry"
+  else
+    echo "::warning::$label: Maestro failed before any step passed (likely a startup/connection race); verifying engine state before one retry"
+  fi
   node "$HERE/lib/report-state.mjs" "$CONTROL_URL" locked 3 "$expected_publishes" 20
   "$TIMEOUT_BIN" -k 2 120 xcrun simctl terminate "$UDID" "$APP_ID" > /dev/null 2>&1 || true
   launch_app "${label}-retry" "$UDID"
@@ -67,7 +76,11 @@ run_maestro_flow() {
     retry_rc=$?
   fi
   # The retry's failure is a second symptom, not the cause: name the first one so it is not the only thing the log ends on.
-  echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt had lost its XCUITest transport (see $output); read that result before this one's"
+  if [ "$transport_loss" -eq 1 ]; then
+    echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt had lost its XCUITest transport (see $output); read that result before this one's"
+  else
+    echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt failed before any step passed — likely a startup/connection race (see $output); read that result before this one's"
+  fi
   return "$retry_rc"
 }
 

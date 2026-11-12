@@ -27,17 +27,16 @@ describe('prefs', () => {
     expect(await createPrefs(failed.deps).load()).toEqual(DEFAULT_INSPECTION_PREFS);
   });
 
-  it('patch: sends the delta and adopts the merged answer; offline and refusals say why', async () => {
-    const w = await resourceWorld({ answers: [reply(200, { autoAdvance: 'keyboard' }), reply(403), reply(500), { kind: 'problem', problem: 'unknown' }] });
+  it('patch: sends the delta and adopts the merged answer; a refusal says why; a change that cannot be sent is kept (prefs-persist.test.ts)', async () => {
+    const w = await resourceWorld({ answers: [reply(200, { autoAdvance: 'keyboard' }), reply(403), reply(422)] });
     const prefs = createPrefs(w.deps);
     expect(await prefs.patch({ autoAdvance: 'keyboard' })).toEqual({ ok: true, data: { ...DEFAULT_INSPECTION_PREFS, autoAdvance: 'keyboard' } });
     expect(w.api.calls[0]).toMatchObject({ method: 'PATCH', path: '/api/tenant/inspection-prefs', json: { autoAdvance: 'keyboard' } });
     expect(await prefs.patch({ agentRepairAccess: 'off' })).toEqual({ ok: false, error: MESSAGES.forbidden });
     expect(await prefs.patch({ autoAdvance: 'off' })).toEqual({ ok: false, error: MESSAGES.prefsNotSaved });
-    expect(await prefs.patch({ autoAdvance: 'off' })).toEqual({ ok: false, error: MESSAGES.outcomeUnknown });
     w.state.online = false;
     const before = w.api.calls.length;
-    expect(await prefs.patch({ autoAdvance: 'off' })).toEqual({ ok: false, error: MESSAGES.needsConnection });
+    expect(await prefs.patch({ autoAdvance: 'off' })).toEqual({ ok: true, data: { ...DEFAULT_INSPECTION_PREFS, autoAdvance: 'off' } });
     expect(w.api.calls).toHaveLength(before);
   });
 });
