@@ -76,7 +76,11 @@ run_maestro_flow() {
     retry_rc=$?
   fi
   # The retry's failure is a second symptom, not the cause: name the first one so it is not the only thing the log ends on.
-  echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt had lost its XCUITest transport (see $output); read that result before this one's"
+  if [ "$transport_loss" -eq 1 ]; then
+    echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt had lost its XCUITest transport (see $output); read that result before this one's"
+  else
+    echo "::error::$label: the retry failed too (exit $retry_rc). The first attempt failed before any step passed — likely a startup/connection race (see $output); read that result before this one's"
+  fi
   return "$retry_rc"
 }
 
