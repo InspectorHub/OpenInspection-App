@@ -175,13 +175,24 @@ case "${SMOKE_DEVICES:-both}" in
   iphone|ipad|both) ;;
   *) fail "SMOKE_DEVICES must be iphone, ipad or both (got: ${SMOKE_DEVICES})" ;;
 esac
+# CI's pre-warm step boots one simulator and pins its UDID in SIM_UDID. For a single-device
+# run, use that exact device instead of re-picking: a mismatch between the warmed device and
+# the one picked here is what made the app need a second launch on busy macOS runners.
+# A two-device ("both") run needs two different UDIDs, so it keeps picking both itself.
+pick_or_pinned() {
+  if [ -n "${SIM_UDID:-}" ] && [ "${SMOKE_DEVICES:-both}" != "both" ]; then
+    printf '%s\n' "$SIM_UDID"
+  else
+    pick_device "$1"
+  fi
+}
 if [ "${SMOKE_DEVICES:-both}" != "ipad" ]; then
-  IPHONE="$(pick_device iPhone)"
+  IPHONE="$(pick_or_pinned iPhone)"
   [ -n "$IPHONE" ] || fail "no available iPhone simulator"
   smoke_device iphone "$IPHONE"
 fi
 if [ "${SMOKE_DEVICES:-both}" != "iphone" ]; then
-  IPAD="$(pick_device iPad)"
+  IPAD="$(pick_or_pinned iPad)"
   [ -n "$IPAD" ] || fail "no available iPad simulator"
   smoke_device ipad "$IPAD"
 fi

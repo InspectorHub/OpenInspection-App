@@ -93,6 +93,17 @@ jobs:
         with:
           path: ${{ runner.temp }}/ios-build/SourcePackages
           key: swiftpm-${{ runner.os }}-${{ hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}
+      # Derived data only: xcodebuild still runs on every job and decides what to rebuild, so a
+      # restored cache can only make an unchanged compile cheaper, never skip the build or ship a
+      # stale app. The key names every input that changes the product; there is no restore-keys
+      # prefix, so any change in those inputs is a deliberate miss rather than a partial, stale hit.
+      - name: Restore the Xcode incremental build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: |
+            ${{ runner.temp }}/ios-build/Build
+            ${{ runner.temp }}/ios-build/ModuleCache.noindex
+          key: xcode-derived-${{ github.job }}-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'index.html', 'vite.config.*', 'capacitor.config.*', 'src/**', 'public/**', 'messages/**', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'ios/App/App/**/*.swift') }}
       - name: Compile for the iOS simulator
         run: >-
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
@@ -262,6 +273,17 @@ jobs:
         with:
           path: ${{ runner.temp }}/ios-build/SourcePackages
           key: swiftpm-${{ runner.os }}-${{ hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}
+      # Derived data only: xcodebuild still runs on every job and decides what to rebuild, so a
+      # restored cache can only make an unchanged compile cheaper, never skip the build or ship a
+      # stale app. The key names every input that changes the product; there is no restore-keys
+      # prefix, so any change in those inputs is a deliberate miss rather than a partial, stale hit.
+      - name: Restore the Xcode incremental build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: |
+            ${{ runner.temp }}/ios-build/Build
+            ${{ runner.temp }}/ios-build/ModuleCache.noindex
+          key: xcode-derived-${{ github.job }}-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'index.html', 'vite.config.*', 'capacitor.config.*', 'src/**', 'public/**', 'messages/**', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'ios/App/App/**/*.swift') }}
       - name: Compile for the iOS simulator
         run: >-
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
@@ -290,12 +312,21 @@ jobs:
           echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
       - name: GNU timeout, which the scripts use to bound every call to the simulator (macOS has none; coreutils provides gtimeout)
         run: command -v timeout || command -v gtimeout || brew install coreutils
+      - name: Restore the Maestro CLI cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: ${{ runner.temp }}/maestro-cli
+          key: maestro-cli-${{ runner.os }}-${{ env.MAESTRO_VERSION }}-${{ env.MAESTRO_SHA256 }}
       - name: Install Maestro (pinned release, checksum verified before it is unpacked)
         run: |
           set -eu
-          curl -fsSL --max-time 300 --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
-          echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
-          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          # The cache is keyed on the exact version and checksum, so a hit is byte-for-byte
+          # the same CLI; skip the download only when the verified binary is already there.
+          if [ ! -x "$RUNNER_TEMP/maestro-cli/maestro/bin/maestro" ]; then
+            curl -fsSL --max-time 300 --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+            echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
+            unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          fi
           echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
       - name: Make a throwaway TLS certificate for localhost and 127.0.0.1
         run: |

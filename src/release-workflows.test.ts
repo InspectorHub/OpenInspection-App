@@ -1816,3 +1816,54 @@ describe('the evidence uploads keep the hidden directory Maestro writes its debu
     expect(uploadOf(ci.wf, 'ios-simulator-screenshots-${{ matrix.device }}').with?.['include-hidden-files']).toBeUndefined();
   });
 });
+
+describe('CI iOS jobs cache downloads and derived data without ever skipping a build', () => {
+  const cacheStep = (jobId: string, name: string): Step => {
+    const found = job(ci.wf, jobId).steps.find((s) => s.name === name);
+    if (found === undefined) throw new Error(`no step "${name}" in ${jobId}`);
+    return found;
+  };
+
+  it('the published job caches Maestro by version and checksum, and skips the download on a hit', () => {
+    const cache = cacheStep('ios-simulator-published', 'Restore the Maestro CLI cache');
+    expect(cache.uses).toMatch(/^actions\/cache@[0-9a-f]{40}\b/);
+    expect(String(cache.with?.key)).toContain('env.MAESTRO_VERSION');
+    expect(String(cache.with?.key)).toContain('env.MAESTRO_SHA256');
+    const install = cacheStep('ios-simulator-published', 'Install Maestro (pinned release, checksum verified before it is unpacked)');
+    // A hit is byte-identical (key includes the checksum), so only then is the download skipped.
+    // The checksum still has to be verified before unpacking whenever a download does happen.
+    const run = String(install.run);
+    expect(run).toContain('-x "$RUNNER_TEMP/maestro-cli/maestro/bin/maestro"');
+    expect(run).toContain('shasum -a 256 -c -');
+    expect(run).toContain('unzip -q');
+    expect(run.indexOf('curl -fsSL')).toBeLessThan(run.indexOf('shasum -a 256 -c -'));
+    expect(run.indexOf('shasum -a 256 -c -')).toBeLessThan(run.indexOf('unzip -q'));
+  });
+
+  it.each(['ios-simulator', 'ios-simulator-published'])('%s caches only incremental derived data with a strict, per-job key', (jobId) => {
+    const cache = cacheStep(jobId, 'Restore the Xcode incremental build cache');
+    expect(cache.uses).toMatch(/^actions\/cache@[0-9a-f]{40}\b/);
+    const key = String(cache.with?.key);
+    expect(key).toContain('github.job');          // the two jobs never share a product
+    expect(key).toContain('src/**');              // a source change is a deliberate miss
+    expect(key).toContain('package-lock.json');
+    expect(cache.with?.['restore-keys']).toBeUndefined(); // no partial/stale hit
+    const paths = String(cache.with?.path);
+    expect(paths).toContain('ios-build/Build');
+    expect(paths).not.toContain('SourcePackages'); // that cache already exists separately
+    // xcodebuild still runs: the cache only makes an unchanged compile cheaper, it never
+    // replaces the build step (which is what would ship a stale app).
+    const build = job(ci.wf, jobId).steps.find((s) => (s.run ?? '').includes('iphonesimulator'));
+    expect(build).toBeDefined();
+    expect(job(ci.wf, jobId).steps.indexOf(cache)).toBeLessThan(job(ci.wf, jobId).steps.indexOf(build as Step));
+  });
+
+  it('the smoke script consumes the pre-warmed SIM_UDID for single-device runs only', () => {
+    const script = readFileSync(join(ROOT, 'scripts', 'ios-simulator-smoke.sh'), 'utf8');
+    expect(script).toContain('SIM_UDID');
+    expect(script).toContain('pick_or_pinned');
+    // A "both" run needs two different devices, so the pin must be ignored there.
+    expect(script).toMatch(/SMOKE_DEVICES:-\}\}\s*!= "both"|SMOKE_DEVICES[^!]*!= "both"/);
+    expect(script).toContain('pick_device "$1"'); // falls back to picking when no pin applies
+  });
+});
