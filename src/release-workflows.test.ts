@@ -1513,14 +1513,14 @@ describe('Android emulator golden flow G2 (dev-server build, fake engine, Maestr
   it('installs Maestro from a pinned release and refuses it when the checksum does not match, before unpacking', () => {
     expect(emuJob.env?.MAESTRO_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
     expect(emuJob.env?.MAESTRO_SHA256).toMatch(/^[0-9a-f]{64}$/);
-    const run = emuJob.steps[indexOfStep('Install Maestro (pinned release, checksum verified)')]?.run ?? '';
+    const run = emuJob.steps[indexOfStep('Install Maestro (pinned release, checksum verified before it is unpacked)')]?.run ?? '';
     expect(run).toContain('set -eu');
     expect(run).toContain('releases/download/cli-${MAESTRO_VERSION}/maestro.zip');
     expect(run).toContain('--retry 3 --retry-all-errors'); // a 350 MB download over a flaky link
     expect(run).toContain('sha256sum -c -');
     expect(run.indexOf('sha256sum -c -')).toBeLessThan(run.indexOf('unzip'));
     expect(run).not.toMatch(/\|\s*(ba)?sh\b/); // never a downloaded script piped into a shell
-    expect(indexOfStep('Install Maestro (pinned release, checksum verified)')).toBeLessThan(runnerAt);
+    expect(indexOfStep('Install Maestro (pinned release, checksum verified before it is unpacked)')).toBeLessThan(runnerAt);
   });
 
   it('runs G2 on the dev-server APK after the launch smoke, in the same emulator session, with no guard that could skip it', () => {
