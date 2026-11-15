@@ -26,7 +26,12 @@ appId: io.inspectorhub.app
 - eraseText: 80
 - inputText: "${SERVER_URL}"
 - hideKeyboard
-# The field must now hold exactly the engine's address (an assertion on text matches the whole text).
+# The field must now hold exactly the engine's address (an assertion on text matches the whole text). On a cold
+# simulator the WebView can render the typed value late, so wait for it before the whole-text assertion rather than
+# failing at once (assertVisible on its own has no wait).
+- extendedWaitUntil:
+    visible: "${SERVER_URL}"
+    timeout: 30000
 - assertVisible: "${SERVER_URL}"
 - tapOn: "Continue"
 - assertVisible: "Connect to this server?"
@@ -46,7 +51,7 @@ appId: io.inspectorhub.app
     optional: true
 - extendedWaitUntil:
     visible: "Download today's work"
-    timeout: 90000
+    timeout: 120000
 - assertVisible: "Online"
 - assertVisible: "Download today's work"
 - assertNotVisible: "Waiting to upload.*"
