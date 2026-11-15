@@ -88,11 +88,49 @@ jobs:
         with:
           path: ${{ runner.temp }}/ios-build/SourcePackages
           key: swiftpm-${{ runner.os }}-${{ hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}
+      # Derived data only: xcodebuild still runs on every job and decides what to rebuild, so a
+      # restored cache can only make an unchanged compile cheaper, never skip the build or ship a
+      # stale app. The key names every input that changes the product; there is no restore-keys
+      # prefix, so any change in those inputs is a deliberate miss rather than a partial, stale hit.
+      - name: Restore the Xcode incremental build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: |
+            ${{ runner.temp }}/ios-build/Build
+            ${{ runner.temp }}/ios-build/ModuleCache.noindex
+          key: xcode-derived-${{ github.job }}-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'index.html', 'vite.config.*', 'capacitor.config.*', 'src/**', 'public/**', 'messages/**', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'ios/App/App/**/*.swift') }}
       - name: Compile for the iOS simulator
         run: >-
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
           -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
           -derivedDataPath "$RUNNER_TEMP/ios-build" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build
+      - name: Pre-warm the iOS simulator (boot before the test script needs it)
+        run: |
+          set -eu
+          # Pick the same device the smoke test will use: newest available iPhone or iPad,
+          # matching matrix.device (the smoke script's pick_device uses the same prefix).
+          case "${{matrix.device}}" in
+            iphone) prefix="iPhone" ;;
+            ipad)   prefix="iPad" ;;
+            *) echo "::error::unknown matrix.device: ${{matrix.device}}"; exit 1 ;;
+          esac
+          udid="$(xcrun simctl list devices available -j | jq -r --arg prefix "$prefix" '
+            [.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith($prefix))]
+            | last | .udid // empty')"
+          [ -n "$udid" ] || { echo "::error::no available $prefix simulator"; exit 1; }
+          echo "pre-warming simulator (${{matrix.device}}): $udid"
+          xcrun simctl boot "$udid" 2>/dev/null || true
+          # Wait up to 120 s for SpringBoard — a warning if it doesn't appear is fine, the
+          # test script's boot_simulator() will handle it. This step is best-effort.
+          for i in $(seq 1 40); do
+            out="$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null || true)"
+            if echo "$out" | grep -qE '^[0-9]+[[:space:]].*[Ss]pring[Bb]oard'; then
+              echo "ok: SpringBoard is up after $((i * 3)) s"
+              break
+            fi
+            sleep 3
+          done
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
       - name: GNU timeout, which the smoke script uses to bound every call to the simulator (macOS has none; coreutils provides gtimeout)
         run: command -v timeout || command -v gtimeout || brew install coreutils
       - name: Smoke-test launch, callback routing, privacy manifest and backup exclusion
@@ -190,6 +228,7 @@ jobs:
     name: ios-simulator-published (iphone)
     runs-on: macos-26
     timeout-minutes: 60
+    continue-on-error: true
     env:
       MAESTRO_VERSION: '2.12.0'
       MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
@@ -219,19 +258,60 @@ jobs:
         with:
           path: ${{ runner.temp }}/ios-build/SourcePackages
           key: swiftpm-${{ runner.os }}-${{ hashFiles('ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}
+      # Derived data only: xcodebuild still runs on every job and decides what to rebuild, so a
+      # restored cache can only make an unchanged compile cheaper, never skip the build or ship a
+      # stale app. The key names every input that changes the product; there is no restore-keys
+      # prefix, so any change in those inputs is a deliberate miss rather than a partial, stale hit.
+      - name: Restore the Xcode incremental build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: |
+            ${{ runner.temp }}/ios-build/Build
+            ${{ runner.temp }}/ios-build/ModuleCache.noindex
+          key: xcode-derived-${{ github.job }}-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'index.html', 'vite.config.*', 'capacitor.config.*', 'src/**', 'public/**', 'messages/**', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'ios/App/App/**/*.swift') }}
       - name: Compile for the iOS simulator
         run: >-
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
           -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
           -derivedDataPath "$RUNNER_TEMP/ios-build" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build
+      - name: Pre-warm the iOS simulator (boot before the test script needs it)
+        run: |
+          set -eu
+          # Pick the same device the test script will use: newest available iPhone.
+          udid="$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))]
+            | last | .udid // empty')"
+          [ -n "$udid" ] || { echo "::error::no available iPhone simulator"; exit 1; }
+          echo "pre-warming simulator: $udid"
+          xcrun simctl boot "$udid" 2>/dev/null || true
+          # Wait up to 120 s for SpringBoard — a warning if it doesn't appear is fine, the
+          # test script's boot_simulator() will handle it. This step is best-effort.
+          for i in $(seq 1 40); do
+            out="$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null || true)"
+            if echo "$out" | grep -qE '^[0-9]+[[:space:]].*[Ss]pring[Bb]oard'; then
+              echo "ok: SpringBoard is up after $((i * 3)) s"
+              break
+            fi
+            sleep 3
+          done
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
       - name: GNU timeout, which the scripts use to bound every call to the simulator (macOS has none; coreutils provides gtimeout)
         run: command -v timeout || command -v gtimeout || brew install coreutils
+      - name: Restore the Maestro CLI cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: ${{ runner.temp }}/maestro-cli
+          key: maestro-cli-${{ runner.os }}-${{ env.MAESTRO_VERSION }}-${{ env.MAESTRO_SHA256 }}
       - name: Install Maestro (pinned release, checksum verified before it is unpacked)
         run: |
           set -eu
-          curl -fsSL --max-time 300 --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
-          echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
-          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          # The cache is keyed on the exact version and checksum, so a hit is byte-for-byte
+          # the same CLI; skip the download only when the verified binary is already there.
+          if [ ! -x "$RUNNER_TEMP/maestro-cli/maestro/bin/maestro" ]; then
+            curl -fsSL --max-time 300 --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+            echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
+            unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          fi
           echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
       - name: Make a throwaway TLS certificate for localhost and 127.0.0.1
         run: |

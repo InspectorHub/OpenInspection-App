@@ -51,7 +51,12 @@ export const appSlotsWithStatus: FieldHostSlots = { humanCheck: 'not-required', 
 // one OPTIONAL member, tagLibrary; PhotoSize is unchanged. The changes are the editor opening on an item with Previous / Next, the bottom bars
 // and sheets that end at --keyboard-height, input keyboard attributes, the tag row and picker, the photo studio layout and the shared Button.
 // (0.8.0, 2026-11-05: the publish dialog and flow, the read-only editor and the live-document close handling; the same four were untouched.)
-const PINNED = '0.9.0';
+// 0.10.1 (2026-11-15): re-read by a diff of the sources of field-ui-v0.9.0 and field-ui-v0.10.1. appendPendingPhoto, appendPhoto, pushPendingPhoto,
+// upsertElement, orderPhotoBatch and attachPhotoBatch are byte-identical (none appears in the diff); the photo-batch ordering is unchanged. The only
+// source change that reaches the app is DEFAULT_INSPECTION_PREFS: autoAdvance 'always' -> 'keyboard', agentRepairAccess 'readwrite' -> 'read', and
+// reportLinkTtl 'never' -> a count/unit object -- which is the behaviour the app keeps a local copy of and asserts ('keyboard'). The dist was split:
+// the editor UI strings moved out of index.js into a chunk file, which the maestro-flows text-origin check now reads as well.
+const PINNED = '0.10.1';
 const REREAD = `@inspectorhub/field-ui is no longer ${PINNED}. Before bumping the pin, re-read: this file, src/field/batch-attach.test.ts (it has its own pin and models the photo-batch ordering of field-ui), src/field/uploader-refusal.test.ts, src/media/pending-doc-append.ts against the package's appendPendingPhoto, and src/field/photo-urls.ts against FieldUrls. Then update PINNED here and in batch-attach.test.ts after re-reading.`;
 
 describe('the installed @inspectorhub/field-ui', () => {

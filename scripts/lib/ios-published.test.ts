@@ -61,13 +61,19 @@ done
 if [[ "$args" == *"\${MAESTRO_TRANSPORT_FAIL_ON:-@@never@@}"* ]] && [ ! -e "$STATE/transport-failed" ]; then
   touch "$STATE/transport-failed"
   [ "\${MAESTRO_TRANSPORT_STATE_DRIFT:-}" != "1" ] || touch "$STATE/transport-state-drift"
-  printf '%s\\n' '<testsuites><testsuite><testcase><failure>maestro.DeviceUnreachableException: Transport unreachable while processing deviceInfo</failure></testcase></testsuite></testsuites>' > "$output"
+  printf '%s\\n' '<testsuites><testsuite><testcase classname="flow"><failure>maestro.DeviceUnreachableException: Transport unreachable while processing deviceInfo</failure></testcase></testsuite></testsuites>' > "$output"
+  exit 1
+fi
+if [[ "$args" == *"\${MAESTRO_STARTUP_FAIL_ON:-@@never@@}"* ]] && [ ! -e "$STATE/startup-failed" ]; then
+  touch "$STATE/startup-failed"
+  # No classname attribute: Maestro never started a step, so the JUnit has no testcase elements.
+  printf '%s\\n' '<testsuites><testsuite><failure>Assertion is false: &quot;https://localhost:12345&quot; is visible</failure></testsuite></testsuites>' > "$output"
   exit 1
 fi
 case "$args" in
   *"\${MAESTRO_FAIL_ON:-@@never@@}"*)
     echo "flow failed on screen"
-    printf '%s\\n' '<testsuites><testsuite><testcase><failure>flow failed on screen</failure></testcase></testsuite></testsuites>' > "$output"
+    printf '%s\\n' '<testsuites><testsuite><testcase classname="flow"><failure>flow failed on screen</failure></testcase></testsuite></testsuites>' > "$output"
     exit 1
     ;;
 esac
@@ -234,6 +240,27 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(retryFlow).toBeGreaterThan(retryLaunch);
   });
 
+  it('retries once after startup failure reported without a classname', async () => {
+    const r = await run(HAPPY, { env: { MAESTRO_STARTUP_FAIL_ON: 'g5-a' } });
+    expect(r.status).toBe(0);
+    expect(r.out).toContain('failed before any step passed');
+    expect(r.out).toContain('ios-simulator-published: G5 passed');
+    const calls = maestroCalls(r.calls);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain('g5-a-published-report.yaml');
+    expect(calls[1]).toContain('g5-a-published-report.yaml');
+    expect(calls[2]).toContain('g5-b-republish-with-notice.yaml');
+  });
+
+  it('names the startup failure when the retry also fails', async () => {
+    const r = await run(HAPPY, { env: { MAESTRO_STARTUP_FAIL_ON: 'g5-a', MAESTRO_FAIL_ON: 'g5-a' } });
+    expect(r.status).not.toBe(0);
+    expect(maestroCalls(r.calls)).toHaveLength(2);
+    expect(r.out).toContain('the retry failed too');
+    expect(r.out).toContain('failed before any step passed');
+    expect(r.out).not.toContain('had lost its XCUITest transport');
+  });
+
   it('does not retry after XCUITest transport loss if the engine state changed', async () => {
     const r = await run(HAPPY, { env: { MAESTRO_TRANSPORT_FAIL_ON: 'g5-a', MAESTRO_TRANSPORT_STATE_DRIFT: '1' } });
     expect(r.status).not.toBe(0);
@@ -250,7 +277,7 @@ describe.skipIf(!bashAvailable)('ios-simulator-published.sh', () => {
     expect(calls[0]).toContain('g5-a-published-report.yaml');
     expect(calls[1]).toContain('g5-b-republish-with-notice.yaml');
     expect(r.calls.some((call) => call.includes('g5-b-retry.typescript'))).toBe(false);
-    expect(r.out).toContain('a restarted app cannot resume it');
+    expect(r.out).toContain('this flow is not retryable');
   });
 
   it('names the first failure when the retry fails too, so the log does not end on the second symptom', async () => {

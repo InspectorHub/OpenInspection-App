@@ -68,12 +68,21 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug
       - name: Keep the dev-server APK for the golden flows
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/app-debug-devserver.apk"
-      - name: Install Maestro (pinned release, checksum verified)
+      - name: Restore the Maestro CLI cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
+        with:
+          path: ${{ runner.temp }}/maestro-cli
+          key: maestro-cli-${{ runner.os }}-${{ env.MAESTRO_VERSION }}-${{ env.MAESTRO_SHA256 }}
+      - name: Install Maestro (pinned release, checksum verified before it is unpacked)
         run: |
           set -eu
-          curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
-          echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | sha256sum -c -
-          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          # The cache is keyed on the exact version and checksum, so a hit is byte-for-byte the same CLI;
+          # skip the download only when the verified binary is already there.
+          if [ ! -x "$RUNNER_TEMP/maestro-cli/maestro/bin/maestro" ]; then
+            curl -fsSL --max-time 300 --retry 3 --retry-all-errors -o "$RUNNER_TEMP/maestro.zip" "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+            echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | sha256sum -c -
+            unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-cli"
+          fi
           echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
       - name: Start the fake engine and the Vite dev server on the runner
         run: |

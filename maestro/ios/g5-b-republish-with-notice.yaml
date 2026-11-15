@@ -5,10 +5,16 @@
 appId: io.inspectorhub.app
 ---
 - tapOn: "Close"
-# After the publish the editor read the report again: published, so reading only.
+# Wait for the "Nothing to publish" sheet to fully dismiss before asserting the banner.
+# The sheet animates out; without this wait, extendedWaitUntil starts while the overlay
+# still covers the banner and the assertion fails even though the banner is behind it.
+- extendedWaitUntil:
+    notVisible: "Nothing to publish"
+    timeout: 10000
+# After the publish the editor reads the report again: published, so reading only.
 - extendedWaitUntil:
     visible: "Published as version 3. It cannot change until you choose Edit and republish."
-    timeout: 60000
+    timeout: 90000  # prefs.load adds a GET /api/tenant/inspection-prefs round-trip on this transition; was 60000
 - tapOn: "Edit and republish"
 - extendedWaitUntil:
     visible: "Editing again. Clients still see version 3 until you publish the update."

@@ -55,14 +55,30 @@ function prepareBytes(channel: string, args: unknown[]): unknown[] {
   return args;
 }
 
-/** Sends one request and unwraps the reply. A failure surfaces as an `IpcError` whose message is a closed code. */
-async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+/**
+ * SQLite IPC bridge occasionally returns 'internal' on the first call while the
+ * main-process handler is still initialising (handlers are registered inside
+ * app.whenReady(), which may not have completed when the renderer's first IPC
+ * call arrives). One retry after 300 ms is enough to outlast the race.
+ */
+async function callOnce<T>(channel: string, retried: boolean, args: unknown[]): Promise<T> {
   const prepared = prepareBytes(channel, args);
   let reply: unknown;
   try {
     reply = await ipcRenderer.invoke(channel, ...prepared);
-  } catch {
-    // Electron words a rejection as "Error invoking remote method ...: <the original message>", which can carry a path.
+  } catch (e) {
+    // Electron words an unregistered-handler rejection as "Error invoking remote method '...': No handler registered for '...'".
+    // This specific error means the main-process handler was not yet registered when the renderer called (the app.whenReady()
+    // race). One retry after 300 ms is enough to outlast it. Any other error (I/O failure, corrupt DB, etc.) is re-thrown
+    // immediately so it surfaces as the real failure rather than being silently delayed.
+    const isHandlerNotReady =
+      !retried &&
+      e instanceof Error &&
+      e.message.includes('No handler registered');
+    if (isHandlerNotReady) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      return callOnce<T>(channel, true, args);
+    }
     throw new IpcError('internal');
   }
   if (typeof reply === 'object' && reply !== null) {
@@ -71,6 +87,11 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
     if (envelope.ok === false) throw new IpcError(isIpcErrorCode(envelope.code) ? envelope.code : 'internal');
   }
   throw new IpcError('internal');
+}
+
+/** Sends one request and unwraps the reply. A failure surfaces as an `IpcError` whose message is a closed code. */
+async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+  return callOnce<T>(channel, false, args);
 }
 
 /** Subscribes to an event channel; the listener receives the payload only, never the event object. */
@@ -162,3 +183,7 @@ const bridge: DesktopBridge = {
 };
 
 contextBridge.exposeInMainWorld('oiDesktop', bridge);
+
+// Measure C (db.ready heartbeat) was removed: contextBridge deep-copies the bridge object
+// at expose time, so a getter returning a module-level boolean never updates on the renderer
+// side. The expect.poll in crash-recovery.spec.ts (Measure A) handles the race instead.

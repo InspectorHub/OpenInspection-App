@@ -304,8 +304,10 @@ export const DEVICE_STATE_KEYS = [
  *  - `client_id:<origin>`: the registered OAuth client of one server (survives a clear).
  *  - `tag_rejected:<account key>`: how many tag changes the server refused for good during a background send, not yet
  *    told to the person (`field/item-tags-notice.ts`). Wiped by a clear with the rest of the account's data.
+ *  - `inspection_prefs:<account key>`: the company's editor preferences as last read, plus the changes made on this device that
+ *    the server has not heard yet (`field/prefs-store.ts`). Wiped by a clear with the rest of the account's data.
  */
-export const DEVICE_STATE_KEY_PREFIXES = ['client_id:', 'tag_rejected:'] as const;
+export const DEVICE_STATE_KEY_PREFIXES = ['client_id:', 'tag_rejected:', 'inspection_prefs:'] as const;
 
 export type DeviceStateKey = (typeof DEVICE_STATE_KEYS)[number] | `${(typeof DEVICE_STATE_KEY_PREFIXES)[number]}${string}`;
 

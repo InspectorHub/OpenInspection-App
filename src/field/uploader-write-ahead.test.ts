@@ -185,9 +185,11 @@ describe('the editor package rule the write-ahead entry relies on', () => {
 
   // Re-read against field-ui 0.9.0 (2026-11-07, a diff of the sources of field-ui-v0.8.0 and field-ui-v0.9.0): appendPhoto and upsertElement
   // do not appear in the diff. (Re-read against 0.8.0, 2026-11-05: not touched either.)
-  it('is modelled on field-ui 0.9.0', () => {
+  // Re-read against field-ui 0.10.1 (2026-11-15, a diff of the sources of field-ui-v0.9.0 and field-ui-v0.10.1): appendPhoto and upsertElement are
+  // byte-identical (neither appears in the diff); the upsert-by-key rule the copy models is unchanged.
+  it('is modelled on field-ui 0.10.1', () => {
     const manifest = JSON.parse(readFileSync('node_modules/@inspectorhub/field-ui/package.json', 'utf8')) as { version: string };
-    expect(manifest.version, 'field-ui changed: re-read appendPhoto / upsertElement in its dist, check a photo that is swapped to its key and then attached by key stays ONE entry, and update the copy and this pin').toBe('0.9.0');
+    expect(manifest.version, 'field-ui changed: re-read appendPhoto / upsertElement in its dist, check a photo that is swapped to its key and then attached by key stays ONE entry, and update the copy and this pin').toBe('0.10.1');
   });
 
   it('attaches a photo by key with upsert: an entry with that key is merged, a new one is pushed only when there is none', () => {

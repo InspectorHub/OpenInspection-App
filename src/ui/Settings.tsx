@@ -12,6 +12,7 @@ import { DeviceSection } from './settings/DeviceSection';
 import { ExternalLink } from './settings/ExternalLink';
 import { GallerySection } from './settings/GallerySection';
 import { ImportEntry } from './settings/ImportEntry';
+import { InspectionSection } from './settings/InspectionSection';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
 import { UnreferencedPhotosSection } from './settings/UnreferencedPhotosSection';
@@ -87,6 +88,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onImport, 
         Settings
       </h1>
       <SyncSection services={services} stack={stack} canSync={policy.canSync} />
+      {stack !== null && <InspectionSection prefs={stack.prefs} />}
       <DeviceSection services={services} origin={origin} waiting={waiting} locale={language} />
       <NotificationsSection services={services} />
       <GallerySection services={services} />
