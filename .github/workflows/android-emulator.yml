@@ -32,8 +32,6 @@ jobs:
     env:
       MAESTRO_VERSION: '2.12.0'
       MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
-      # This workflow drives the emulator with Maestro, never Playwright; skip the postinstall browser download.
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

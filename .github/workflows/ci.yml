@@ -22,10 +22,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # This job runs vitest, never Playwright, yet `npm ci` still downloads the browser binaries via the
-    # @playwright/test postinstall. Skip that download; it is pure waste here.
-    env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -51,9 +47,6 @@ jobs:
   ios-sync:
     runs-on: macos-26
     timeout-minutes: 15
-    # `npm ci` would download Playwright browsers via postinstall, but this job only syncs Capacitor; skip it.
-    env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -68,9 +61,6 @@ jobs:
     name: ios-simulator (${{ matrix.device }})
     runs-on: macos-26
     timeout-minutes: 45
-    # This job drives the simulator with simctl, never Playwright; skip the postinstall browser download.
-    env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -159,10 +149,6 @@ jobs:
     name: windows (shard ${{ matrix.shard }}/3)
     runs-on: windows-latest
     timeout-minutes: 60
-    # Each shard runs Playwright e2e, so the browser binaries must be present. Point them at a cacheable
-    # path and restore it before `npm ci` (its postinstall downloads there on a miss and skips on a hit).
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/pw-browsers
     strategy:
       fail-fast: false
       matrix:
@@ -173,11 +159,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Restore the Playwright browser cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (the SHA the v4 tag pointed to on 2026-11-01)
-        with:
-          path: ${{ runner.temp }}/pw-browsers
-          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - name: Type-check (once; the shards do not repeat it)
         if: matrix.shard == 1
@@ -251,8 +232,6 @@ jobs:
     env:
       MAESTRO_VERSION: '2.12.0'
       MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
-      # This job drives the simulator with Maestro, never Playwright; skip the postinstall browser download.
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
