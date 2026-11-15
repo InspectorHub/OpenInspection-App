@@ -222,7 +222,7 @@ describe('the golden Maestro flows', () => {
   const flows = new Map(names.map((name) => [name, readFileSync(join(goldenDir, name), 'utf8')]));
   const source = appSource();
   const origins: Origins = {
-    extra: [readFileSync(join(ROOT, 'node_modules', '@inspectorhub', 'field-ui', 'dist', 'index.js'), 'utf8'), readFileSync(join(ROOT, 'e2e', 'fake-engine', 'engine.ts'), 'utf8')].join('\n').replaceAll('&apos;', "'"),
+    extra: [...readdirSync(join(ROOT, 'node_modules', '@inspectorhub', 'field-ui', 'dist')).filter((name) => name.endsWith('.js')).sort().map((name) => readFileSync(join(ROOT, 'node_modules', '@inspectorhub', 'field-ui', 'dist', name), 'utf8')), readFileSync(join(ROOT, 'e2e', 'fake-engine', 'engine.ts'), 'utf8')].join('\n').replaceAll('&apos;', "'"),
     ignoreCase: true,
     // The work list row is named "Open <address>", the item row "<rating letter> <item name>", and the count is a plural: the parts exist, the whole does not.
     composed: { 'Open 77 Test Photo Lane': ['Open', '77 Test Photo Lane'], 'A Roof cover': ['Roof cover'], 'Updated 1 inspection.': ['Updated', 'inspection'],

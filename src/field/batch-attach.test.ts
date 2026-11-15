@@ -66,6 +66,9 @@ function attach(doc: Y.Doc, keys: string[]): void {
  * Re-read against field-ui 0.9.0 (2026-11-07, a diff of the sources of field-ui-v0.8.0 and field-ui-v0.9.0): neither function appears in the diff.
  * (Re-read against 0.8.0, 2026-11-05: neither was touched either.) The release is the
  * published-report lock: the publish dialog and flow, the read-only editor, the live-document close handling and one comment in photo-name.
+ *
+ * Re-read against field-ui 0.10.1 (2026-11-15, a diff of the sources of field-ui-v0.9.0 and field-ui-v0.10.1): orderPhotoBatch and attachPhotoBatch
+ * are byte-identical (neither appears in the diff); the photo-batch ordering is unchanged.
  */
 /** Hand copy of field-ui 0.7.0 `orderPhotoBatch`: put the named entries into the slots they already occupy, in selection order. */
 function orderPhotoBatch(doc: Y.Doc, selection: Named[]): void {
@@ -141,9 +144,9 @@ describe('a selection where some uploads fail and are kept', () => {
     expect(entries.map(idOf)).toEqual(['batch-1', 'batch-2', 'batch-3', 'batch-4', 'batch-5']);
   });
 
-  it('is modelled on field-ui 0.9.0; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
+  it('is modelled on field-ui 0.10.1; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
     const manifest = JSON.parse(readFileSync('node_modules/@inspectorhub/field-ui/package.json', 'utf8')) as { version: string };
-    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.9.0');
+    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.10.1');
   });
 });
 

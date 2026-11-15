@@ -1,4 +1,5 @@
 import type { CommandResult, CommentsLibraryEntry, CommentsLibraryQuery, CommentsLibraryRow, CostItemView, CostItemWrite, CostItemsListing, FieldResources, InspectionPrefs, RepairItemOption } from '@inspectorhub/field-ui';
+import { DEFAULT_INSPECTION_PREFS } from '@inspectorhub/field-ui';
 import { apiPath, apiRoute } from './api-client';
 import { bodyData, isRec, isSuccess } from './commands-shared';
 import { MESSAGES, blockedOf, failureOf, needsConnectionResult } from './messages';
@@ -10,16 +11,11 @@ import { createPrefsStore, type PrefsStore, type PrefsStoreDeps } from './prefs-
  * lines of a commercial report. Every request is the one the web editor's resource route makes to the API.
  */
 
-/** What the editor behaves like until the tenant's own preferences arrive (the web editor's defaults). */
-export const DEFAULT_INSPECTION_PREFS: InspectionPrefs = {
-  cloneDefault: 'rating_notes',
-  autoAdvance: 'keyboard',
-  autoAdvanceDelayMs: 200,
-  pinnedTagIds: [],
-  requireDefectFields: 'none',
-  agentRepairAccess: 'readwrite',
-  reportLinkTtl: 'never',
-};
+/**
+ * What the editor behaves like until the tenant's own preferences arrive. This is the editor package's own constant, not a
+ * copy: a second copy drifted from it once (agent repair access and report-link expiry were corrected in one place only).
+ */
+export { DEFAULT_INSPECTION_PREFS };
 
 const COMMENTS_ROUTE = '/api/admin/comments';
 const SEVERITIES: readonly string[] = ['good', 'marginal', 'significant', 'minor'];
