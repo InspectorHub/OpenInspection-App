@@ -511,6 +511,9 @@ npm run hooks:install
 
 This points `core.hooksPath` at `.githooks` and marks the hooks executable (`chmod +x`), so a clone that lost the executable bit still works. `.gitattributes` keeps the hooks LF on Windows checkouts.
 
+
+The `commit-msg` hook asks that a commit which changes code says an independent review of its diff came first: a line below the subject such as `Reviewed: independent read-only review of the staged diff, PASS WITH FIXES (fixes applied)` (at least 20 characters and 3 words, with a `PASS` or `PASS WITH FIXES` verdict), or `review-allow: <reason>` when a commit genuinely cannot be reviewed first. Documentation-only commits are exempt; `scripts/check-reviewed-trailer.mjs` has the full rules, and it records that a review happened without being able to prove it.
+
 `.githooks/pre-push` runs `scripts/prepush-related-tests.mjs`. It diffs the pushed range (against the remote sha, or the merge-base with `origin/main` for a new branch) and runs `vitest related` on (five files at once by default; each file keeps its own isolated environment):
 
 - the changed `.ts`/`.tsx` files under `src/`, `electron/` and `e2e/`;

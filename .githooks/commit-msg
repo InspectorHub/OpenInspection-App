@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# .githooks/commit-msg — OpenInspection-App
+#
+# One gate: a commit that changes code must say an independent review read the
+# diff first (`Reviewed: ...`, or `review-allow: <reason>`). See
+# scripts/check-reviewed-trailer.mjs for the grammar, what counts as
+# documentation-only, the exemptions and what it cannot prove.
+#
+# Install: npm run hooks:install (sets core.hooksPath and the executable bits).
+# No CI skip and no environment switch: this gate never skips silently.
+# Bypass (discouraged): git commit --no-verify. Prefer `review-allow: <reason>`.
+
+MSG_FILE="$1"
+[ -z "$MSG_FILE" ] && { echo "commit-msg: no message file argument. Failing closed."; exit 1; }
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || REPO_ROOT="."
+node "$REPO_ROOT/scripts/check-reviewed-trailer.mjs" "$MSG_FILE"
