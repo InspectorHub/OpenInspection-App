@@ -57,6 +57,10 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['updater.download', [], CHANNELS.updater.download],
   ['updater.installAndRestart', [], CHANNELS.updater.installAndRestart],
   ['media.decodeHeic', [{ bytes: new ArrayBuffer(8), maxLongEdge: 2560 }], CHANNELS.media.decodeHeic],
+  ['dataPackage.resumeState', [], CHANNELS.dataPackage.resumeState],
+  ['dataPackage.clearState', [], CHANNELS.dataPackage.clearState],
+  ['dataPackage.diskSpace', [], CHANNELS.dataPackage.diskSpace],
+  ['dataPackage.setPowerSave', [true], CHANNELS.dataPackage.setPowerSave],
 ];
 const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState'];
 

@@ -180,6 +180,12 @@ const bridge: DesktopBridge = {
       return reply;
     },
   },
+  dataPackage: {
+    resumeState: () => call(CHANNELS.dataPackage.resumeState),
+    clearState: () => call(CHANNELS.dataPackage.clearState),
+    diskSpace: () => call(CHANNELS.dataPackage.diskSpace),
+    setPowerSave: (active) => call(CHANNELS.dataPackage.setPowerSave, active),
+  },
 };
 
 contextBridge.exposeInMainWorld('oiDesktop', bridge);

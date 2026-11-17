@@ -41,6 +41,9 @@ import { createUploadBatch } from './lifecycle/batch.ts';
 import { createTaskbarProgress } from './lifecycle/taskbar.ts';
 import { shutdownDesktop } from './lifecycle/shutdown.ts';
 import { createUpdaterHost, readBuildMeta, type AutoUpdaterLike } from './updater.ts';
+import { createDataPackageStateHost } from './data-package/state.ts';
+import { dataPackageDir, freeSpaceBytes, type StatFsLike } from './data-package/disk.ts';
+import { createDataPackagePowerGuard } from './data-package/power.ts';
 
 app.setAppUserModelId('io.inspectorhub.app');
 
@@ -62,6 +65,8 @@ let dbHost: DbHost | null = null;
 let filesHost: ReturnType<typeof createFilesHost> | null = null;
 let uploaderHost: ReturnType<typeof createUploaderHost> | null = null;
 let uploaderContents: { send(channel: string, payload: unknown): void } | null = null;
+let dpPower: ReturnType<typeof createDataPackagePowerGuard> | null = null;
+let dpPowerActive = false;
 let dbOpening: Promise<{ outcome: Awaited<ReturnType<typeof openDesktopDb>>['outcome']; host: DbHost | null }> | null = null;
 const deepLinks = createDeepLinkHub();
 const coldCallback = extractCallbackUrl(process.argv);
@@ -102,8 +107,9 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       uploaderContents = currentContents;
       const contents = win.webContents as unknown as { on(event: string, listener: () => void): unknown };
       watchRendererDbLifecycle(contents, () => dbHost);
-      contents.on('destroyed', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); if (uploaderContents === currentContents) uploaderContents = null; });
-      contents.on('render-process-gone', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); });
+      const releaseDpPower = (): void => { if (dpPowerActive) { dpPower?.release(); dpPowerActive = false; } };
+      contents.on('destroyed', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); releaseDpPower(); if (uploaderContents === currentContents) uploaderContents = null; });
+      contents.on('render-process-gone', () => { void filesHost?.abortAll(); uploaderHost?.abortAll('quit'); releaseDpPower(); });
       const quitGuard = createQuitGuard({
         uploads: () => uploaderHost?.activeCount() ?? 0,
         confirm: async () => {
@@ -251,7 +257,13 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       try { uploaderContents?.send(EVENT_CHANNELS.activeChange, active); } catch { /* renderer lifecycle can race a power transition */ }
     } });
     const disposePowerSaveGuard = createPowerSaveGuard({ blocker: powerSaveBlocker, uploader: uploaderHost });
-    app.once('will-quit', () => { disposePowerBridge(); disposePowerSaveGuard(); });
+    dpPower = createDataPackagePowerGuard({
+      blocker: powerSaveBlocker,
+      powerMonitor,
+      onSuspend: () => log('data-package-suspend'),
+      onResume: () => log('data-package-resume'),
+    });
+    app.once('will-quit', () => { disposePowerBridge(); disposePowerSaveGuard(); dpPower?.dispose(); dpPower = null; });
     protocol.handle('oi-media', createMediaProtocolHandler({
       mediaRoot: join(paths.userData, 'media'),
       fetchFile: createMediaFileResponse,
@@ -298,6 +310,19 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     registerHandler(registerDeps, 'secrets:remove', validators.secrets.remove, async (key) => secrets.remove(key));
     registerHandler(registerDeps, 'kv:get', validators.kv.get, async (key) => kv.get(key));
     registerHandler(registerDeps, 'kv:set', validators.kv.set, async (key, value) => kv.set(key, value));
+    const dpDir = dataPackageDir(paths.userData);
+    const dpState = createDataPackageStateHost({ fs, file: join(dpDir, 'resume-state.json'), now: Date.now });
+    const dpStatFs: StatFsLike = { statfs: (path) => fs.statfs(path) };
+    registerHandler(registerDeps, 'data-package:resume-state', validators.dataPackage.resumeState, async () => dpState.load());
+    registerHandler(registerDeps, 'data-package:clear-state', validators.dataPackage.clearState, async () => dpState.clear());
+    registerHandler(registerDeps, 'data-package:disk-space', validators.dataPackage.diskSpace, async () => freeSpaceBytes(dpStatFs, dpDir));
+    registerHandler(registerDeps, 'data-package:set-power-save', validators.dataPackage.setPowerSave, async (active) => {
+      // Idempotent set: renderer re-mounts/reconnects may call true repeatedly;
+      // only a real transition touches the blocker so it cannot leak.
+      if (active === dpPowerActive) return;
+      dpPowerActive = active;
+      if (active) dpPower?.acquire(); else dpPower?.release();
+    });
     const openDb = async () => {
       dbOpening ??= openDesktopDb({ dbDir: join(paths.userData, 'db'), secrets, fs, open: openNativeSqlite, now: Date.now, log });
       const result = await dbOpening;

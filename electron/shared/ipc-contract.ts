@@ -72,6 +72,19 @@ export interface DecodeHeicRequest {
 }
 export type DecodeHeicReply = { ok: true; jpeg: Uint8Array } | { ok: false; code: HeicDecodeCode };
 
+/** The non-secret resume checkpoint crossed to the renderer. Never carries a job or step-up token. */
+export interface DataPackageStateView {
+  jobId: string;
+  kind: 'export' | 'import';
+  deviceLabel: string;
+  snapshotAt: number;
+  stage: 'rows' | 'media' | 'finish' | 'upload' | 'preview' | 'apply' | 'revert';
+  tables: Record<string, { cursor: string | null; rows: number; bytes: number }>;
+  counts: { rows: number; media: number };
+  bytes: number;
+  updatedAt: number;
+}
+
 export interface DesktopBridge {
   readonly apiVersion: 1;
   db: {
@@ -112,6 +125,13 @@ export interface DesktopBridge {
   };
   /** The one way the renderer reaches the system HEIC decoder. It cannot name an executable, a path or an argument. */
   media: { decodeHeic?: (request: DecodeHeicRequest) => Promise<DecodeHeicReply> };
+  /** The A-1 job skeleton: non-secret resume state, free-space probe and the power-save guard. */
+  dataPackage: {
+    resumeState(): Promise<DataPackageStateView | null>;
+    clearState(): Promise<void>;
+    diskSpace(): Promise<number | null>;
+    setPowerSave(active: boolean): Promise<void>;
+  };
 }
 
 export type BridgeNamespace = Exclude<keyof DesktopBridge, 'apiVersion'>;
@@ -130,6 +150,7 @@ export const BRIDGE_METHODS = {
   gallery: ['save'],
   updater: ['state', 'onState', 'check', 'download', 'installAndRestart'],
   media: ['decodeHeic'],
+  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave'],
 } as const satisfies { [N in BridgeNamespace]: readonly (keyof DesktopBridge[N])[] };
 
 /** Request channels (`ipcRenderer.invoke` to `ipcMain.handle`). */
@@ -174,6 +195,12 @@ export const CHANNELS = {
     installAndRestart: 'updater:install-and-restart',
   },
   media: { decodeHeic: 'media:decode-heic' },
+  dataPackage: {
+    resumeState: 'data-package:resume-state',
+    clearState: 'data-package:clear-state',
+    diskSpace: 'data-package:disk-space',
+    setPowerSave: 'data-package:set-power-save',
+  },
 } as const;
 
 type LeafValues<T> = T extends string ? T : { [K in keyof T]: LeafValues<T[K]> }[keyof T];
