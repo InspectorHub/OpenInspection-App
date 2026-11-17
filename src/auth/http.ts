@@ -60,11 +60,28 @@ export interface HttpDeps {
   log?: (line: string) => void;
 }
 
-const SECRET_PARAMS = /\b(refresh_token|access_token|id_token|code_verifier|code|state|client_secret|token)=[^&\s"']*/g;
+const SECRET_PARAMS = /\b(refresh_token|access_token|id_token|code_verifier|code|state|client_secret|token|password)=[^&\s"']*/gi;
+/**
+ * A `password` key inside a JSON body or a Node `util.inspect` object dump:
+ * `"password": "v"`, `'password': 'v'`, `{ password: 'v' }`. The quoted and
+ * bare-key forms are what the desktop log actually produces, so all must hide.
+ */
+const JSON_PASSWORD = /(['"]?password['"]?\s*[:=]\s*)(['"])[^'"]*\2/gi;
+/** `X-Step-Up-Token: value` / `X-Data-Job: value` in a header dump; value ends at whitespace. */
+const SECRET_HEADERS = /\b(x-step-up-token|x-data-job)\s*[:=]\s*[^\s,;]+/gi;
 
-/** Removes bearer tokens and token-like parameters from text that may be logged. */
+/**
+ * Removes bearer tokens, token-like parameters and the desktop data-job
+ * secrets from text that may be logged. Case-insensitive and independent of
+ * the wire form (url param, JSON body or header), so a secret never reaches a
+ * log line regardless of how the request was assembled.
+ */
 export function redact(text: string): string {
-  return text.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(SECRET_PARAMS, '$1=[redacted]');
+  return text
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(SECRET_PARAMS, '$1=[redacted]')
+    .replace(JSON_PASSWORD, '$1$2[redacted]$2')
+    .replace(SECRET_HEADERS, '$1=[redacted]');
 }
 
 /** Scheme, host and path only: no query, no fragment, no credentials. */

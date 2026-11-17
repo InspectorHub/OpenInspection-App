@@ -123,6 +123,24 @@ describe('http wrapper: redaction (P0-9)', () => {
     expect(safeUrlForLog('io.inspectorhub.app:/oauth/callback?code=SECRET')).not.toContain('SECRET');
   });
 
+  it('redact removes the three desktop data-job secrets in every wire form', () => {
+    // JSON bodies (step-up password), object dumps, HTTP headers and url params.
+    const samples = [
+      '{"password":"hunter2","user":"owner"}',
+      "{'password': 'hunter2', user: 'owner'}",
+      'password=SWORDFISH&grant_type=password',
+      'X-Step-Up-Token: STEPSECRET123',
+      'x-data-job: DATAPRIVATE456',
+      'X-DATA-JOB: UPPERSECRET789',
+    ];
+    for (const sample of samples) expect(redact(sample)).not.toMatch(/hunter2|SWORDFISH|STEPSECRET123|DATAPRIVATE456|UPPERSECRET789/);
+    // The key and unrelated data survive, so a redacted line is still useful for debugging.
+    const out = redact('{"password":"hunter2","user":"owner"}');
+    expect(out).toContain('password');
+    expect(out).toContain('owner');
+    expect(out).toContain('[redacted]');
+  });
+
   it('logs method, path and status only', async () => {
     const lines: string[] = [];
     const http = createHttp({ fetch: () => Promise.resolve(ok()), log: (l) => lines.push(l) });
