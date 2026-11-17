@@ -57,9 +57,11 @@ it('lets every literal code a call site passes reach the log', () => {
   // Every quoted string inside a `log(...)` call, so a ternary between two codes counts both.
   for (const file of sourceFiles()) for (const call of readFileSync(file, 'utf8').matchAll(/\blog\(([^;]*)/g)) for (const literal of call[1]!.matchAll(/'([^']+)'/g)) codes.add(literal[1]!);
   // The positive control: the scan really found the call sites it is meant to guard.
-  expect(codes.size).toBe(15);
+  expect(codes.size).toBe(17);
   expect(codes).toContain('db-corrupt');
   expect(codes).toContain('helper-crash');
+  expect(codes).toContain('data-package-suspend');
+  expect(codes).toContain('data-package-resume');
   const root = mkdtempSync(join(tmpdir(), 'oi-log-'));
   try {
     const log = createLogger(root);
