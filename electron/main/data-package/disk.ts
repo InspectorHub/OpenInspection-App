@@ -46,6 +46,22 @@ export type FreeSpace =
   | { kind: 'unknown' };
 
 /**
+ * The raw available byte count at `path`, or null when statfs is unavailable
+ * or nonsensical. Kept distinct from `checkFreeSpace` so a caller can display
+ * free space without picking an arbitrary requirement.
+ */
+export async function freeSpaceBytes(fs: StatFsLike, path: string): Promise<number | null> {
+  try {
+    const { bavail, bsize } = await fs.statfs(path);
+    if (!Number.isSafeInteger(bavail) || !Number.isSafeInteger(bsize) || bavail < 0 || bsize <= 0) return null;
+    const bytes = bavail * bsize;
+    return Number.isSafeInteger(bytes) ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Checks that `requiredBytes` fit at `path`. `statfs` may be unavailable on a
  * platform; that is `unknown`, never `enough`, so a caller can choose to be
  * conservative rather than start an export that will fail midway.

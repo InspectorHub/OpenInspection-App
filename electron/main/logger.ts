@@ -7,6 +7,7 @@ const EVENTS = [
   'db-exists-check-failed', 'db-key-read-failed', 'db-key-write-failed', 'db-corrupt', 'db-open-failed',
   'helper-hash-mismatch', 'helper-crash', 'system-tool-unresolved',
   'updater-listener-failed', 'updater-network', 'updater-verify', 'updater-other',
+  'data-package-suspend', 'data-package-resume',
 ] as const;
 /**
  * What may follow `internal` on a request channel: a SQLite result class from a closed list and nothing else. It exists so a

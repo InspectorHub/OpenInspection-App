@@ -4,6 +4,7 @@ import {
   CLIENT_VOLUME_BYTES,
   checkFreeSpace,
   dataPackageDir,
+  freeSpaceBytes,
   isVolumeName,
   resolveVolumePath,
   type StatFsLike,
@@ -50,6 +51,12 @@ describe('data-package disk: free-space check', () => {
     const result = await checkFreeSpace(stat(100), 'D:/x', 1000);
     expect(result.kind).toBe('insufficient');
     if (result.kind === 'insufficient') expect(result.availableBytes).toBeLessThan(result.requiredBytes);
+  });
+
+  it('reports raw free bytes and null on failure', async () => {
+    expect(await freeSpaceBytes(stat(2 * 1024 ** 3), 'D:/x')).toBe(2 * 1024 ** 3);
+    const failing: StatFsLike = { statfs: async () => { throw new Error('no statfs'); } };
+    expect(await freeSpaceBytes(failing, 'D:/x')).toBeNull();
   });
 
   it('is conservative when statfs fails or returns nonsense', async () => {

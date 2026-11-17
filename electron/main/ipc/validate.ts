@@ -142,6 +142,7 @@ function decodeRequest(value: unknown): DecodeHeicRequest {
 const path = nonEmptyText(PATH_MAX);
 const KEY_PATTERN = /^(?!.*\.\.[\\/])[\x21-\x7e]{1,256}$/;
 const key = (value: unknown): string => (typeof value === 'string' && KEY_PATTERN.test(value) ? value : fail());
+const bool = (value: unknown): boolean => (typeof value === 'boolean' ? value : fail());
 /** A key the renderer may use: the main process keeps some secrets (the database key) for itself. */
 const secretKey = (value: unknown): string => (RESERVED_SECRET_KEYS.includes(key(value)) ? fail() : key(value));
 const sql = nonEmptyText(SQL_MAX);
@@ -210,5 +211,11 @@ export const validators = {
   },
   media: {
     decodeHeic: (raw: unknown[]): [DecodeHeicRequest] => typed<[DecodeHeicRequest]>(raw, [decodeRequest]),
+  },
+  dataPackage: {
+    resumeState: none,
+    clearState: none,
+    diskSpace: none,
+    setPowerSave: (raw: unknown[]): [boolean] => typed<[boolean]>(raw, [bool]),
   },
 };

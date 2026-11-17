@@ -59,6 +59,10 @@ const TABLE: [channel: string, validate: Validator, valid: unknown[][], invalid:
   ['updater:download', validators.updater.download, [[]], [[1]]],
   ['updater:install-and-restart', validators.updater.installAndRestart, [[]], [[1]]],
   ['media:decode-heic', validators.media.decodeHeic, [[{ bytes: new ArrayBuffer(8), maxLongEdge: 2560 }]], [[], [{ bytes: new ArrayBuffer(8), maxLongEdge: 2560 }, 1]]],
+  ['data-package:resume-state', validators.dataPackage.resumeState, [[]], [[1]]],
+  ['data-package:clear-state', validators.dataPackage.clearState, [[]], [[1]]],
+  ['data-package:disk-space', validators.dataPackage.diskSpace, [[]], [[1]]],
+  ['data-package:set-power-save', validators.dataPackage.setPowerSave, [[true], [false]], [[], ['true'], [1], [true, false]]],
 ];
 
 const flatten = (tree: object): string[] => Object.values(tree).flatMap((value) => (typeof value === 'string' ? [value] : flatten(value as object)));
