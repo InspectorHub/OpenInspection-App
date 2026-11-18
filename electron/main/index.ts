@@ -44,6 +44,7 @@ import { createUpdaterHost, readBuildMeta, type AutoUpdaterLike } from './update
 import { createDataPackageStateHost } from './data-package/state.ts';
 import { dataPackageDir, freeSpaceBytes, type StatFsLike } from './data-package/disk.ts';
 import { createDataPackagePowerGuard } from './data-package/power.ts';
+import { startExportFromRenderer } from './data-package/host.ts';
 
 app.setAppUserModelId('io.inspectorhub.app');
 
@@ -322,6 +323,37 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       if (active === dpPowerActive) return;
       dpPowerActive = active;
       if (active) dpPower?.acquire(); else dpPower?.release();
+    });
+    let dpCancelRequested = false;
+    registerHandler(registerDeps, 'data-package:cancel-export', validators.dataPackage.cancelExport, async () => {
+      dpCancelRequested = true;
+    });
+    registerHandler(registerDeps, 'data-package:start-export', validators.dataPackage.startExport, async (request) => {
+      dpCancelRequested = false;
+      const emit = (event: unknown): void => {
+        try { uploaderContents?.send(EVENT_CHANNELS.dataPackageEvent, event); } catch { /* renderer lifecycle can race */ }
+      };
+      const redact = (line: string): string => line
+        .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+        .replace(/(x-data-job|x-step-up-token)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+        .replace(/(["]?password[" ]*[:=]\s*)[^&,"\s]+/gi, '$1[redacted]');
+      try {
+        const result = await startExportFromRenderer({
+          state: dpState, files: fs, baseDir: dpDir, now: Date.now,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          // The app logger accepts only closed LogEvents, not free-form HTTP
+          // lines; the runner's log hook is intentionally a no-op here.
+          log: () => {}, redact,
+          onProgress: (progress) => {
+            if (dpCancelRequested) throw new Error('cancelled');
+            emit({ kind: 'progress', progress });
+          },
+        }, request);
+        emit({ kind: 'done', result });
+      } catch (error) {
+        emit({ kind: 'error', code: dpCancelRequested ? 'cancelled' : 'export-failed' });
+        throw error;
+      }
     });
     const openDb = async () => {
       dbOpening ??= openDesktopDb({ dbDir: join(paths.userData, 'db'), secrets, fs, open: openNativeSqlite, now: Date.now, log });

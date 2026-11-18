@@ -85,6 +85,45 @@ export interface DataPackageStateView {
   updatedAt: number;
 }
 
+/** Progress event pushed from the main-process export runner. No bytes, no secrets. */
+export interface DataPackageProgressView {
+  stage: 'rows' | 'media' | 'verifying' | 'finishing';
+  table?: string;
+  rows: number;
+  media: number;
+  bytes: number;
+  totalTables: number;
+  doneTables: number;
+}
+
+/** A terminal export event: success with the attested result, or a closed error code. */
+export type DataPackageExportEvent =
+  | { kind: 'progress'; progress: DataPackageProgressView }
+  | { kind: 'done'; result: DataPackageResultView }
+  | { kind: 'error'; code: string };
+
+/** The result of a completed export, crossed to the renderer (no secrets). */
+export interface DataPackageResultView {
+  jobId: string;
+  packageId: string;
+  outputDir: string;
+  rows: number;
+  media: number;
+  bytes: number;
+  manifestSha256: string;
+  excluded: readonly { class: string; table: string; reason: string }[];
+}
+
+/** Renderer → main start request. Credentials are held only in main-process memory for this run. */
+export interface StartDataPackageExportRequest {
+  serverUrl: string;
+  bearer: string;
+  stepUpPassword: string;
+  stepUpCode?: string;
+  deviceLabel: string;
+  clientKind: string;
+}
+
 export interface DesktopBridge {
   readonly apiVersion: 1;
   db: {
@@ -125,12 +164,15 @@ export interface DesktopBridge {
   };
   /** The one way the renderer reaches the system HEIC decoder. It cannot name an executable, a path or an argument. */
   media: { decodeHeic?: (request: DecodeHeicRequest) => Promise<DecodeHeicReply> };
-  /** The A-1 job skeleton: non-secret resume state, free-space probe and the power-save guard. */
+  /** The A-1 job skeleton + A-2/A-3 export runner: non-secret resume state, free-space probe, power guard, start/cancel and progress events. */
   dataPackage: {
     resumeState(): Promise<DataPackageStateView | null>;
     clearState(): Promise<void>;
     diskSpace(): Promise<number | null>;
     setPowerSave(active: boolean): Promise<void>;
+    startExport(request: StartDataPackageExportRequest): Promise<void>;
+    cancelExport(): Promise<void>;
+    onEvent(listener: (event: DataPackageExportEvent) => void): () => void;
   };
 }
 
@@ -150,7 +192,7 @@ export const BRIDGE_METHODS = {
   gallery: ['save'],
   updater: ['state', 'onState', 'check', 'download', 'installAndRestart'],
   media: ['decodeHeic'],
-  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave'],
+  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave', 'startExport', 'cancelExport', 'onEvent'],
 } as const satisfies { [N in BridgeNamespace]: readonly (keyof DesktopBridge[N])[] };
 
 /** Request channels (`ipcRenderer.invoke` to `ipcMain.handle`). */
@@ -200,6 +242,8 @@ export const CHANNELS = {
     clearState: 'data-package:clear-state',
     diskSpace: 'data-package:disk-space',
     setPowerSave: 'data-package:set-power-save',
+    startExport: 'data-package:start-export',
+    cancelExport: 'data-package:cancel-export',
   },
 } as const;
 
@@ -219,6 +263,7 @@ export const EVENT_CHANNELS = {
   authCallback: 'auth:callback',
   activeChange: 'app:active-change',
   updaterState: 'updater:state-changed',
+  dataPackageEvent: 'data-package:event',
 } as const;
 
 /** Preload tells main that its appUrlOpen listener is ready to receive callbacks. */

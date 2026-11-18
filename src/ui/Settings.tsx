@@ -12,6 +12,7 @@ import { DeviceSection } from './settings/DeviceSection';
 import { ExternalLink } from './settings/ExternalLink';
 import { GallerySection } from './settings/GallerySection';
 import { ImportEntry } from './settings/ImportEntry';
+import { ExportDataPackageSection } from './settings/ExportDataPackageSection';
 import { InspectionSection } from './settings/InspectionSection';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
@@ -100,6 +101,14 @@ export function Settings({ services, origin, stack, onBack, onExport, onImport, 
         <ImportEntry availability={{ hasSession: stack !== null, online, canSync: policy.canSync, canEdit: policy.canEdit }} onImport={onImport} />
         <ClearLocalDataControl services={services} origin={origin} onCleared={onCleared} onWiping={onWiping} />
       </Section>
+      {desktop !== undefined && (
+        <ExportDataPackageSection
+          origin={origin}
+          getBearer={() => services.tokens.getAccessToken(origin)}
+          deviceLabel="desktop"
+          clientKind="desktop-windows"
+        />
+      )}
       <Section title="Account">
         <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />
         {accountUrl !== null && <ExternalLink services={services} url={accountUrl} label="Delete account" showHost />}
