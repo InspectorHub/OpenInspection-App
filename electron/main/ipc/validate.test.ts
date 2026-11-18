@@ -63,6 +63,12 @@ const TABLE: [channel: string, validate: Validator, valid: unknown[][], invalid:
   ['data-package:clear-state', validators.dataPackage.clearState, [[]], [[1]]],
   ['data-package:disk-space', validators.dataPackage.diskSpace, [[]], [[1]]],
   ['data-package:set-power-save', validators.dataPackage.setPowerSave, [[true], [false]], [[], ['true'], [1], [true, false]]],
+  ['data-package:start-export', validators.dataPackage.startExport, [[{
+    serverUrl: 'https://engine.test', bearer: 'b', stepUpPassword: 'pw', deviceLabel: 'D', clientKind: 'desktop-windows',
+  }]], [[], [{ serverUrl: 'https://engine.test/evil' }]]],
+  ['data-package:cancel-export', validators.dataPackage.cancelExport, [[]], [[1]]],
+  ['data-package:pause-export', validators.dataPackage.pauseExport, [[]], [[1]]],
+  ['data-package:resume-export', validators.dataPackage.resumeExport, [[]], [[1]]],
 ];
 
 const flatten = (tree: object): string[] => Object.values(tree).flatMap((value) => (typeof value === 'string' ? [value] : flatten(value as object)));

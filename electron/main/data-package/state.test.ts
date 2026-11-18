@@ -41,9 +41,10 @@ const checkpoint = (overrides: Partial<JobCheckpoint> = {}): JobCheckpoint => ({
   deviceLabel: 'DESKTOP-1',
   snapshotAt: 1_700_000_000_000,
   stage: 'rows',
-  tables: { inspections: { cursor: 'eyJpZCI6MX0', rows: 10, bytes: 2048 } },
+  tables: { inspections: { cursor: 'eyJpZCI6MX0', rows: 10, bytes: 2048, shards: [], shardRows: [] } },
   counts: { rows: 10, media: 0 },
   bytes: 2048,
+  meta: { schemaFingerprint: 'a'.repeat(64), serverVersion: '2.6.0' },
   updatedAt: 1_700_000_000_000,
   ...overrides,
 });
@@ -112,7 +113,7 @@ describe('data-package state: checkpoint persistence', () => {
       'not json',
       JSON.stringify({ jobId: 'x' }),
       JSON.stringify(checkpoint({ stage: 'bogus' as never })),
-      JSON.stringify(checkpoint({ tables: { t: { cursor: 'x'.repeat(5000), rows: 1, bytes: 1 } } })),
+      JSON.stringify(checkpoint({ tables: { t: { cursor: 'x'.repeat(5000), rows: 1, bytes: 1, shards: [], shardRows: [] } } })),
       JSON.stringify(checkpoint({ counts: { rows: -1, media: 0 } })),
       JSON.stringify({ ...checkpoint(), extra: 'secret' }),
     ]) {

@@ -61,8 +61,12 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['dataPackage.clearState', [], CHANNELS.dataPackage.clearState],
   ['dataPackage.diskSpace', [], CHANNELS.dataPackage.diskSpace],
   ['dataPackage.setPowerSave', [true], CHANNELS.dataPackage.setPowerSave],
+  ['dataPackage.startExport', [{}], CHANNELS.dataPackage.startExport],
+  ['dataPackage.cancelExport', [], CHANNELS.dataPackage.cancelExport],
+  ['dataPackage.pauseExport', [], CHANNELS.dataPackage.pauseExport],
+  ['dataPackage.resumeExport', [], CHANNELS.dataPackage.resumeExport],
 ];
-const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState'];
+const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState', 'dataPackage.onEvent'];
 
 describe('every bridge method reaches its own channel', () => {
   beforeEach(() => {

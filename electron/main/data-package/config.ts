@@ -41,6 +41,8 @@ export interface DataPackageEndpoints {
   abort(id: string): string;
   tables(id: string): string;
   rows(id: string, table: string): string;
+  media(id: string): string;
+  mediaObject(id: string, key: string): string;
 }
 
 /** All data-package endpoints under one verified origin. Unsafe segments throw rather than being encoded. */
@@ -57,6 +59,10 @@ export function dataPackageEndpoints(origin: string): DataPackageEndpoints {
     abort: (id) => `${job(id)}/abort`,
     tables: (id) => `${job(id)}/tables`,
     rows: (id, table) => `${job(id)}/tables/${segment(table, 'table')}/rows`,
+    media: (id) => `${job(id)}/media`,
+    // The media key is a relative object key (may contain '/'); it is a query
+    // value, not a path segment, so encode it rather than rejecting separators.
+    mediaObject: (id, key) => `${job(id)}/media/object?key=${encodeURIComponent(key)}`,
   };
 }
 

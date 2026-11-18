@@ -124,6 +124,9 @@ export interface DataPackageResponse {
   retryAfterMs: number | null;
 }
 
+/** The restricted client surface consumed by the export runner. */
+export type DataPackageHttp = { request(req: OutgoingRequest): Promise<DataPackageResponse> };
+
 const realTimers: HttpTimers = {
   setTimeout: (fn, ms) => setTimeout(fn, ms),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),

@@ -23,9 +23,20 @@ const TABLE_NAME = /^[A-Za-z0-9_]{1,64}$/;
 const TABLES_MAX = 256;
 
 export interface TableProgress {
+  /** null once the table is fully read; a non-null cursor means it was interrupted mid-table. */
   readonly cursor: string | null;
   readonly rows: number;
   readonly bytes: number;
+  /** Shard paths (relative to the package staging dir) for a COMPLETED table, so a resume can reuse their bytes. */
+  readonly shards: readonly string[];
+  /** Per-shard row counts, aligned with `shards`, needed to rebuild the manifest on resume. */
+  readonly shardRows: readonly number[];
+}
+
+/** Engine metadata needed to build a consistent manifest, captured when the job starts and persisted for resume. */
+export interface JobMeta {
+  readonly schemaFingerprint: string;
+  readonly serverVersion: string;
 }
 
 export interface JobCheckpoint {
@@ -37,6 +48,7 @@ export interface JobCheckpoint {
   readonly tables: Record<string, TableProgress>;
   readonly counts: { readonly rows: number; readonly media: number };
   readonly bytes: number;
+  readonly meta: JobMeta;
   readonly updatedAt: number;
 }
 
@@ -66,7 +78,7 @@ function keysExactly(value: Record<string, unknown>, allowed: readonly string[])
 
 /** Strict validation of an untrusted on-disk checkpoint; returns a typed value or null. */
 function parseCheckpoint(value: unknown): JobCheckpoint | null {
-  if (!isObject(value) || !keysExactly(value, ['jobId', 'kind', 'deviceLabel', 'snapshotAt', 'stage', 'tables', 'counts', 'bytes', 'updatedAt'])) return null;
+  if (!isObject(value) || !keysExactly(value, ['jobId', 'kind', 'deviceLabel', 'snapshotAt', 'stage', 'tables', 'counts', 'bytes', 'meta', 'updatedAt'])) return null;
   if (typeof value.jobId !== 'string' || !JOB_ID.test(value.jobId)) return null;
   if (value.kind !== 'export' && value.kind !== 'import') return null;
   if (typeof value.deviceLabel !== 'string' || value.deviceLabel.length === 0 || value.deviceLabel.length > DEVICE_LABEL_MAX) return null;
@@ -74,19 +86,27 @@ function parseCheckpoint(value: unknown): JobCheckpoint | null {
   if (typeof value.stage !== 'string' || !(JOB_STAGES as readonly string[]).includes(value.stage)) return null;
   if (!nonNegInt(value.bytes) || !isObject(value.counts)) return null;
   if (!keysExactly(value.counts, ['rows', 'media']) || !nonNegInt(value.counts.rows) || !nonNegInt(value.counts.media)) return null;
+  // meta is engine-supplied but untrusted on disk: only hex fingerprint / safe version strings.
+  if (!isObject(value.meta) || !keysExactly(value.meta, ['schemaFingerprint', 'serverVersion'])) return null;
+  const meta = value.meta as Record<string, unknown>;
+  if (typeof meta.schemaFingerprint !== 'string' || !/^[0-9a-f]{0,64}$/.test(meta.schemaFingerprint)) return null;
+  if (typeof meta.serverVersion !== 'string' || !/^[A-Za-z0-9_.+-]{0,64}$/.test(meta.serverVersion)) return null;
   if (!isObject(value.tables) || Object.keys(value.tables).length > TABLES_MAX) return null;
   const tables: Record<string, TableProgress> = Object.create(null) as Record<string, TableProgress>;
   for (const [name, raw] of Object.entries(value.tables)) {
-    if (!TABLE_NAME.test(name) || !isObject(raw) || !keysExactly(raw, ['cursor', 'rows', 'bytes'])) return null;
+    if (!TABLE_NAME.test(name) || !isObject(raw) || !keysExactly(raw, ['cursor', 'rows', 'bytes', 'shards', 'shardRows'])) return null;
     if (raw.cursor !== null && (typeof raw.cursor !== 'string' || raw.cursor.length > CURSOR_MAX)) return null;
     if (!nonNegInt(raw.rows) || !nonNegInt(raw.bytes)) return null;
-    tables[name] = { cursor: raw.cursor as string | null, rows: raw.rows, bytes: raw.bytes };
+    if (!Array.isArray(raw.shards) || raw.shards.length > 4096 || !raw.shards.every((s) => typeof s === 'string' && /^[A-Za-z0-9_./-]{1,256}$/.test(s) && !s.includes('..'))) return null;
+    if (!Array.isArray(raw.shardRows) || raw.shardRows.length !== (raw.shards as unknown[]).length || !raw.shardRows.every(nonNegInt)) return null;
+    tables[name] = { cursor: raw.cursor as string | null, rows: raw.rows, bytes: raw.bytes, shards: raw.shards as string[], shardRows: raw.shardRows as number[] };
   }
   return {
     jobId: value.jobId, kind: value.kind, deviceLabel: value.deviceLabel,
     snapshotAt: value.snapshotAt, stage: value.stage as JobStage,
     tables, counts: { rows: value.counts.rows, media: value.counts.media },
-    bytes: value.bytes, updatedAt: value.updatedAt,
+    bytes: value.bytes, meta: { schemaFingerprint: meta.schemaFingerprint, serverVersion: meta.serverVersion },
+    updatedAt: value.updatedAt,
   };
 }
 
