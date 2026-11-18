@@ -129,7 +129,9 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
             </p>
           )}
           <p className="text-sm text-ih-fg-2">
-            {progress?.paused ? 'Paused.' : progress ? `${progress.stage}: ${progress.rows} rows, ${progress.media} media` : 'Preparing…'}
+            {progress?.paused ? 'Paused.' : progress
+              ? `${progress.rows.toLocaleString(FORMAT_LOCALE)} rows, ${progress.media} media processed`
+              : 'Preparing…'}
           </p>
           <div className="flex gap-2">
             {progress?.paused
@@ -164,7 +166,16 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
               </label>
             </div>
           )}
-          <Button disabled={result.excluded.length > 0 && !acknowledged} onClick={() => setPhase('idle')}>Done</Button>
+          {/* Until the owner acknowledges excluded items, render Done as a
+              muted secondary button so the disabled state is visually obvious
+              (a primary button at 60% opacity still looks enabled). */}
+          <Button
+            variant={result.excluded.length > 0 && !acknowledged ? 'secondary' : 'primary'}
+            disabled={result.excluded.length > 0 && !acknowledged}
+            onClick={() => setPhase('idle')}
+          >
+            Done
+          </Button>
         </div>
       )}
 
