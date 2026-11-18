@@ -145,6 +145,10 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const activeUploadResponses = new Set<import('node:http').ServerResponse>();
   const uploadTokens = new Map<string, string>();
   const compatibility = { minSupported: null as string | null, recommended: null as string | null, downloadUrl: null as string | null };
+  // Data-package export fixtures: a small inspection table and one media object.
+  const dpRowIds = ['dp-insp-1', 'dp-insp-2'];
+  const dpMediaKey = 'inspections/dp-insp-1/photos/a.jpg';
+  const dpMediaBytes = Buffer.from('fake-jpeg-bytes');
   const allowedOrigins = [...ALLOWED_ORIGINS, ...(options.extraAllowedOrigins ?? [])];
   const scheme = options.tls === undefined ? 'http' : 'https';
   const server: Server | HttpsServer = (options.tls === undefined ? createServer() : createHttpsServer(options.tls)).on('request', (request, response) => {
@@ -217,6 +221,55 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     // The company's editor preferences, which Settings reads on open. The contract does not list this route; the answer is the preferences object itself, as the engine sends it.
     if (request.method === 'GET' && route === '/api/tenant/inspection-prefs') { json({ cloneDefault: 'rating_notes', autoAdvance: 'keyboard', autoAdvanceDelayMs: 200, pinnedTagIds: [], requireDefectFields: 'none', agentRepairAccess: 'read', reportLinkTtl: { count: 2, unit: 'years' } }); return; }
     if (request.method === 'GET' && route === '/api/admin/defect-categories') { json(contract<'/api/admin/defect-categories', 'get'>()({ success: true, data: [] })); return; }
+
+    // ── Tenant data-package API (E-1 read + E-2 media). These paths are not in
+    // the engine's native-contract subset, so answers are plain JSON here; the
+    // real engine's OpenAPI snapshot is the source of truth for their shape.
+    const dpBase = '/api/admin/data-package/jobs';
+    if (request.method === 'POST' && route === '/api/auth/step-up') {
+      void readBody(request).then(() => json({ success: true, data: { action: 'data-export-start', expiresAt: new Date(Date.now() + 300000).toISOString(), token: 'fake-step-up-token' } }));
+      return;
+    }
+    if (request.method === 'POST' && route === dpBase) {
+      void readBody(request).then(() => {
+        json({ success: true, data: {
+          jobId: 'dp-job-1', jobToken: 'fake-job-token',
+          leaseExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+          snapshotAt: Date.now(), serverVersion: '2.6.0',
+          schemaFingerprint: 'a'.repeat(64),
+          limits: { maxPageRows: 2, maxPageBytes: 65536 },
+        } });
+      });
+      return;
+    }
+    if (request.method === 'GET' && /\/jobs\/[^/]+\/tables$/.test(route)) {
+      json({ success: true, data: [{ table: 'inspections', disposition: 'out', columns: ['id'], keyset: ['id'], rowCountAtSnapshot: 2, maxPageRows: 2, maxPageBytes: 65536, blobColumns: [] }] });
+      return;
+    }
+    if (route.startsWith(dpBase) && route.includes('/rows') && request.method === 'GET') {
+      const after = new URL(request.url ?? '/', url).searchParams.get('after');
+      const start = after === null ? 0 : Number.parseInt(after, 10) + 1;
+      const rows = dpRowIds.slice(start, start + 2).map((id) => ({ id }));
+      const next = start + rows.length < dpRowIds.length ? String(start + rows.length - 1) : null;
+      json({ success: true, data: { rows, next, bytes: 0, rowsScanned: rows.length } });
+      return;
+    }
+    if (request.method === 'GET' && route === dpBase + '/dp-job-1/media') {
+      json({ success: true, data: { objects: [{ key: dpMediaKey, size: dpMediaBytes.length, etag: 'etag', uploaded: Date.now(), contentType: 'image/jpeg', kind: 'image' }], cursor: null, truncated: false } });
+      return;
+    }
+    if (request.method === 'GET' && route === dpBase + '/dp-job-1/media/object') {
+      response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(dpMediaBytes.length) }).end(dpMediaBytes);
+      return;
+    }
+    if (request.method === 'POST' && (route === dpBase + '/dp-job-1/heartbeat' || route === dpBase + '/dp-job-1/resume')) {
+      json({ success: true, data: { jobToken: 'fake-job-token', leaseExpiresAt: new Date(Date.now() + 3600000).toISOString() } });
+      return;
+    }
+    if (request.method === 'POST' && (route === dpBase + '/dp-job-1/complete' || route === dpBase + '/dp-job-1/abort' || route === dpBase + '/dp-job-1/cancel')) {
+      void readBody(request).then(() => json({ success: true }));
+      return;
+    }
     if (request.method === 'GET' && route === '/api/inspections/insp-7') {
       const inspection = contract<'/api/inspections/{id}', 'get'>()({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, templateId: null, createdAt: '2026-10-31T10:00:00Z', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } }, primaryReportId: null, publishedVersionNumber: report.version, editingAgain: report.state === 'editing', contentLocked: report.state === 'locked' } });
       // The app reads these two (src/field/editor-data.ts) and the contract does not list them for this route: kept, and named here so they are

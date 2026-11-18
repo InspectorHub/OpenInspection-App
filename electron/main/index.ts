@@ -325,11 +325,16 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
       if (active) dpPower?.acquire(); else dpPower?.release();
     });
     let dpCancelRequested = false;
+    let dpPaused = false;
     registerHandler(registerDeps, 'data-package:cancel-export', validators.dataPackage.cancelExport, async () => {
       dpCancelRequested = true;
+      dpPaused = false;
     });
+    registerHandler(registerDeps, 'data-package:pause-export', validators.dataPackage.pauseExport, async () => { dpPaused = true; });
+    registerHandler(registerDeps, 'data-package:resume-export', validators.dataPackage.resumeExport, async () => { dpPaused = false; });
     registerHandler(registerDeps, 'data-package:start-export', validators.dataPackage.startExport, async (request) => {
       dpCancelRequested = false;
+      dpPaused = false;
       const emit = (event: unknown): void => {
         try { uploaderContents?.send(EVENT_CHANNELS.dataPackageEvent, event); } catch { /* renderer lifecycle can race */ }
       };
@@ -344,9 +349,15 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
           // The app logger accepts only closed LogEvents, not free-form HTTP
           // lines; the runner's log hook is intentionally a no-op here.
           log: () => {}, redact,
-          onProgress: (progress) => {
+          onProgress: async (progress) => {
+            // A pause parks the runner at the next stage boundary without
+            // dropping the lease or losing the checkpoint.
+            while (dpPaused && !dpCancelRequested) {
+              emit({ kind: 'progress', progress: { ...progress, paused: true } });
+              await new Promise((resolve) => setTimeout(resolve, 250));
+            }
             if (dpCancelRequested) throw new Error('cancelled');
-            emit({ kind: 'progress', progress });
+            emit({ kind: 'progress', progress: { ...progress, paused: false } });
           },
         }, request);
         emit({ kind: 'done', result });

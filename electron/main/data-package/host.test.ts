@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { startExportFromRenderer, type ExportHostDeps, type StartExportRequest } from './host';
 import type { RawResponse } from './http';
 import type { DataPackageStateHost } from './state';
-import type { ExportFs, ProgressFn } from './types';
+import type { ExportFs } from './types';
 
 const ORIGIN = 'https://engine.test';
 
@@ -46,7 +46,7 @@ function fakeTransport(): NonNullable<ExportHostDeps['transport']> {
 function deps(over: Partial<ExportHostDeps> = {}): ExportHostDeps {
   return {
     state: memState(), files: memFs(), baseDir: '/out', now: () => 1700000000000,
-    sleep: async () => {}, log: () => {}, onProgress: (() => {}) as ProgressFn,
+    sleep: async () => {}, log: () => {}, onProgress: async () => {},
     redact: (s) => s, transport: fakeTransport(), ...over,
   };
 }
@@ -59,7 +59,7 @@ const req: StartExportRequest = {
 describe('startExportFromRenderer', () => {
   it('obtains a step-up token, runs the export and reports progress', async () => {
     const progress: string[] = [];
-    const d = deps({ onProgress: ((p: { stage: string }) => { progress.push(p.stage); }) as ProgressFn });
+    const d = deps({ onProgress: async (p) => { progress.push(p.stage); } });
     const result = await startExportFromRenderer(d, req);
     expect(result.selfCheck.ok).toBe(true);
     expect(result.rows).toBe(1);

@@ -94,6 +94,10 @@ export interface DataPackageProgressView {
   bytes: number;
   totalTables: number;
   doneTables: number;
+  /** Set on the first progress event: preview of total work from the snapshot metadata. */
+  estimate?: { rows: number; bytes: number; days: number };
+  /** True while the user has paused the run (no bytes are moving). */
+  paused?: boolean;
 }
 
 /** A terminal export event: success with the attested result, or a closed error code. */
@@ -172,6 +176,8 @@ export interface DesktopBridge {
     setPowerSave(active: boolean): Promise<void>;
     startExport(request: StartDataPackageExportRequest): Promise<void>;
     cancelExport(): Promise<void>;
+    pauseExport(): Promise<void>;
+    resumeExport(): Promise<void>;
     onEvent(listener: (event: DataPackageExportEvent) => void): () => void;
   };
 }
@@ -192,7 +198,7 @@ export const BRIDGE_METHODS = {
   gallery: ['save'],
   updater: ['state', 'onState', 'check', 'download', 'installAndRestart'],
   media: ['decodeHeic'],
-  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave', 'startExport', 'cancelExport', 'onEvent'],
+  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave', 'startExport', 'cancelExport', 'pauseExport', 'resumeExport', 'onEvent'],
 } as const satisfies { [N in BridgeNamespace]: readonly (keyof DesktopBridge[N])[] };
 
 /** Request channels (`ipcRenderer.invoke` to `ipcMain.handle`). */
@@ -244,6 +250,8 @@ export const CHANNELS = {
     setPowerSave: 'data-package:set-power-save',
     startExport: 'data-package:start-export',
     cancelExport: 'data-package:cancel-export',
+    pauseExport: 'data-package:pause-export',
+    resumeExport: 'data-package:resume-export',
   },
 } as const;
 

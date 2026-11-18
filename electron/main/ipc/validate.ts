@@ -241,5 +241,7 @@ export const validators = {
     setPowerSave: (raw: unknown[]): [boolean] => typed<[boolean]>(raw, [bool]),
     startExport: (raw: unknown[]): [StartDataPackageExportRequest] => typed<[StartDataPackageExportRequest]>(raw, [startExportOptions]),
     cancelExport: none,
+    pauseExport: none,
+    resumeExport: none,
   },
 };

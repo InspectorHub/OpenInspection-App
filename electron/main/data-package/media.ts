@@ -147,7 +147,7 @@ export async function downloadMedia(
       key: d.key, entry: mapped.entry, bytes: d.size, sha256: digest, volume: plan.volume,
       content_type: d.contentType, referenced_by: [],
     });
-    if (onProgress) onProgress({ stage: 'media', rows: 0, media: i + 1, bytes: volume.entries.reduce((n, e) => n + e.bytes.length, 0), totalTables: 0, doneTables: 0 });
+    if (onProgress) await onProgress({ stage: 'media', rows: 0, media: i + 1, bytes: volume.entries.reduce((n, e) => n + e.bytes.length, 0), totalTables: 0, doneTables: 0 });
   }
 
   // Media volumes are real STORED zip archives (format contract in volume.ts).

@@ -63,6 +63,8 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['dataPackage.setPowerSave', [true], CHANNELS.dataPackage.setPowerSave],
   ['dataPackage.startExport', [{}], CHANNELS.dataPackage.startExport],
   ['dataPackage.cancelExport', [], CHANNELS.dataPackage.cancelExport],
+  ['dataPackage.pauseExport', [], CHANNELS.dataPackage.pauseExport],
+  ['dataPackage.resumeExport', [], CHANNELS.dataPackage.resumeExport],
 ];
 const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState', 'dataPackage.onEvent'];
 

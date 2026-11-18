@@ -136,12 +136,11 @@ export async function readAllRows(
   let totalRows = 0;
   let totalBytes = 0;
   for (const table of tables) {
-    const result = await readTable(deps, table, cursors[table.table] ?? null, (rows, bytes) => {
-      if (onProgress) onProgress({
+    const result = await readTable(deps, table, cursors[table.table] ?? null, (rows, bytes) =>
+      onProgress?.({
         stage: 'rows', table: table.table, rows: totalRows + rows, media: 0,
         bytes: totalBytes + bytes, totalTables: tables.length, doneTables: results.length,
-      });
-    });
+      }));
     results.push(result);
     totalRows += result.rows;
     totalBytes += result.bytes;

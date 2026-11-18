@@ -22,6 +22,8 @@ function withBridge(over: Partial<Harness> = {}): Harness {
       onEvent: (cb: (e: DataPackageExportEvent) => void) => { listener = cb; return () => { listener = undefined; }; },
       startExport,
       cancelExport: vi.fn(async () => undefined),
+      pauseExport: vi.fn(async () => undefined),
+      resumeExport: vi.fn(async () => undefined),
     },
   } as never;
   return { emit: (e) => listener?.(e), startExport, ...over };
@@ -63,6 +65,31 @@ describe('ExportDataPackageSection', () => {
     expect(screen.getByText(/Export complete/i)).toBeInTheDocument();
     expect(screen.getByText(/Manifest SHA-256: abc123/)).toBeInTheDocument();
     expect(screen.getByText(/1 excluded/)).toBeInTheDocument();
+    // Completion is not acknowledged until the owner reviews excluded items.
+    const doneBtn = screen.getByRole('button', { name: 'Done' });
+    expect(doneBtn).toBeDisabled();
+    await userEvent.setup().click(screen.getByRole('checkbox', { name: /understand/i }));
+    expect(doneBtn).toBeEnabled();
+  });
+
+  it('shows the preflight estimate and lets the owner pause/resume', async () => {
+    const h = withBridge();
+    render(<ExportDataPackageSection {...props} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Start export' }));
+    await userEvent.setup().type(screen.getByLabelText(/Re-enter your password/i), 'pw');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Confirm' }));
+    await new Promise((r) => setTimeout(r, 0));
+    act(() => { h.emit({ kind: 'progress', progress: {
+      stage: 'rows', rows: 0, media: 0, bytes: 0, totalTables: 3, doneTables: 0,
+      estimate: { rows: 120000, bytes: 48 * 1024 * 1024, days: 2 },
+    } }); });
+    expect(screen.getByText(/Estimated: 120,000 rows/)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Pause export' }));
+    act(() => { h.emit({ kind: 'progress', progress: {
+      stage: 'rows', rows: 10, media: 0, bytes: 4000, totalTables: 3, doneTables: 0, paused: true,
+    } }); });
+    expect(screen.getByText(/Paused/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume export' })).toBeInTheDocument();
   });
 
   it('shows a closed error code from the main process', async () => {

@@ -90,6 +90,10 @@ export interface ExportProgress {
   readonly bytes: number;
   readonly totalTables: number;
   readonly doneTables: number;
+  /** Preview of total work from snapshot metadata, on the first progress event. */
+  readonly estimate?: { rows: number; bytes: number; days: number };
+  /** True while the user has paused the run. */
+  readonly paused?: boolean;
   /** Set when the job pauses for budget/429 with a UTC reset time. */
   readonly pausedUntil?: string;
 }
@@ -102,4 +106,5 @@ export interface ExcludedItem {
   readonly columns?: readonly string[];
 }
 
-export type ProgressFn = (progress: ExportProgress) => void | Promise<void>;
+/** Always async: the main session awaits it at every stage boundary so pause/cancel take effect. */
+export type ProgressFn = (progress: ExportProgress) => Promise<void>;

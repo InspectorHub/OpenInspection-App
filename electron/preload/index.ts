@@ -187,6 +187,8 @@ const bridge: DesktopBridge = {
     setPowerSave: (active) => call(CHANNELS.dataPackage.setPowerSave, active),
     startExport: (request) => call(CHANNELS.dataPackage.startExport, request),
     cancelExport: () => call(CHANNELS.dataPackage.cancelExport),
+    pauseExport: () => call(CHANNELS.dataPackage.pauseExport),
+    resumeExport: () => call(CHANNELS.dataPackage.resumeExport),
     onEvent: (listener) => listen(EVENT_CHANNELS.dataPackageEvent, listener),
   },
 };

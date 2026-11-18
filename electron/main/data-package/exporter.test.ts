@@ -195,3 +195,34 @@ describe('runExport against a real filesystem', () => {
     }
   });
 });
+
+describe('runExport progress callback semantics (pause/cancel contract)', () => {
+  it('propagates a cancel thrown from onProgress instead of continuing to complete', async () => {
+    let completeCalled = false;
+    const d = deps({
+      http: fakeHttp({ complete: () => { completeCalled = true; return ok({ success: true }); } }),
+    });
+    await expect(runExport(d, { ...opts, onProgress: async () => { throw new Error('cancelled'); } })).rejects.toThrow('cancelled');
+    expect(completeCalled).toBe(false);
+  });
+
+  it('blocks at the progress boundary while paused, then resumes', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let waited = false;
+    let first = true;
+    const d = deps();
+    const running = runExport(d, {
+      ...opts,
+      onProgress: async () => {
+        if (first) { first = false; waited = true; await gate; }
+      },
+    });
+    // Let it reach the first (estimate) progress event and block there.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(waited).toBe(true);
+    release?.();
+    const result = await running;
+    expect(result.selfCheck.ok).toBe(true);
+  });
+});

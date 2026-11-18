@@ -76,6 +76,8 @@ function parseTables(json: unknown): TableDescriptor[] {
       table: raw.table, columns: (raw.columns as unknown[]).filter((c): c is string => typeof c === 'string'),
       keyset: Array.isArray(raw.keyset) ? (raw.keyset as unknown[]).filter((k): k is string => typeof k === 'string') : [],
       maxPageRows: raw.maxPageRows as number, maxPageBytes: raw.maxPageBytes as number,
+      rowCountAtSnapshot: typeof raw.rowCountAtSnapshot === 'number' && Number.isSafeInteger(raw.rowCountAtSnapshot)
+        && raw.rowCountAtSnapshot >= 0 ? raw.rowCountAtSnapshot : undefined,
     });
   }
   return out;
@@ -132,6 +134,16 @@ export async function runExport(deps: ExportRunnerDeps, opts: StartExportOptions
   const tablesRes = await deps.http.request({ url: deps.endpoints.tables(jobId), method: 'GET', headers: authHeaders(deps) });
   if (tablesRes.status !== 200) throw new Error('tables-status');
   const tables = parseTables(tablesRes.json);
+  // Rough preflight estimate from snapshot metadata: row totals come from the
+  // engine, bytes assume a conservative average row, and days assume the free
+  // tier's ~100k Worker requests/day. All values are labelled as estimates.
+  const estimatedRows = tables.reduce((n, t) => n + (t.rowCountAtSnapshot ?? 0), 0);
+  const estimatedBytes = estimatedRows * 400;
+  const estimatedDays = Math.max(1, Math.ceil(estimatedRows / Math.max(1, tables[0]?.maxPageRows ?? 48) / 100_000));
+  await opts.onProgress?.({
+    stage: 'rows', rows: 0, media: 0, bytes: 0, totalTables: tables.length, doneTables: 0,
+    estimate: { rows: estimatedRows, bytes: estimatedBytes, days: estimatedDays },
+  });
 
   const rowsDeps: RowsDeps = {
     http: (req) => deps.http.request(req),
@@ -163,9 +175,10 @@ export async function runExport(deps: ExportRunnerDeps, opts: StartExportOptions
       completedFiles.push({ table: table.table, files });
       continue;
     }
-    const result = await readTable(rowsDeps, table, null, (rows, bytes) => {
-      opts.onProgress?.({ stage: 'rows', table: table.table, rows: rows, media: 0, bytes: bytes, totalTables: tables.length, doneTables: completedFiles.length });
-    });
+    // Expression body returns the promise so rows.ts awaits it at each row —
+    // pause/cancel then take effect mid-table, not only at table boundaries.
+    const result = await readTable(rowsDeps, table, null, (rows, bytes) =>
+      opts.onProgress?.({ stage: 'rows', table: table.table, rows: rows, media: 0, bytes: bytes, totalTables: tables.length, doneTables: completedFiles.length }));
     // Publish this table's shards to disk and record them for a future resume.
     const paths: string[] = [];
     for (const f of result.files) {
@@ -238,7 +251,7 @@ export async function runExport(deps: ExportRunnerDeps, opts: StartExportOptions
     mediaRows: mediaResult.rows, mediaVolumes: mediaResult.files, excluded: combinedExcluded,
   });
   if (!assembled.selfCheck.ok) throw new Error(`self-check failed: ${assembled.selfCheck.failures.join('; ')}`);
-  opts.onProgress?.({ stage: 'verifying', rows: rowResult.totalRows, media: mediaResult.rows.length, bytes: rowResult.totalBytes, totalTables: tables.length, doneTables: tables.length });
+  await opts.onProgress?.({ stage: 'verifying', rows: rowResult.totalRows, media: mediaResult.rows.length, bytes: rowResult.totalBytes, totalTables: tables.length, doneTables: tables.length });
 
   // The root volume is a single package.zip containing the data shards, media
   // index, manifest and checksums. Media volumes are separate stored zips. A

@@ -25,8 +25,12 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [password, setPassword] = useState('');
   const [progress, setProgress] = useState<DataPackageProgressView | null>(null);
+  // Estimate arrives only on the first progress event; keep it in its own state
+  // so subsequent progress updates do not wipe the preview from the screen.
+  const [estimate, setEstimate] = useState<DataPackageProgressView['estimate']>(undefined);
   const [result, setResult] = useState<DataPackageResultView | null>(null);
   const [error, setError] = useState('');
+  const [acknowledged, setAcknowledged] = useState(false);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -35,8 +39,11 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
     try {
       unsubscribe = getDesktopBridge().dataPackage.onEvent((event: DataPackageExportEvent) => {
         if (!alive.current) return;
-        if (event.kind === 'progress') setProgress(event.progress);
-        else if (event.kind === 'done') { setResult(event.result); setPhase('done'); }
+        if (event.kind === 'progress') {
+          setProgress(event.progress);
+          if (event.progress.estimate) setEstimate(event.progress.estimate);
+        }
+        else if (event.kind === 'done') { setResult(event.result); setAcknowledged(false); setPhase('done'); }
         else { setError(event.code); setPhase('error'); }
       });
     } catch {
@@ -57,6 +64,7 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
         return;
       }
       setProgress(null);
+      setEstimate(undefined);
       setResult(null);
       setError('');
       setPhase('running');
@@ -72,6 +80,12 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
 
   const cancel = async (): Promise<void> => {
     try { await getDesktopBridge().dataPackage.cancelExport(); } catch { /* already finished */ }
+  };
+  const pause = async (): Promise<void> => {
+    try { await getDesktopBridge().dataPackage.pauseExport(); } catch { /* already finished */ }
+  };
+  const resume = async (): Promise<void> => {
+    try { await getDesktopBridge().dataPackage.resumeExport(); } catch { /* already finished */ }
   };
 
   return (
@@ -106,20 +120,50 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
 
       {phase === 'running' && (
         <div role="status" className="flex flex-col gap-2">
+          {estimate && (
+            <p className="text-sm text-ih-fg-2">
+              Estimated: {estimate.rows.toLocaleString()} rows,
+              {' '}{Math.round(estimate.bytes / 1024 / 1024).toLocaleString()} MB,
+              {' '}about {estimate.days} day{estimate.days === 1 ? '' : 's'}.
+            </p>
+          )}
           <p className="text-sm text-ih-fg-2">
-            {progress ? `${progress.stage}: ${progress.rows} rows, ${progress.media} media` : 'Preparing…'}
+            {progress?.paused ? 'Paused.' : progress ? `${progress.stage}: ${progress.rows} rows, ${progress.media} media` : 'Preparing…'}
           </p>
-          <Button variant="secondary" onClick={() => void cancel()}>Cancel export</Button>
+          <div className="flex gap-2">
+            {progress?.paused
+              ? <Button onClick={() => void resume()}>Resume export</Button>
+              : <Button variant="secondary" onClick={() => void pause()}>Pause export</Button>}
+            <Button variant="secondary" onClick={() => void cancel()}>Cancel export</Button>
+          </div>
         </div>
       )}
 
       {phase === 'done' && result && (
-        <div role="status" className="flex flex-col gap-1 text-sm text-ih-fg-2">
+        <div role="status" className="flex flex-col gap-2 text-sm text-ih-fg-2">
           <p>Export complete.</p>
           <p className="break-all">Folder: {result.outputDir}</p>
           <p className="break-all">Manifest SHA-256: {result.manifestSha256}</p>
           <p>{result.rows} rows, {result.media} media, {result.excluded.length} excluded.</p>
-          <Button onClick={() => setPhase('idle')}>Done</Button>
+          {result.excluded.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p>Review the items that could not be included:</p>
+              <ul className="list-disc pl-5">
+                {result.excluded.map((item, i) => (
+                  <li key={i}>{item.table}: {item.reason}</li>
+                ))}
+              </ul>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={acknowledged}
+                  onChange={(e) => setAcknowledged(e.target.checked)}
+                />
+                I understand these items are not in the export.
+              </label>
+            </div>
+          )}
+          <Button disabled={result.excluded.length > 0 && !acknowledged} onClick={() => setPhase('idle')}>Done</Button>
         </div>
       )}
 
