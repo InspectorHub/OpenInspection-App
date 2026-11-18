@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { createServer, type Server } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import type { Socket } from 'node:net';
@@ -247,15 +248,27 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       return;
     }
     if (route.startsWith(dpBase) && route.includes('/rows') && request.method === 'GET') {
-      const after = new URL(request.url ?? '/', url).searchParams.get('after');
-      const start = after === null ? 0 : Number.parseInt(after, 10) + 1;
-      const rows = dpRowIds.slice(start, start + 2).map((id) => ({ id }));
-      const next = start + rows.length < dpRowIds.length ? String(start + rows.length - 1) : null;
-      json({ success: true, data: { rows, next, bytes: 0, rowsScanned: rows.length } });
+      void (async () => {
+        // Optional delay lets a visual walkthrough hold the "running" state long
+        // enough to screenshot. Default 0 keeps the E2E suite fast.
+        const delay = Number(process.env.OI_DP_DELAY_MS ?? '0');
+        if (Number.isFinite(delay) && delay > 0) await sleep(delay);
+        const after = new URL(request.url ?? '/', url).searchParams.get('after');
+        const start = after === null ? 0 : Number.parseInt(after, 10) + 1;
+        const rows = dpRowIds.slice(start, start + 2).map((id) => ({ id }));
+        const next = start + rows.length < dpRowIds.length ? String(start + rows.length - 1) : null;
+        json({ success: true, data: { rows, next, bytes: 0, rowsScanned: rows.length } });
+      })();
       return;
     }
     if (request.method === 'GET' && route === dpBase + '/dp-job-1/media') {
-      json({ success: true, data: { objects: [{ key: dpMediaKey, size: dpMediaBytes.length, etag: 'etag', uploaded: Date.now(), contentType: 'image/jpeg', kind: 'image' }], cursor: null, truncated: false } });
+      const objects: Record<string, unknown>[] = [{ key: dpMediaKey, size: dpMediaBytes.length, etag: 'etag', uploaded: Date.now(), contentType: 'image/jpeg', kind: 'image' }];
+      // Optional bad object (declared size != bytes) drives the excluded-item
+      // acknowledgment state for visual review. Default off.
+      if (process.env.OI_DP_BAD_MEDIA === '1') {
+        objects.push({ key: 'inspections/dp-insp-2/photos/bad.jpg', size: dpMediaBytes.length + 7, etag: 'bad', uploaded: Date.now(), contentType: 'image/jpeg', kind: 'image' });
+      }
+      json({ success: true, data: { objects, cursor: null, truncated: false } });
       return;
     }
     if (request.method === 'GET' && route === dpBase + '/dp-job-1/media/object') {

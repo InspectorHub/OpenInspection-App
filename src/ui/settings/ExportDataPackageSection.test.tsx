@@ -57,7 +57,7 @@ describe('ExportDataPackageSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Confirm' }));
     await new Promise((r) => setTimeout(r, 0)); // let the event subscription settle
     act(() => { h.emit({ kind: 'progress', progress: { stage: 'media', rows: 10, media: 3, bytes: 500, totalTables: 2, doneTables: 2 } }); });
-    expect(screen.getByRole('status')).toHaveTextContent(/media: 10 rows, 3 media/);
+    expect(screen.getByRole('status')).toHaveTextContent(/10 rows, 3 media processed/);
     act(() => { h.emit({ kind: 'done', result: {
       jobId: 'j', packageId: 'p', outputDir: 'D:\\exports\\j', rows: 10, media: 3, bytes: 500,
       manifestSha256: 'abc123', excluded: [{ class: 'external_media', table: 'inspection_media_pool', reason: 'x' }],
@@ -68,8 +68,12 @@ describe('ExportDataPackageSection', () => {
     // Completion is not acknowledged until the owner reviews excluded items.
     const doneBtn = screen.getByRole('button', { name: 'Done' });
     expect(doneBtn).toBeDisabled();
+    // Muted while blocked: a disabled primary button at 60% opacity is hard to
+    // tell from an enabled one, so the button flips to the secondary style.
+    expect(doneBtn.className).toContain('border-ih-border');
     await userEvent.setup().click(screen.getByRole('checkbox', { name: /understand/i }));
     expect(doneBtn).toBeEnabled();
+    expect(doneBtn.className).toContain('bg-ih-primary');
   });
 
   it('shows the preflight estimate and lets the owner pause/resume', async () => {
