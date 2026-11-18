@@ -7,6 +7,7 @@
  * one run, and the step-up password is never stored after submit.
  */
 import { useEffect, useRef, useState } from 'react';
+import { FORMAT_LOCALE } from '../../platform/format-locale';
 import { getDesktopBridge } from '../../desktop/bridge';
 import type { DataPackageExportEvent, DataPackageProgressView, DataPackageResultView } from '../../../electron/shared/ipc-contract.ts';
 import { Button, INPUT_CLASSES } from '../kit';
@@ -122,8 +123,8 @@ export function ExportDataPackageSection(props: ExportDataPackageSectionProps) {
         <div role="status" className="flex flex-col gap-2">
           {estimate && (
             <p className="text-sm text-ih-fg-2">
-              Estimated: {estimate.rows.toLocaleString()} rows,
-              {' '}{Math.round(estimate.bytes / 1024 / 1024).toLocaleString()} MB,
+              Estimated: {estimate.rows.toLocaleString(FORMAT_LOCALE)} rows,
+              {' '}{Math.round(estimate.bytes / 1024 / 1024).toLocaleString(FORMAT_LOCALE)} MB,
               {' '}about {estimate.days} day{estimate.days === 1 ? '' : 's'}.
             </p>
           )}
