@@ -4,7 +4,7 @@
  * progress events to the renderer. Secrets are passed in from the renderer
  * over IPC for this one action and held only in memory for the run.
  */
-import { createDataPackageHttp, createNodeDataPackageTransport, type DataPackageHttp, type RawResponse } from './http';
+import { createDataPackageHttp, createNodeDataPackageTransport, type DataPackageHttp, type RawResponse, type OutgoingBody } from './http';
 import { dataPackageEndpoints, type DataPackageEndpoints } from './config';
 import { runExport, type ExportRunnerDeps, type ExportResult, type StartExportOptions } from './exporter';
 import type { DataPackageStateHost } from './state';
@@ -22,7 +22,7 @@ export interface ExportHostDeps {
   /** Injected for tests; production uses createNodeDataPackageTransport. */
   readonly transport?: (req: {
     url: string; method: string; headers: Record<string, string>;
-    timeoutMs: number; maxBytes: number; signal: AbortSignal; body?: string;
+    timeoutMs: number; maxBytes: number; signal: AbortSignal; body?: OutgoingBody;
   }) => Promise<RawResponse>;
 }
 

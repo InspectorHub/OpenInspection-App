@@ -10,7 +10,7 @@ function suggestedName(uri: string): string {
   }
 }
 
-export function createDesktopSharer(bridge: Pick<DesktopBridge, 'dialogs'>): Sharer {
+export function createDesktopSharer(bridge: { dialogs: Pick<DesktopBridge['dialogs'], 'saveExport'> }): Sharer {
   return {
     async share(uri) {
       const result = await bridge.dialogs.saveExport(uri, suggestedName(uri));

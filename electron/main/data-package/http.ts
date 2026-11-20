@@ -40,11 +40,14 @@ export interface RawResponse {
   body: ArrayBuffer;
 }
 
+/** A request body is either UTF-8 text (JSON) or raw bytes (media upload). */
+export type OutgoingBody = string | Uint8Array;
+
 export interface DataPackageRequest {
   url: string;
   method: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: OutgoingBody;
   timeoutMs: number;
   /** Streaming cap: the transport stops reading and rejects `too_large` past this many bytes. */
   maxBytes: number;
@@ -111,7 +114,7 @@ export interface OutgoingRequest {
   url: string;
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   headers?: Record<string, string>;
-  body?: string;
+  body?: OutgoingBody;
   timeoutMs?: number;
   maxBytes?: number;
 }

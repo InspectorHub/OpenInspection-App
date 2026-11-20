@@ -134,6 +134,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const completedAt: number[] = [];
   const covers: Array<{ sourceKey: string; crop: string; bytes: number }> = [];
   const errors: string[] = [];
+  let revertStep = 0; // engine-wide: must survive across the revert/step loop's requests
   let unavailable = false;
   const uploads = new Map<string, Buffer>();
   const uploadCounts = new Map<string, number>();
@@ -281,6 +282,38 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
     }
     if (request.method === 'POST' && (route === dpBase + '/dp-job-1/complete' || route === dpBase + '/dp-job-1/abort' || route === dpBase + '/dp-job-1/cancel')) {
       void readBody(request).then(() => json({ success: true }));
+      return;
+    }
+    // ── Import API (E-5/E-6/E-7). Answers are plain JSON; the real engine's
+    //    OpenAPI snapshot is the source of truth for their shape.
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/import/preflight') {
+      void readBody(request).then(() => json({ success: true, data: {
+        ok: true, reasons: [], advisories: [], keepIds: false,
+        estimate: { rows: 2, writes: 2, days: 0 }, questions: [], fingerprintClass: 'current',
+      } }));
+      return;
+    }
+    if (request.method === 'GET' && route === dpBase + '/dp-job-1/import/plan') {
+      json({ success: true, data: { tiers: [['contacts'], ['inspections']] } });
+      return;
+    }
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/import/batches') {
+      void readBody(request).then(() => json({ success: true, data: { created: { contacts: 1, inspections: 1 }, skipped: {}, rejected: [] } }));
+      return;
+    }
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/import/media') {
+      void readBody(request).then(() => json({ success: true, data: { ok: true, newKey: 'dst/inspections/x/photos/a.jpg', sha256: 'a'.repeat(64) } }));
+      return;
+    }
+    if (request.method === 'PUT' && route === dpBase + '/dp-job-1/import/archive') {
+      void readBody(request).then(() => json({ success: true, data: { ok: true, verdict: { problems: [] }, sha256: 'a'.repeat(64), key: 'evidence-archives/dst/pkg/' } }));
+      return;
+    }
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/revert/step') {
+      void readBody(request).then(() => {
+        revertStep++;
+        json({ success: true, data: { done: revertStep >= 2, processed: 1, deleted: { contacts: 1 }, kept: [], mediaDeleted: 0, errors: [] } });
+      });
       return;
     }
     if (request.method === 'GET' && route === '/api/inspections/insp-7') {

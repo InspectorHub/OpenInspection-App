@@ -53,6 +53,7 @@ const TABLE: [channel: string, validate: Validator, valid: unknown[][], invalid:
   ['shell:open-logs', validators.shell.openLogs, [[]], [[1]]],
   ['shell:open-data-folder', validators.shell.openDataFolder, [[]], [[1]]],
   ['dialogs:save-export', validators.dialogs.saveExport, [['file:///C:/c/x.zip', 'export.zip']], [['file:///C:/c/x.zip'], [1, 'x'], ['file:///a', 'n'.repeat(400)]]],
+  ['dialogs:pick-package', validators.dialogs.pickPackage, [[]], [[1]]],
   ['gallery:save', validators.gallery.save, [['InspectorHub-20261102-101500-ab12cd34.jpg', new Uint8Array([1, 2, 3])]], [[], ['InspectorHub-20261102-101500-ab12cd34.jpg'], ['../evil.jpg', new Uint8Array([1])], ['InspectorHub-20261102-101500-ab12cd34.jpg', 'text'], ['InspectorHub-20261102-101500-ab12cd34.jpg', new Uint8Array([1]), 'extra'], ['InspectorHub-20261102-101500-ab12cd34.exe', new Uint8Array([1])], [1, new Uint8Array([1])]]],
   ['updater:state', validators.updater.state, [[]], [[1]]],
   ['updater:check', validators.updater.check, [[]], [[1]]],
@@ -69,6 +70,12 @@ const TABLE: [channel: string, validate: Validator, valid: unknown[][], invalid:
   ['data-package:cancel-export', validators.dataPackage.cancelExport, [[]], [[1]]],
   ['data-package:pause-export', validators.dataPackage.pauseExport, [[]], [[1]]],
   ['data-package:resume-export', validators.dataPackage.resumeExport, [[]], [[1]]],
+  ['data-package:start-import', validators.dataPackage.startImport, [[{
+    serverUrl: 'https://engine.test', bearer: 'b', stepUpPassword: 'pw', deviceLabel: 'D', clientKind: 'desktop-windows', packagePath: 'C:\\pkg.zip',
+  }]], [[], [{ serverUrl: 'https://engine.test/evil' }], [{}]]],
+  ['data-package:revert-import', validators.dataPackage.revertImport, [[{
+    serverUrl: 'https://engine.test', bearer: 'b', stepUpPassword: 'pw', deviceLabel: 'D', clientKind: 'desktop-windows', packagePath: 'C:\\pkg.zip',
+  }]], [[], [{ serverUrl: 'https://engine.test/evil' }]]],
 ];
 
 const flatten = (tree: object): string[] => Object.values(tree).flatMap((value) => (typeof value === 'string' ? [value] : flatten(value as object)));

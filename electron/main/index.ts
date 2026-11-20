@@ -45,6 +45,7 @@ import { createDataPackageStateHost } from './data-package/state.ts';
 import { dataPackageDir, freeSpaceBytes, type StatFsLike } from './data-package/disk.ts';
 import { createDataPackagePowerGuard } from './data-package/power.ts';
 import { startExportFromRenderer } from './data-package/host.ts';
+import { startImportFromRenderer, revertImportFromRenderer } from './data-package/importer-host.ts';
 
 app.setAppUserModelId('io.inspectorhub.app');
 
@@ -210,7 +211,10 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     protocol.handle('https', createAppOriginHandler({ rendererRoot: paths.rendererRoot, readFile, passthrough: createHttpsPassthrough(net), packaged: app.isPackaged }));
     filesHost = createFilesHost({ fs, mediaRoot: join(paths.userData, 'media'), cacheRoot: join(paths.userData, 'cache'), clock: { now: Date.now, setTimeout, clearTimeout } });
     const dialogsHost = createDialogsHost({
-      dialog: { showSaveDialog: (options) => dialog.showSaveDialog(options as Parameters<typeof dialog.showSaveDialog>[0]) },
+      dialog: {
+        showSaveDialog: (options) => dialog.showSaveDialog(options as Parameters<typeof dialog.showSaveDialog>[0]),
+        showOpenDialog: (options) => dialog.showOpenDialog(options as Parameters<typeof dialog.showOpenDialog>[0]) as Promise<{ canceled: boolean; filePaths?: string[] }>,
+      },
       fs,
       cacheRoot: join(paths.userData, 'cache'),
       downloadsDir: app.getPath('downloads'),
@@ -275,6 +279,7 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
     registerHandler(registerDeps, 'updater:download', validators.updater.download, async () => update.download());
     registerHandler(registerDeps, 'updater:install-and-restart', validators.updater.installAndRestart, async () => update.installAndRestart());
     registerHandler(registerDeps, 'dialogs:save-export', validators.dialogs.saveExport, async (fileUri, suggestedName) => dialogsHost.saveExport(fileUri, suggestedName));
+    registerHandler(registerDeps, 'dialogs:pick-package', validators.dialogs.pickPackage, async () => dialogsHost.pickPackage());
     registerHandler(registerDeps, 'gallery:save', validators.gallery.save, async (name, data) => galleryHost.save(name, data));
     registerHandler(registerDeps, 'files:write', validators.files.write, async (path, bytes) => files.write(path, bytes));
     registerHandler(registerDeps, 'files:size', validators.files.size, async (path) => files.size(path));
@@ -363,6 +368,52 @@ if (createSingleInstance({ app, onSecond: (argv) => onSecond(argv), focus: () =>
         emit({ kind: 'done', result });
       } catch (error) {
         emit({ kind: 'error', code: dpCancelRequested ? 'cancelled' : 'export-failed' });
+        throw error;
+      }
+    });
+    const dpRedact = (line: string): string => line
+      .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+      .replace(/(x-data-job|x-step-up-token)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+      .replace(/(["]?password[" ]*[:=]\s*)[^&,"\s]+/gi, '$1[redacted]');
+    const emitImport = (event: unknown): void => {
+      try { uploaderContents?.send(EVENT_CHANNELS.dataPackageImportEvent, event); } catch { /* renderer lifecycle can race */ }
+    };
+    const importProgress: import('./data-package/types.ts').ProgressFn = async (progress) => {
+      while (dpPaused && !dpCancelRequested) {
+        emitImport({ kind: 'progress', progress: { ...progress, paused: true } });
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (dpCancelRequested) throw new Error('cancelled');
+      emitImport({ kind: 'progress', progress: { ...progress, paused: false } });
+    };
+    const importHostBase = () => ({
+      state: dpState, onProgress: importProgress, now: Date.now,
+      sleep: (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); }),
+      log: () => {}, redact: dpRedact,
+      power: dpPower ? { acquire: () => ({ release: () => dpPower!.release() }) } : undefined,
+    });
+    registerHandler(registerDeps, 'data-package:start-import', validators.dataPackage.startImport, async (request) => {
+      dpCancelRequested = false; dpPaused = false;
+      try {
+        const result = await startImportFromRenderer(importHostBase(), request);
+        // jobToken and package bytes never cross IPC; strip to the safe view.
+        emitImport({ kind: 'done', result: {
+          jobId: result.jobId, packageId: result.packageId, applied: result.applied,
+          skipped: result.skipped, rejected: result.rejected, mediaUploaded: result.mediaUploaded,
+          archiveOk: result.archiveOk, counts: result.preview.counts, excluded: result.preview.excluded,
+        } });
+      } catch (error) {
+        emitImport({ kind: 'error', code: dpCancelRequested ? 'cancelled' : 'import-failed' });
+        throw error;
+      }
+    });
+    registerHandler(registerDeps, 'data-package:revert-import', validators.dataPackage.revertImport, async (request) => {
+      dpCancelRequested = false; dpPaused = false;
+      try {
+        await revertImportFromRenderer(importHostBase(), request);
+        emitImport({ kind: 'reverted', done: true, processed: 0 });
+      } catch (error) {
+        emitImport({ kind: 'error', code: dpCancelRequested ? 'cancelled' : 'revert-failed' });
         throw error;
       }
     });

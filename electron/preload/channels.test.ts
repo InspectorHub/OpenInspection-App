@@ -51,6 +51,7 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['shell.openLogs', [], CHANNELS.shell.openLogs],
   ['shell.openDataFolder', [], CHANNELS.shell.openDataFolder],
   ['dialogs.saveExport', ['f', 'n'], CHANNELS.dialogs.saveExport],
+  ['dialogs.pickPackage', [], CHANNELS.dialogs.pickPackage],
   ['gallery.save', ['InspectorHub-20261102-101500-ab12cd34.jpg', new Uint8Array([1])], CHANNELS.gallery.save],
   ['updater.state', [], CHANNELS.updater.state],
   ['updater.check', [], CHANNELS.updater.check],
@@ -65,8 +66,10 @@ const INVOKES: [path: string, args: unknown[], channel: string][] = [
   ['dataPackage.cancelExport', [], CHANNELS.dataPackage.cancelExport],
   ['dataPackage.pauseExport', [], CHANNELS.dataPackage.pauseExport],
   ['dataPackage.resumeExport', [], CHANNELS.dataPackage.resumeExport],
+  ['dataPackage.startImport', [{}], CHANNELS.dataPackage.startImport],
+  ['dataPackage.revertImport', [{}], CHANNELS.dataPackage.revertImport],
 ];
-const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState', 'dataPackage.onEvent'];
+const NOT_INVOKES = ['files.stream', 'uploader.onEvent', 'auth.onCallback', 'app.onActiveChange', 'updater.onState', 'dataPackage.onEvent', 'dataPackage.onImportEvent'];
 
 describe('every bridge method reaches its own channel', () => {
   beforeEach(() => {

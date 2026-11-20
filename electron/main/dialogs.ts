@@ -9,7 +9,10 @@ export interface FsLike {
 }
 
 export interface DialogsHostDeps {
-  dialog: { showSaveDialog(options: unknown): Promise<{ canceled: boolean; filePath?: string }> };
+  dialog: {
+    showSaveDialog(options: unknown): Promise<{ canceled: boolean; filePath?: string }>;
+    showOpenDialog?(options: unknown): Promise<{ canceled: boolean; filePaths?: string[] }>;
+  };
   fs: FsLike;
   cacheRoot: string;
   downloadsDir: string;
@@ -46,8 +49,37 @@ function inside(root: string, candidate: string): boolean {
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-export function createDialogsHost(deps: DialogsHostDeps): { saveExport(fileUri: string, suggestedName: string): Promise<'saved' | 'cancelled'> } {
+export function createDialogsHost(deps: DialogsHostDeps): {
+  saveExport(fileUri: string, suggestedName: string): Promise<'saved' | 'cancelled'>;
+  pickPackage(): Promise<string | null>;
+} {
   return {
+    async pickPackage() {
+      // E2E harness supplies a package path directly (no native dialog).
+      const e2ePath = process.env.OI_E2E_IMPORT_PACKAGE_PATH;
+      if (e2ePath) return e2ePath;
+      if (!deps.dialog.showOpenDialog) return null;
+      let selection: { canceled: boolean; filePaths?: string[] };
+      try {
+        selection = await deps.dialog.showOpenDialog({
+          properties: ['openFile'],
+          filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+        });
+      } catch {
+        throw new IpcError('unavailable');
+      }
+      if (selection.canceled) return null;
+      const path = selection.filePaths?.[0];
+      if (typeof path !== 'string' || path.length === 0) return null;
+      // Confirm the selection is an existing regular file before handing it to
+      // the import runner (it re-reads by path in main).
+      try {
+        if (!(await deps.fs.stat(path)).isFile()) return null;
+      } catch {
+        return null;
+      }
+      return path;
+    },
     async saveExport(fileUri, suggestedName) {
       if (!EXPORT_NAME.test(suggestedName)) return invalidArgument();
       const requestedPath = sourcePathFromUri(fileUri);

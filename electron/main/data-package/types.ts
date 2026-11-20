@@ -83,7 +83,7 @@ export interface ExportCredentials {
 
 /** Progress pushed to the IPC layer. No bytes, no secrets. */
 export interface ExportProgress {
-  readonly stage: 'rows' | 'media' | 'verifying' | 'finishing';
+  readonly stage: 'rows' | 'media' | 'verifying' | 'finishing' | 'apply' | 'preview' | 'revert';
   readonly table?: string;
   readonly rows: number;
   readonly media: number;
