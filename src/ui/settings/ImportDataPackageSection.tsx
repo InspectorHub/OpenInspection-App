@@ -61,7 +61,10 @@ export function ImportDataPackageSection(props: ImportDataPackageSectionProps) {
         if (event.kind === 'progress') setProgress(event.progress);
         else if (event.kind === 'done') { setResult(event.result); setPhase('done'); }
         else if (event.kind === 'error') { setError(event.code); setPhase('error'); }
-        else if (event.kind === 'reverted') { setRevertBusy(false); setRevertOpen(false); setResult(null); setPhase('idle'); }
+        else if (event.kind === 'reverted') {
+          setRevertBusy(false); setRevertOpen(false); setResult(null);
+          setFilePath(null); setPassword(''); setProgress(null); setPhase('idle');
+        }
       });
     } catch {
       // Not inside the desktop client; section is inert.
@@ -89,7 +92,8 @@ export function ImportDataPackageSection(props: ImportDataPackageSectionProps) {
         serverUrl: props.origin, bearer, stepUpPassword: password,
         deviceLabel: props.deviceLabel, clientKind: props.clientKind, packagePath: filePath,
       });
-      setPassword('');
+      // Keep the password in memory (the input is already unmounted by the
+      // phase change) so a subsequent revert can mint its own step-up token.
     } catch (err) {
       setError(err instanceof Error ? err.message : 'import-failed');
       setPhase('error');

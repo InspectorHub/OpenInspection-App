@@ -134,6 +134,7 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
   const completedAt: number[] = [];
   const covers: Array<{ sourceKey: string; crop: string; bytes: number }> = [];
   const errors: string[] = [];
+  let revertStep = 0; // engine-wide: must survive across the revert/step loop's requests
   let unavailable = false;
   const uploads = new Map<string, Buffer>();
   const uploadCounts = new Map<string, number>();
@@ -308,7 +309,6 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       void readBody(request).then(() => json({ success: true, data: { ok: true, verdict: { problems: [] }, sha256: 'a'.repeat(64), key: 'evidence-archives/dst/pkg/' } }));
       return;
     }
-    let revertStep = 0;
     if (request.method === 'POST' && route === dpBase + '/dp-job-1/revert/step') {
       void readBody(request).then(() => {
         revertStep++;
