@@ -14,6 +14,7 @@ import { GallerySection } from './settings/GallerySection';
 import { ImportEntry } from './settings/ImportEntry';
 import { ExportDataPackageSection } from './settings/ExportDataPackageSection';
 import { ImportDataPackageSection } from './settings/ImportDataPackageSection';
+import { MoveDataPackageSection } from './settings/MoveDataPackageSection';
 import { InspectionSection } from './settings/InspectionSection';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
@@ -36,6 +37,10 @@ export interface SettingsProps {
   onExport(): void;
   /** Opens the import of an offline package. */
   onImport(): void;
+  /** Opens the guided move flow to make a package here. */
+  onLeave(): void;
+  /** Opens the guided move flow to restore a package here. */
+  onArrive(): void;
   onSignedOut(): void;
   onCleared(): void;
   /** See `ClearLocalDataControl`. */
@@ -64,7 +69,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tied to the server's version policy: whatever else is refused, a person can always get their data out and their sign-in off.
  * The back key and the Back button both return to the list.
  */
-export function Settings({ services, origin, stack, onBack, onExport, onImport, onSignedOut, onCleared, onWiping, timers, locale, desktop }: SettingsProps) {
+export function Settings({ services, origin, stack, onBack, onExport, onImport, onLeave, onArrive, onSignedOut, onCleared, onWiping, timers, locale, desktop }: SettingsProps) {
   const language = locale ?? FORMAT_LOCALE;
   const state = useClientState(services.clientState);
   const policy = clientPolicy(state, origin);
@@ -116,6 +121,7 @@ export function Settings({ services, origin, stack, onBack, onExport, onImport, 
             deviceLabel="desktop"
             clientKind="desktop-windows"
           />
+          <MoveDataPackageSection onLeave={onLeave} onArrive={onArrive} />
         </>
       )}
       <Section title="Account">

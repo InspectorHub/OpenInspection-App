@@ -14,6 +14,7 @@ import { importModule } from './import-loader';
 import { ImportBoundary, ImportLoading } from './ImportBoundary';
 import { editorModule } from './editor-loader';
 import { ExportFlow } from './ExportFlow';
+import { MoveWizard } from './move/MoveWizard';
 import { Body, Button, Heading, Screen } from './kit';
 import { NotificationPrompt } from './NotificationPrompt';
 import { Settings } from './Settings';
@@ -64,7 +65,10 @@ export function roleLabel(role: string): string {
 
 /** The home of a signed-in device: the work list (where there is an offline stack), the account, and the sign-out contract. */
 export function SignedIn({ services, origin, identity, onSignedOut, onWiping, timers, network, desktopSettings, diagnostics, onSignInAgain, scrollMemory }: SignedInProps) {
-  const [view, setView] = useState<'home' | 'settings'>('home');
+  const [view, setView] = useState<'home' | 'settings' | 'move'>('home');
+  // Which direction the guided move flow was opened in. It is set when leaving
+  // Settings and read only by the move view.
+  const [moveMode, setMoveMode] = useState<'leave' | 'arrive'>('leave');
   // The inspection open in the editor, or null for the work list.
   const [editing, setEditing] = useState<string | null>(null);
   // What the open export covers: everything (an empty object) or the listed inspections (a quarantined row's own export).
@@ -166,6 +170,19 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
     );
   }
 
+  if (view === 'move') {
+    return (
+      <MoveWizard
+        origin={origin}
+        getBearer={() => services.tokens.getAccessToken(origin)}
+        deviceLabel="desktop"
+        clientKind="desktop-windows"
+        mode={moveMode}
+        onBack={() => setView('settings')}
+      />
+    );
+  }
+
   if (view === 'settings') {
     return (
       <>
@@ -175,6 +192,8 @@ export function SignedIn({ services, origin, identity, onSignedOut, onWiping, ti
           stack={stack}
           onBack={closeSettings}
           onExport={() => setExporting({})}
+          onLeave={() => { setMoveMode('leave'); setView('move'); }}
+          onArrive={() => { setMoveMode('arrive'); setView('move'); }}
           onImport={() => {
             // A load that failed is cached by React, so each open asks for the chunk afresh.
             LazyImportScreen = makeImportScreen();
