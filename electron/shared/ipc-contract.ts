@@ -87,7 +87,7 @@ export interface DataPackageStateView {
 
 /** Progress event pushed from the main-process export runner. No bytes, no secrets. */
 export interface DataPackageProgressView {
-  stage: 'rows' | 'media' | 'verifying' | 'finishing';
+  stage: 'rows' | 'media' | 'verifying' | 'finishing' | 'apply' | 'preview' | 'revert';
   table?: string;
   rows: number;
   media: number;
@@ -128,6 +128,38 @@ export interface StartDataPackageExportRequest {
   clientKind: string;
 }
 
+/** Renderer → main import request. Only a local file PATH crosses IPC; bytes are read in main. */
+export interface StartDataPackageImportRequest {
+  serverUrl: string;
+  bearer: string;
+  stepUpPassword: string;
+  stepUpCode?: string;
+  deviceLabel: string;
+  clientKind: string;
+  /** Absolute path to the selected package file. No bytes cross IPC. */
+  packagePath: string;
+}
+
+/** The result of a completed import, crossed to the renderer (no secrets, no row content). */
+export interface DataPackageImportResultView {
+  jobId: string;
+  packageId: string;
+  applied: Record<string, number>;
+  skipped: Record<string, number>;
+  rejected: { table: string; sourceId: string; code: string }[];
+  mediaUploaded: number;
+  archiveOk: boolean;
+  counts: Record<string, number>;
+  excluded: readonly { class: string; table: string; reason: string }[];
+}
+
+/** A terminal import or revert event. Progress events share DataPackageProgressView. */
+export type DataPackageImportEvent =
+  | { kind: 'progress'; progress: DataPackageProgressView }
+  | { kind: 'done'; result: DataPackageImportResultView }
+  | { kind: 'error'; code: string }
+  | { kind: 'reverted'; done: boolean; processed: number };
+
 export interface DesktopBridge {
   readonly apiVersion: 1;
   db: {
@@ -153,7 +185,10 @@ export interface DesktopBridge {
   shell: { openExternal(url: string): Promise<void>; openLogs(): Promise<void>; openDataFolder(): Promise<void> };
   auth: { onCallback(listener: (url: string) => void): () => void };
   app: { onActiveChange(listener: (active: boolean) => void): () => void };
-  dialogs: { saveExport(fileUri: string, suggestedName: string): Promise<'saved' | 'cancelled'> };
+  dialogs: {
+    saveExport(fileUri: string, suggestedName: string): Promise<'saved' | 'cancelled'>;
+    pickPackage(): Promise<string | null>;
+  };
   /**
    * A COPY of a photo taken in the app, put into the InspectorHub folder of the system Pictures folder (the same on Windows and macOS). The renderer names the file by a fixed pattern
    * (`GALLERY_FILE_NAME`) and never a path; the main process decides the folder. It never deletes anything.
@@ -178,7 +213,11 @@ export interface DesktopBridge {
     cancelExport(): Promise<void>;
     pauseExport(): Promise<void>;
     resumeExport(): Promise<void>;
+    startImport(request: StartDataPackageImportRequest): Promise<void>;
+    /** Import a package AND then revert it — used only by the E2E harness to exercise revert. */
+    revertImport(request: StartDataPackageImportRequest): Promise<void>;
     onEvent(listener: (event: DataPackageExportEvent) => void): () => void;
+    onImportEvent(listener: (event: DataPackageImportEvent) => void): () => void;
   };
 }
 
@@ -194,11 +233,11 @@ export const BRIDGE_METHODS = {
   shell: ['openExternal', 'openLogs', 'openDataFolder'],
   auth: ['onCallback'],
   app: ['onActiveChange'],
-  dialogs: ['saveExport'],
+  dialogs: ['saveExport', 'pickPackage'],
   gallery: ['save'],
   updater: ['state', 'onState', 'check', 'download', 'installAndRestart'],
   media: ['decodeHeic'],
-  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave', 'startExport', 'cancelExport', 'pauseExport', 'resumeExport', 'onEvent'],
+  dataPackage: ['resumeState', 'clearState', 'diskSpace', 'setPowerSave', 'startExport', 'cancelExport', 'pauseExport', 'resumeExport', 'startImport', 'revertImport', 'onEvent', 'onImportEvent'],
 } as const satisfies { [N in BridgeNamespace]: readonly (keyof DesktopBridge[N])[] };
 
 /** Request channels (`ipcRenderer.invoke` to `ipcMain.handle`). */
@@ -234,7 +273,7 @@ export const CHANNELS = {
   },
   uploader: { start: 'uploader:start', remove: 'uploader:remove' },
   shell: { openExternal: 'shell:open-external', openLogs: 'shell:open-logs', openDataFolder: 'shell:open-data-folder' },
-  dialogs: { saveExport: 'dialogs:save-export' },
+  dialogs: { saveExport: 'dialogs:save-export', pickPackage: 'dialogs:pick-package' },
   gallery: { save: 'gallery:save' },
   updater: {
     state: 'updater:state',
@@ -252,6 +291,8 @@ export const CHANNELS = {
     cancelExport: 'data-package:cancel-export',
     pauseExport: 'data-package:pause-export',
     resumeExport: 'data-package:resume-export',
+    startImport: 'data-package:start-import',
+    revertImport: 'data-package:revert-import',
   },
 } as const;
 
@@ -272,6 +313,7 @@ export const EVENT_CHANNELS = {
   activeChange: 'app:active-change',
   updaterState: 'updater:state-changed',
   dataPackageEvent: 'data-package:event',
+  dataPackageImportEvent: 'data-package:import-event',
 } as const;
 
 /** Preload tells main that its appUrlOpen listener is ready to receive callbacks. */

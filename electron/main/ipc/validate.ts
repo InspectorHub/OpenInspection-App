@@ -4,7 +4,7 @@
  * is refused; an object with a key the contract does not name is refused too.
  */
 import { isStreamUploadUrl, MAX_DECODE_INPUT_BYTES, MAX_MEDIA_BYTES } from '../../../src/media/media-types.ts';
-import { GALLERY_FILE_NAME, type DbParam, type DecodeHeicRequest, type UploaderStartOptions, type StartDataPackageExportRequest } from '../../shared/ipc-contract.ts';
+import { GALLERY_FILE_NAME, type DbParam, type DecodeHeicRequest, type UploaderStartOptions, type StartDataPackageExportRequest, type StartDataPackageImportRequest } from '../../shared/ipc-contract.ts';
 import { RESERVED_SECRET_KEYS } from '../data/reserved-secrets.ts';
 import { DB_PARAM_STRING_MAX, DB_PARAMS_MAX, IPC_BYTES_MAX } from '../../shared/ipc-byte-limits.ts';
 
@@ -106,6 +106,25 @@ function startExportOptions(value: unknown): StartDataPackageExportRequest {
     deviceLabel: nonEmptyText(128)(value.deviceLabel),
     clientKind: nonEmptyText(64)(value.clientKind),
   };
+}
+
+function startImportOptions(value: unknown): StartDataPackageImportRequest {
+    if (!isRecord(value)) return fail();
+    keysOnly(value, ['serverUrl', 'bearer', 'stepUpPassword', 'stepUpCode', 'deviceLabel', 'clientKind', 'packagePath']);
+    const serverUrl = nonEmptyText(URL_MAX)(value.serverUrl);
+    let parsed: URL;
+    try { parsed = new URL(serverUrl); } catch { return fail(); }
+    if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || parsed.username || parsed.password
+        || parsed.hash || parsed.search || parsed.pathname !== '/' || parsed.origin !== serverUrl.replace(/\/$/, '')) return fail();
+    return {
+        serverUrl,
+        bearer: nonEmptyText(SECRET_VALUE_MAX)(value.bearer),
+        stepUpPassword: nonEmptyText(4096)(value.stepUpPassword),
+        ...(value.stepUpCode === undefined ? {} : { stepUpCode: text(64)(value.stepUpCode) }),
+        deviceLabel: nonEmptyText(128)(value.deviceLabel),
+        clientKind: nonEmptyText(64)(value.clientKind),
+        packagePath: nonEmptyText(PATH_MAX)(value.packagePath),
+    };
 }
 
 function uploadOptions(value: unknown): UploaderStartOptions {
@@ -221,6 +240,7 @@ export const validators = {
   },
   dialogs: {
     saveExport: (raw: unknown[]): [string, string] => typed<[string, string]>(raw, [nonEmptyText(URL_MAX), nonEmptyText(NAME_MAX)]),
+    pickPackage: none,
   },
   gallery: {
     save: (raw: unknown[]): [string, Uint8Array] => typed<[string, Uint8Array]>(raw, [(value: unknown): string => (typeof value === 'string' && GALLERY_FILE_NAME.test(value) ? value : fail()), uint8]),
@@ -240,6 +260,8 @@ export const validators = {
     diskSpace: none,
     setPowerSave: (raw: unknown[]): [boolean] => typed<[boolean]>(raw, [bool]),
     startExport: (raw: unknown[]): [StartDataPackageExportRequest] => typed<[StartDataPackageExportRequest]>(raw, [startExportOptions]),
+    startImport: (raw: unknown[]): [StartDataPackageImportRequest] => typed<[StartDataPackageImportRequest]>(raw, [startImportOptions]),
+    revertImport: (raw: unknown[]): [StartDataPackageImportRequest] => typed<[StartDataPackageImportRequest]>(raw, [startImportOptions]),
     cancelExport: none,
     pauseExport: none,
     resumeExport: none,

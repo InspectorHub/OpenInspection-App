@@ -283,6 +283,39 @@ export async function startRendererEngine(options: RendererEngineOptions = {}): 
       void readBody(request).then(() => json({ success: true }));
       return;
     }
+    // ── Import API (E-5/E-6/E-7). Answers are plain JSON; the real engine's
+    //    OpenAPI snapshot is the source of truth for their shape.
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/import/preflight') {
+      void readBody(request).then(() => json({ success: true, data: {
+        ok: true, reasons: [], advisories: [], keepIds: false,
+        estimate: { rows: 2, writes: 2, days: 0 }, questions: [], fingerprintClass: 'current',
+      } }));
+      return;
+    }
+    if (request.method === 'GET' && route === dpBase + '/dp-job-1/import/plan') {
+      json({ success: true, data: { tiers: [['contacts'], ['inspections']] } });
+      return;
+    }
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/import/batches') {
+      void readBody(request).then(() => json({ success: true, data: { created: { contacts: 1, inspections: 1 }, skipped: {}, rejected: [] } }));
+      return;
+    }
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/import/media') {
+      void readBody(request).then(() => json({ success: true, data: { ok: true, newKey: 'dst/inspections/x/photos/a.jpg', sha256: 'a'.repeat(64) } }));
+      return;
+    }
+    if (request.method === 'PUT' && route === dpBase + '/dp-job-1/import/archive') {
+      void readBody(request).then(() => json({ success: true, data: { ok: true, verdict: { problems: [] }, sha256: 'a'.repeat(64), key: 'evidence-archives/dst/pkg/' } }));
+      return;
+    }
+    let revertStep = 0;
+    if (request.method === 'POST' && route === dpBase + '/dp-job-1/revert/step') {
+      void readBody(request).then(() => {
+        revertStep++;
+        json({ success: true, data: { done: revertStep >= 2, processed: 1, deleted: { contacts: 1 }, kept: [], mediaDeleted: 0, errors: [] } });
+      });
+      return;
+    }
     if (request.method === 'GET' && route === '/api/inspections/insp-7') {
       const inspection = contract<'/api/inspections/{id}', 'get'>()({ success: true, data: { inspection: { id: 'insp-7', status: 'scheduled', date: '2026-11-01T10:00:00Z', inspectorId: 'renderer-user', propertyAddress: '77 Test Photo Lane', clientName: null, clientEmail: null, templateId: null, createdAt: '2026-10-31T10:00:00Z', templateSnapshot: { schemaVersion: 2, sections: [{ id: 'sec_roof', title: 'Roof', items: [{ id: 'itm_cover', label: 'Roof cover', type: 'rich' }] }] } }, primaryReportId: null, publishedVersionNumber: report.version, editingAgain: report.state === 'editing', contentLocked: report.state === 'locked' } });
       // The app reads these two (src/field/editor-data.ts) and the contract does not list them for this route: kept, and named here so they are

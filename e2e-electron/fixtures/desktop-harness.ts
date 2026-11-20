@@ -38,7 +38,7 @@ export interface DesktopHarness {
   dispose(): Promise<void>;
 }
 
-export async function startDesktopHarness(options: { uploadDelayMs?: number; quitAnswer?: 'quit' | 'stay' } = {}): Promise<DesktopHarness> {
+export async function startDesktopHarness(options: { uploadDelayMs?: number; quitAnswer?: 'quit' | 'stay'; extraEnv?: Record<string, string> } = {}): Promise<DesktopHarness> {
   const userData = await mkdtemp(join(tmpdir(), 'oi-d2-e2e-'));
   const engine = await startRendererEngine({ uploadDelayMs: options.uploadDelayMs, showInspection: true });
   const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
@@ -47,6 +47,7 @@ export async function startDesktopHarness(options: { uploadDelayMs?: number; qui
   environment.OI_RENDERER_ROOT = resolve(DEV_RENDERER);
   environment.OI_E2E_DISABLE_PROTOCOL_REGISTRATION = '1';
   if (options.quitAnswer) environment.OI_E2E_QUIT_ANSWER = options.quitAnswer;
+  if (options.extraEnv) Object.assign(environment, options.extraEnv);
   const errors: string[] = [];
   let app = await launch(environment, errors);
   let page = await app.firstWindow();

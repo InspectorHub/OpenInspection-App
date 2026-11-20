@@ -43,6 +43,13 @@ export interface DataPackageEndpoints {
   rows(id: string, table: string): string;
   media(id: string): string;
   mediaObject(id: string, key: string): string;
+  // Import-side endpoints (E-5/E-6/E-7).
+  importPlan(id: string): string;
+  importPreflight(id: string): string;
+  importBatches(id: string): string;
+  importMedia(id: string, meta: { key: string; sha256: string; bytes: number; contentType: string; entry: string; volume: string }): string;
+  importArchive(id: string): string;
+  revertStep(id: string): string;
 }
 
 /** All data-package endpoints under one verified origin. Unsafe segments throw rather than being encoded. */
@@ -63,6 +70,15 @@ export function dataPackageEndpoints(origin: string): DataPackageEndpoints {
     // The media key is a relative object key (may contain '/'); it is a query
     // value, not a path segment, so encode it rather than rejecting separators.
     mediaObject: (id, key) => `${job(id)}/media/object?key=${encodeURIComponent(key)}`,
+    importPlan: (id) => `${job(id)}/import/plan`,
+    importPreflight: (id) => `${job(id)}/import/preflight`,
+    importBatches: (id) => `${job(id)}/import/batches`,
+    importMedia: (id, m) => `${job(id)}/import/media`
+      + `?key=${encodeURIComponent(m.key)}&sha256=${encodeURIComponent(m.sha256)}`
+      + `&bytes=${m.bytes}&content_type=${encodeURIComponent(m.contentType)}`
+      + `&entry=${encodeURIComponent(m.entry)}&volume=${encodeURIComponent(m.volume)}`,
+    importArchive: (id) => `${job(id)}/import/archive`,
+    revertStep: (id) => `${job(id)}/revert/step`,
   };
 }
 

@@ -164,7 +164,10 @@ const bridge: DesktopBridge = {
     return remove;
   } },
   app: { onActiveChange: (listener) => listen(EVENT_CHANNELS.activeChange, listener) },
-  dialogs: { saveExport: (fileUri, suggestedName) => call(CHANNELS.dialogs.saveExport, fileUri, suggestedName) },
+  dialogs: {
+    saveExport: (fileUri, suggestedName) => call(CHANNELS.dialogs.saveExport, fileUri, suggestedName),
+    pickPackage: () => call(CHANNELS.dialogs.pickPackage),
+  },
   gallery: { save: (name, data) => call(CHANNELS.gallery.save, name, data) },
   updater: {
     state: () => call(CHANNELS.updater.state),
@@ -189,7 +192,10 @@ const bridge: DesktopBridge = {
     cancelExport: () => call(CHANNELS.dataPackage.cancelExport),
     pauseExport: () => call(CHANNELS.dataPackage.pauseExport),
     resumeExport: () => call(CHANNELS.dataPackage.resumeExport),
+    startImport: (request) => call(CHANNELS.dataPackage.startImport, request),
+    revertImport: (request) => call(CHANNELS.dataPackage.revertImport, request),
     onEvent: (listener) => listen(EVENT_CHANNELS.dataPackageEvent, listener),
+    onImportEvent: (listener) => listen(EVENT_CHANNELS.dataPackageImportEvent, listener),
   },
 };
 

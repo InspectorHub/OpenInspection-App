@@ -38,6 +38,21 @@ describe('data-package config: endpoints', () => {
       expect(() => dataPackageEndpoints(bad)).toThrow();
     }
   });
+
+  it('builds the import media query with all six metadata fields URL-encoded', () => {
+    const ep = dataPackageEndpoints(ORIGIN);
+    const url = new URL(ep.importMedia('job-1', {
+      key: 'inspections/i1/photos/a b.jpg', sha256: 'f'.repeat(64), bytes: 12,
+      contentType: 'image/jpeg', entry: 'media/a b.jpg', volume: 'media-001.zip',
+    }));
+    expect(url.pathname).toBe(`${DATA_PACKAGE_BASE_PATH}/jobs/job-1/import/media`);
+    expect(url.searchParams.get('key')).toBe('inspections/i1/photos/a b.jpg');
+    expect(url.searchParams.get('sha256')).toBe('f'.repeat(64));
+    expect(url.searchParams.get('bytes')).toBe('12');
+    expect(url.searchParams.get('content_type')).toBe('image/jpeg');
+    expect(url.searchParams.get('entry')).toBe('media/a b.jpg');
+    expect(url.searchParams.get('volume')).toBe('media-001.zip');
+  });
 });
 
 describe('data-package config: X-Dp-Budget header', () => {

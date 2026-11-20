@@ -13,6 +13,7 @@ import { ExternalLink } from './settings/ExternalLink';
 import { GallerySection } from './settings/GallerySection';
 import { ImportEntry } from './settings/ImportEntry';
 import { ExportDataPackageSection } from './settings/ExportDataPackageSection';
+import { ImportDataPackageSection } from './settings/ImportDataPackageSection';
 import { InspectionSection } from './settings/InspectionSection';
 import { NotificationsSection } from './settings/NotificationsSection';
 import { SyncSection } from './settings/SyncSection';
@@ -102,12 +103,20 @@ export function Settings({ services, origin, stack, onBack, onExport, onImport, 
         <ClearLocalDataControl services={services} origin={origin} onCleared={onCleared} onWiping={onWiping} />
       </Section>
       {desktop !== undefined && (
-        <ExportDataPackageSection
-          origin={origin}
-          getBearer={() => services.tokens.getAccessToken(origin)}
-          deviceLabel="desktop"
-          clientKind="desktop-windows"
-        />
+        <>
+          <ExportDataPackageSection
+            origin={origin}
+            getBearer={() => services.tokens.getAccessToken(origin)}
+            deviceLabel="desktop"
+            clientKind="desktop-windows"
+          />
+          <ImportDataPackageSection
+            origin={origin}
+            getBearer={() => services.tokens.getAccessToken(origin)}
+            deviceLabel="desktop"
+            clientKind="desktop-windows"
+          />
+        </>
       )}
       <Section title="Account">
         <SignOutControl services={services} origin={origin} onSignedOut={onSignedOut} />

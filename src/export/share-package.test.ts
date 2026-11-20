@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IpcError, type DesktopBridge } from '../../electron/shared/ipc-contract.ts';
+import { IpcError } from '../../electron/shared/ipc-contract.ts';
 import type { ClientPlatform } from '../app/compose';
 import { writeAndShare } from './share-package';
 import { createExportFiles, createFakeSharer, createManualTimers } from './test-support/world';
@@ -29,7 +29,7 @@ describe('writeAndShare by platform', () => {
     const removeCache = files.removeCache.bind(files);
     let removeCount = 0;
     files.removeCache = async (name) => { removeCount += 1; await removeCache(name); };
-    const sharer = createDesktopSharer({ dialogs: { saveExport: async () => { throw new IpcError('disk-full'); } } } as Pick<DesktopBridge, 'dialogs'>);
+    const sharer = createDesktopSharer({ dialogs: { saveExport: async () => { throw new IpcError('disk-full'); } } });
     await expect(writeAndShare({ files, sharer, platform: 'windows' }, 'export.zip', chunks())).rejects.toThrow('The share sheet could not be opened');
     expect(removeCount).toBe(1);
     expect(files.cacheNames()).toEqual([]);
