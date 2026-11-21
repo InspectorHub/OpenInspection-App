@@ -167,7 +167,7 @@ jobs:
           $files = @('release-win/win-unpacked/InspectorHub.exe', 'release-win/win-unpacked/resources/heic-helper/win-heic-helper.exe') + @(Get-ChildItem -LiteralPath 'release-win' -Filter 'InspectorHub-Setup-*.exe' -File | ForEach-Object { $_.FullName })
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file
-            if ($signature.Status.ToString() -ne $expected) { throw "Unexpected Authenticode status for $file: $($signature.Status)" }
+            if ($signature.Status.ToString() -ne $expected) { throw "Unexpected Authenticode status for ${file}: $($signature.Status)" }
             if ($env:OI_WINDOWS_SIGNING -eq 'none' -and $signature.Status.ToString() -ne 'NotSigned') { throw "Unsigned pilot unexpectedly signed: $file" }
           }
           $publisher = if ($env:OI_WINDOWS_SIGNING -eq 'azure') { (Get-AuthenticodeSignature -LiteralPath 'release-win/win-unpacked/InspectorHub.exe').SignerCertificate.Subject } else { 'NotSigned (pilot)' }
