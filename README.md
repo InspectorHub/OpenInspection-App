@@ -4,7 +4,7 @@ The offline-first native client for [OpenInspection](https://github.com/Inspecto
 
 - App ID: `io.inspectorhub.app`
 - Stack: Vite, React 19, TypeScript, Capacitor 8
-- API types are generated from the engine's `contracts/native-contract.openapi.json`
+- API types are generated from the engine's [native contract](https://github.com/InspectorHub/OpenInspection/blob/main/contracts/native-contract.openapi.json)
 
 ## Getting started
 

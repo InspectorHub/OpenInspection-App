@@ -26,6 +26,8 @@
     "check:electron-bundle": "node scripts/check-electron-bundle.mjs",
     "test:e2e:electron": "playwright test -c e2e-electron/playwright.config.ts",
     "check:bundle": "node scripts/check-release-bundle.mjs",
+    "lint:docs-claims": "node scripts/check-doc-claims.mjs --baseline --against HEAD",
+    "test:docs-claims": "node --test scripts/check-doc-claims.test.mjs",
     "test": "vitest run",
     "hooks:install": "git config core.hooksPath .githooks && node -e \"const fs=require('fs');for(const f of fs.readdirSync('.githooks'))fs.chmodSync('.githooks/'+f,0o755)\"",
     "cap:sync": "cap sync",

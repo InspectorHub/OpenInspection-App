@@ -42,6 +42,8 @@ jobs:
             exit 1
           fi
       - run: npm ci
+      - run: npm run test:docs-claims
+      - run: npm run lint:docs-claims
       - run: npm run typecheck
       - run: npx vitest run
       - run: npm run build
