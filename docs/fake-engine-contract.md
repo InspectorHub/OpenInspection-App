@@ -4,9 +4,9 @@ The golden flows (Android G2 to G4), the Electron end-to-end tests and several u
 
 ## The contract
 
-The real engine's contract is `contracts/native-contract.openapi.json` in the engine repository (`InspectorHub/OpenInspection`). It is generated from the engine's route definitions (the engine's native:contract script), not written by hand. These engine-side checks keep that file current. They were read from the engine's scripts and test headers, and were not run for this page:
+The real engine's contract is the [native contract file](https://github.com/InspectorHub/OpenInspection/blob/main/contracts/native-contract.openapi.json) in the engine repository (`InspectorHub/OpenInspection`). It is generated from the engine's route definitions (the engine's `native:contract` script), not written by hand. These engine-side checks keep that file current. They were read from the engine's scripts and test headers, and were not run for this page:
 
-- `tests/unit/native/contract-drift.spec.ts` regenerates the document and fails when the committed file is stale.
+- The engine's [contract drift test](https://github.com/InspectorHub/OpenInspection/blob/main/tests/unit/native/contract-drift.spec.ts) regenerates the document and fails when the committed file is stale.
 - `lint:native-contract` (push rung) checks that the registry of endpoints the native app calls and the committed file agree.
 - CI diffs the file against the base branch with oasdiff.
 
@@ -43,7 +43,7 @@ Without the variable the check is skipped, and the skip is visible in the test o
 
 The contract lists none of these, **and the real engine does return all three** (checked 2026-11-02 against engine commit `e9fc7a5b`):
 
-- Code: the handler of `GET /api/inspections/{id}` (`server/api/inspections/core.ts`) answers with the whole `inspections` row (`...result`), and `propertyType` and `reportStatus` are columns of that table (`server/lib/db/schema/inspection/core.ts`). The report-data service builds every item with `type: item.type ?? 'rich'` (`server/services/inspection/inspection-report.service.ts`), and the route returns that result as it is. Neither route validates its answer against the response schema.
+- Code: the handler of `GET /api/inspections/{id}` ([route](https://github.com/InspectorHub/OpenInspection/blob/e9fc7a5b/server/api/inspections/core.ts)) answers with the whole `inspections` row (`...result`), and `propertyType` and `reportStatus` are columns of that table ([schema](https://github.com/InspectorHub/OpenInspection/blob/e9fc7a5b/server/lib/db/schema/inspection/core.ts)). The report-data service builds every item with `type: item.type ?? 'rich'` ([service](https://github.com/InspectorHub/OpenInspection/blob/e9fc7a5b/server/services/inspection/inspection-report.service.ts)), and the route returns that result as it is. Neither route validates its answer against the response schema.
 - Run time: a throwaway probe in the engine's own unit-test setup (real `InspectionService`, the real table definitions over an in-memory database; not committed) asked for an inspection with `property_type = single_family` and a template item with no type. `getInspection` returned `propertyType: "single_family"` and `reportStatus: "in_progress"`; `getReportData` returned an item with `type: "rich"`. The probe ran the service layer, not the HTTP route, so the route's own steps (the money projection, the readable-snapshot step) were not exercised; the code shows they do not remove these fields.
 
 So the contract under-documents these answers: the item in `report-data` also carries, among others, `parentId`, `ratingOptions`, `tabs`, `naKind`, `notInspectedReason`, `value` and `resolvedTabs`, none of which the contract lists. The app is not reading fields that are absent. The cost is that a change to any of them reaches the app with no contract diff to warn about it. Documenting them is a change to the engine's response schemas (and a regenerated contract), which belongs in the engine repository.

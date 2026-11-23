@@ -148,6 +148,12 @@ Import boundaries, enforced by `src/electron-boundaries.test.ts`:
 - `electron/` imports only a short allowlist of pure `src` modules (database, schema, path helpers, callback constants, media types).
 
 The local database uses `better-sqlite3-multiple-ciphers`, which ships prebuilt binaries for Electron's N-API ABI; no native compiler is needed.
+
+### Local SQLite schema changes
+
+The app uses a versioned migration list in `src/platform/schema.ts`; it does not use Drizzle migrations or a Drizzle metadata journal. `MIGRATIONS` is the source of truth for both the Capacitor SQLite upgrade statements and the SQL.js test database. Keep migration versions contiguous and ascending. Once a schema version has shipped, do not edit its migration to add a column: add a new migration at the next version instead. In particular, `ALTER TABLE ... ADD COLUMN` needs an idempotency guard because the SQLite plugin may finish the statements before persisting the new schema version, causing that migration to run again after an interruption.
+
+The server address form in `src/ui/ServerSetup.tsx` handles submission through its `onSubmit` callback. If code needs to trigger that form programmatically, use `requestSubmit()` so the normal submit event and handler run; do not use `form.submit()`, which bypasses the submit event.
 
 The desktop shell serves local renderer files from `https://localhost`. Its page, script, and Worker responses share one strict CSP, including in development: neither `unsafe-eval` nor `wasm-unsafe-eval` is allowed. An earlier plan relaxed the Worker policy for a bundled WASM HEIC decoder. The 2026-10-27 revision moved decoding to a main-process system helper and removed that relaxation entirely. A future bundled decoder (L2) must revisit this decision together with the CSP tests.
 
