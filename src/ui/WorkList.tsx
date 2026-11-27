@@ -6,7 +6,7 @@ import type { Network } from '../platform/network';
 import { DialogFocusFallback } from './ConfirmDialog';
 import { Button, Notice } from './kit';
 import { useActionLatch } from './latch';
-import { LOAD_FAILED, PIN_REFUSED, REFRESH_THREW_TEXT, refreshSummaryText } from './worklist/copy';
+import { LOAD_FAILED, PIN_REFUSED, REFRESH_THREW_TEXT, pinRefusalText, refreshSummaryText } from './worklist/copy';
 import { FailedItemsPanel } from './worklist/FailedItemsPanel';
 import { GROUP_ORDER, GROUP_TITLES, type GroupKey } from './worklist/format';
 import { InspectionRow } from './worklist/InspectionRow';
@@ -141,13 +141,12 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
 
   async function togglePin(row: WorkListRow): Promise<void> {
     setNote(null);
-    let done = false;
     try {
-      done = await setPinned(stack.db, stack.account, row.id, !row.pinned);
+      const outcome = await setPinned(stack.db, stack.account, row.id, !row.pinned);
+      if (!outcome.ok) setNote(pinRefusalText(outcome.reason));
     } catch {
-      done = false;
+      setNote(PIN_REFUSED);
     }
-    if (!done) setNote(PIN_REFUSED);
     await model.reload();
   }
 

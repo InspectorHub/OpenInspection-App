@@ -1,5 +1,6 @@
 import type { DiscardMediaOutcome, DiscardOutboxOutcome, RemoveOutcome } from '../../offline/user-actions';
 import type { DiscardResult } from '../../offline/replay';
+import type { PinRefusalReason } from '../../offline/pins';
 import type { RefreshErrorCode, RefreshHalt, RefreshSummary } from '../../offline/work-package';
 import type { OutboxErrorCode } from '../../platform/schema';
 
@@ -226,6 +227,22 @@ export function discardChangeFailureText(outcome: Exclude<DiscardResult, { kind:
 }
 export const DISCARD_THREW = 'Could not discard this change. Try again.';
 export const PIN_REFUSED = 'This inspection cannot be pinned right now.';
+
+/** The sentence for a pin refusal, naming the reason instead of one fixed line. */
+export function pinRefusalText(reason: PinRefusalReason): string {
+  switch (reason) {
+    case 'not_confirmed':
+      return "This inspection hasn't finished downloading yet — try again when it's Downloaded.";
+    case 'quarantined':
+      return 'This inspection is quarantined, so it cannot be pinned.';
+    case 'purging':
+      return 'This inspection is being removed, so it cannot be pinned.';
+    case 'not_found':
+      return 'This inspection is no longer on this device.';
+    case 'not_an_inspection':
+      return PIN_REFUSED;
+  }
+}
 export const LOAD_FAILED = 'Could not read the work list from this device.';
 export const COUNTS_FAILED = 'Could not check what is on this device. Close this and try again.';
 

@@ -212,7 +212,7 @@ describe('WorkList: pin', () => {
     const pin = within(await rowOf('a')).getByRole('button', { name: /^Pin/ });
     await w.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = 'a'");
     await userEvent.setup().click(pin);
-    expect(await screen.findByText('This inspection cannot be pinned right now.')).toBeInTheDocument();
+    expect(await screen.findByText('This inspection is quarantined, so it cannot be pinned.')).toBeInTheDocument();
     expect((await w.db.query<{ pinned: number }>('SELECT pinned FROM work_package'))[0]?.pinned).toBe(0);
   });
 });
