@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { markOrphaned } from '../offline/outbox';
 import { renderList, withStatus } from './test-support/worklist-render';
-import { ALICE, at, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, type ListWorld } from './test-support/worklist-world';
+import { ALICE, at, createListWorld, NOW, seedCached, seedMedia, seedPhotoCopy, seedPkg, seedQueued, seedRefreshError, seedResults, type ListWorld } from './test-support/worklist-world';
 
 let w: ListWorld;
 
@@ -212,8 +212,83 @@ describe('WorkList: pin', () => {
     const pin = within(await rowOf('a')).getByRole('button', { name: /^Pin/ });
     await w.db.run("UPDATE work_package SET quarantine_source = 'reconcile_missing' WHERE inspection_id = 'a'");
     await userEvent.setup().click(pin);
-    expect(await screen.findByText('This inspection cannot be pinned right now.')).toBeInTheDocument();
+    expect(await screen.findByText('This inspection is quarantined, so it cannot be pinned.')).toBeInTheDocument();
     expect((await w.db.query<{ pinned: number }>('SELECT pinned FROM work_package'))[0]?.pinned).toBe(0);
+  });
+});
+
+describe('WorkList: download one', () => {
+  it('a row that is not downloaded offers Download; a downloaded row does not', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    await seedPkg(w.db, { id: 'b', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'b', 'B');
+    renderList(w.stack);
+    expect(within(await rowOf('a')).getByRole('button', { name: /^Download / })).toBeInTheDocument();
+    expect(within(await rowOf('b')).queryByRole('button', { name: /^Download / })).toBeNull();
+  });
+
+  it('downloading one inspection asks the refresher for that inspection only', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    const one = vi.spyOn(w.stack.refresher, 'refreshInspection').mockResolvedValue({ kind: 'refreshed' });
+    const all = vi.spyOn(w.stack.refresher, 'refresh');
+    renderList(w.stack);
+    await userEvent.setup().click(within(await rowOf('a')).getByRole('button', { name: /^Download / }));
+    expect(one).toHaveBeenCalledExactlyOnceWith('a');
+    expect(all).not.toHaveBeenCalled();
+  });
+
+  it('a failed one-download says so and leaves the button', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    vi.spyOn(w.stack.refresher, 'refreshInspection').mockResolvedValue({ kind: 'failed' });
+    renderList(w.stack);
+    await userEvent.setup().click(within(await rowOf('a')).getByRole('button', { name: /^Download / }));
+    expect(await screen.findByText('Could not download this inspection. Try again.')).toBeInTheDocument();
+    expect(within(await rowOf('a')).getByRole('button', { name: /^Download / })).toBeInTheDocument();
+  });
+
+  it('a busy one-download says another step is running', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    vi.spyOn(w.stack.refresher, 'refreshInspection').mockResolvedValue({ kind: 'busy' });
+    renderList(w.stack);
+    await userEvent.setup().click(within(await rowOf('a')).getByRole('button', { name: /^Download / }));
+    expect(await screen.findByText('Another sync step is running. Try again in a moment.')).toBeInTheDocument();
+  });
+});
+
+describe('WorkList: server photo badge', () => {
+  it('says Photos downloaded once every photo the report names has a copy', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'a', 'A');
+    await seedResults(w.db, 'a', ['k1', 'k2']);
+    await seedPhotoCopy(w.db, 'a', 'k1');
+    await seedPhotoCopy(w.db, 'a', 'k2');
+    renderList(w.stack);
+    expect(within(await rowOf('a')).getByText('Photos downloaded')).toBeInTheDocument();
+  });
+
+  it('counts the copies in between, and says none when there are none', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'a', 'A');
+    await seedResults(w.db, 'a', ['k1', 'k2', 'k3']);
+    await seedPhotoCopy(w.db, 'a', 'k1');
+    await seedPhotoCopy(w.db, 'a', 'k2');
+    await seedPkg(w.db, { id: 'b', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'b', 'B');
+    await seedResults(w.db, 'b', ['k1', 'k2']);
+    renderList(w.stack);
+    expect(within(await rowOf('a')).getByText('2 of 3 photos downloaded')).toBeInTheDocument();
+    expect(within(await rowOf('b')).getByText('Photos not downloaded')).toBeInTheDocument();
+  });
+
+  it('says nothing about photos when the report is not on the device, or names none', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'a', 'A');
+    await seedPkg(w.db, { id: 'b', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'b', 'B');
+    await seedResults(w.db, 'b', []);
+    renderList(w.stack);
+    expect(within(await rowOf('a')).queryByText(/Photos/)).toBeNull();
+    expect(within(await rowOf('b')).queryByText(/Photos/)).toBeNull();
   });
 });
 

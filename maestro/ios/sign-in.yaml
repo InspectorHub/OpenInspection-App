@@ -21,17 +21,23 @@ appId: io.inspectorhub.app
 - extendedWaitUntil:
     visible: "https://app.inspectorhub.io"
     timeout: 30000
-- tapOn:
-    point: "57%,24%"
-- eraseText: 80
-- inputText: "${SERVER_URL}"
-- hideKeyboard
-# The field must now hold exactly the engine's address (an assertion on text matches the whole text). On a cold
-# simulator the WebView can render the typed value late, so wait for it before the whole-text assertion rather than
-# failing at once (assertVisible on its own has no wait).
-- extendedWaitUntil:
-    visible: "${SERVER_URL}"
-    timeout: 30000
+# On a cold simulator the keystrokes can be silently lost even though Maestro
+# reports tap/erase/input as completed, so retry the whole input until the
+# field holds the address (the same retry pattern as the Connect step below).
+- retry:
+    maxRetries: 2
+    commands:
+      - tapOn:
+          point: "57%,24%"
+      - eraseText: 80
+      - inputText: "${SERVER_URL}"
+      - hideKeyboard
+      # The field must now hold exactly the engine's address (an assertion on text matches the whole text). On a cold
+      # simulator the WebView can render the typed value late, so wait for it before the whole-text assertion rather than
+      # failing at once (assertVisible on its own has no wait).
+      - extendedWaitUntil:
+          visible: "${SERVER_URL}"
+          timeout: 30000
 - assertVisible: "${SERVER_URL}"
 - tapOn: "Continue"
 - assertVisible: "Connect to this server?"

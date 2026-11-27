@@ -6,9 +6,9 @@ import { WorkListHeader } from './WorkListHeader';
 
 afterEach(cleanup);
 
-function header(downloading: boolean, summary: string | null = null) {
+function header(downloading: boolean, summary: string | null = null, progress: { done: number; total: number } | null = null, etaMs: number | null = null, failedLines: string[] = []) {
   return render(
-    <WorkListHeader updatedAt={1000} now={2000} locale="en-US" chip={null} downloading={downloading} summary={summary} onDownload={() => undefined} headingRef={() => undefined} onSettings={() => undefined} settingsRef={() => undefined} />,
+    <WorkListHeader updatedAt={1000} now={2000} locale="en-US" chip={null} downloading={downloading} progress={progress} etaMs={etaMs} failedLines={failedLines} summary={summary} onDownload={() => undefined} headingRef={() => undefined} onSettings={() => undefined} settingsRef={() => undefined} />,
   );
 }
 
@@ -58,5 +58,37 @@ describe('downloading today\'s work', () => {
     const inner = screen.getByTestId('download-progress').firstElementChild;
     expect(inner?.className).toContain('motion-safe:animate-pulse');
     expect(inner?.className).not.toMatch(/(^|\s)animate-/);
+  });
+
+  it('once the list is read the bar is determinate: its width is done of total and it stops pulsing', () => {
+    header(true, null, { done: 3, total: 12 });
+    const inner = screen.getByTestId('download-progress').firstElementChild as HTMLElement;
+    expect(inner.style.width).toBe('25%');
+    expect(inner.className).not.toContain('animate-pulse');
+  });
+
+  it('the live line counts done of total, and adds the ETA once there is one', () => {
+    header(true, null, { done: 3, total: 12 });
+    expect(screen.getByTestId('refresh-summary')).toHaveTextContent('Downloading… 3 of 12');
+    cleanup();
+    header(true, null, { done: 3, total: 12 }, 20_000);
+    expect(screen.getByTestId('refresh-summary')).toHaveTextContent('Downloading… 3 of 12 · about 20 seconds left');
+  });
+
+  it('the live line still says only Downloading… while the list is being read', () => {
+    header(true, null, { done: 0, total: 0 });
+    expect(screen.getByTestId('refresh-summary')).toHaveTextContent('Downloading…');
+  });
+
+  it('a finished download lists the inspections it could not fetch, under the summary', () => {
+    header(false, 'Updated 2 inspections. 1 could not be downloaded.', null, null, ['12 Oak Street']);
+    const list = screen.getByRole('list', { name: 'Inspections that could not be downloaded' });
+    expect(list).toHaveTextContent('12 Oak Street');
+    expect(screen.getByTestId('refresh-summary')).toHaveTextContent('Updated 2 inspections. 1 could not be downloaded.');
+  });
+
+  it('no list is rendered when nothing failed', () => {
+    header(false, 'Updated 2 inspections.');
+    expect(screen.queryByRole('list', { name: 'Inspections that could not be downloaded' })).toBeNull();
   });
 });

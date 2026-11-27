@@ -250,13 +250,10 @@ export function createLocalDataSource(deps: LocalDataSourceDeps): FieldDataSourc
     const inner = sendPhoto(inspectionId, doc);
     return {
       // Refused before anything is stored or sent only when the app itself must be updated. A server that is too old
-      // does not refuse: the photo is kept like an offline one (row and document entry) and waits for the server to be
-      // updated; the sentence it answers with names that, not the lock.
+      // does not refuse: the photo — and a crop or an annotation, which are kept like one — is stored on the device
+      // and waits for the server to be updated; the sentence it answers with names that, not the lock.
       upload: async (rec) => {
         if (!canEdit()) return { ok: false, error: MESSAGES.editingOff };
-        // A photo (of an item or of a defect row) is kept; a crop and an annotation keep nothing, so they still stop before a request.
-        const keepsPhoto = rec.kind === 'photo';
-        if (!keepsPhoto && stack.serverTooOld?.() === true) return { ok: false, error: MESSAGES.serverTooOld };
         const result = await inner.upload(rec);
         return !result.ok && 'kept' in result && result.kept === true && stack.serverTooOld?.() === true ? { ...result, error: MESSAGES.serverTooOld } : result;
       },

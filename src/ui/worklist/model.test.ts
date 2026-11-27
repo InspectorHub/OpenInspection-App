@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { accountKey, markOrphaned } from '../../offline/outbox';
 import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
-import { at, ALICE, BOB, createListWorld, NOW, seedCached, seedMedia, seedPkg, seedQueued, seedRefreshError, seedTenantName, type ListWorld } from '../test-support/worklist-world';
+import { at, ALICE, BOB, createListWorld, NOW, seedCached, seedMedia, seedPhotoCopy, seedPkg, seedQueued, seedRefreshError, seedResults, seedTenantName, type ListWorld } from '../test-support/worklist-world';
 import { readWorkListSnapshot } from './model';
 
 let w: ListWorld;
@@ -314,5 +314,44 @@ describe('readWorkListSnapshot: a photo that failed but is still being retried i
     await seedMedia(w.db, 'defect', 'a', 'failed', { meta: defectMeta });
     const listed = Object.fromEntries((await snapshot()).failedMedia.map((m) => [m.pendingId, m.target]));
     expect(listed).toEqual({ item: 'item', defect: 'defect' });
+  });
+});
+
+describe('readWorkListSnapshot: server photos', () => {
+  it('counts the report photos against the copies on the device', async () => {
+    await seedPkg(w.db, { id: 'a', refreshedAt: NOW });
+    await seedCached(w.db, 'a', '12 Oak Street');
+    await seedResults(w.db, 'a', ['k1', 'k2', 'k3']);
+    await seedPhotoCopy(w.db, 'a', 'k1');
+    await seedPhotoCopy(w.db, 'a', 'k2', 'thumb');
+    expect(await row('a')).toMatchObject({ serverPhotos: { total: 3, cached: 2 } });
+  });
+
+  it('a copy at any size counts: a thumbnail-only photo is on the device', async () => {
+    await seedPkg(w.db, { id: 'a', refreshedAt: NOW });
+    await seedCached(w.db, 'a', '12 Oak Street');
+    await seedResults(w.db, 'a', ['k1']);
+    await seedPhotoCopy(w.db, 'a', 'k1', 'thumb');
+    expect(await row('a')).toMatchObject({ serverPhotos: { total: 1, cached: 1 } });
+  });
+
+  it('a report with no photos says so with a zero total, not unknown', async () => {
+    await seedPkg(w.db, { id: 'a', refreshedAt: NOW });
+    await seedCached(w.db, 'a', '12 Oak Street');
+    await seedResults(w.db, 'a', []);
+    expect(await row('a')).toMatchObject({ serverPhotos: { total: 0, cached: 0 } });
+  });
+
+  it('a row whose report is not on the device cannot say: null, not zero', async () => {
+    await seedPkg(w.db, { id: 'a' });
+    await seedPhotoCopy(w.db, 'a', 'k1');
+    expect(await row('a')).toMatchObject({ serverPhotos: null });
+  });
+
+  it('a results body that does not parse is skipped, never thrown', async () => {
+    await seedPkg(w.db, { id: 'a', refreshedAt: NOW });
+    await seedCached(w.db, 'a', '12 Oak Street');
+    await w.db.run("INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, '/api/inspections/a/results', NULL, 'not json', 1, 'a')", [accountKey(ALICE)]);
+    expect(await row('a')).toMatchObject({ serverPhotos: null });
   });
 });

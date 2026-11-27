@@ -52,6 +52,8 @@ export const MESSAGES = {
   photoGone: 'The photo this change belongs to is no longer in the inspection.',
   photoKept: 'The photo is saved on this device but has not been uploaded yet.',
   photoKeptDefect: 'The photo is saved on this device but has not been uploaded or added to the defect yet.',
+  cropKept: 'The crop is saved on this device but has not been uploaded yet.',
+  annotationKept: 'The annotation is saved on this device but has not been uploaded yet.',
   unreachable: 'The app could not reach the server. Try again.',
   videoRemovalUnavailable: 'Removing a video is not available in the app yet.',
   videoTooLarge: 'This video is larger than 200 MB and cannot be uploaded.',
@@ -94,9 +96,10 @@ export function isNeedsConnection(result: CommandResult<unknown>): boolean {
 }
 
 /** The notice for photos kept on the device after an upload failed; the count is shown only when more than one was kept. */
-export function photosKeptMessage(kind: 'item' | 'defect', count: number): string {
-  if (count <= 1) return kind === 'defect' ? MESSAGES.photoKeptDefect : MESSAGES.photoKept;
-  return kind === 'defect'
-    ? `${count} photos are saved on this device but have not been uploaded or added to their defects yet.`
-    : `${count} photos are saved on this device but have not been uploaded yet.`;
+export function photosKeptMessage(kind: 'item' | 'defect' | 'crop' | 'annotate', count: number): string {
+  if (count <= 1) return kind === 'defect' ? MESSAGES.photoKeptDefect : kind === 'crop' ? MESSAGES.cropKept : kind === 'annotate' ? MESSAGES.annotationKept : MESSAGES.photoKept;
+  if (kind === 'defect') return `${count} photos are saved on this device but have not been uploaded or added to their defects yet.`;
+  if (kind === 'crop') return `${count} crops are saved on this device but have not been uploaded yet.`;
+  if (kind === 'annotate') return `${count} annotations are saved on this device but have not been uploaded yet.`;
+  return `${count} photos are saved on this device but have not been uploaded yet.`;
 }

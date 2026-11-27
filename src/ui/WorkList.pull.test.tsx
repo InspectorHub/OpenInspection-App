@@ -50,7 +50,7 @@ describe('pulling the list down', () => {
     const refresh = await ready();
     pull(120);
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
-    expect(refresh).toHaveBeenCalledWith({ reason: 'manual' });
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ reason: 'manual' }));
     expect(await screen.findByText('Updated 2 inspections.')).toBeInTheDocument();
   });
 

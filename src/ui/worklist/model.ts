@@ -6,6 +6,7 @@ import { MAX_UPLOAD_ATTEMPTS } from '../../media/native-uploader';
 import type { MediaStore } from '../../media/store';
 import type { Db } from '../../platform/db';
 import { addressOf } from '../../offline/cached-address';
+import { listPhotoKeys } from '../../field/photo-keys';
 import { loadTenantName } from '../../offline/lock-state';
 import { accountKey, listOutbox, outboxCountsByInspection, sameAccount, type Account } from '../../offline/outbox';
 import { readPackageRows, readPackageStates, type RefreshErrorCode } from '../../offline/package-targets';
@@ -32,6 +33,12 @@ export interface SnapshotSource {
 
 export type Blocked = 'none' | 'quarantined' | 'purging';
 
+/** Server photos of the report: how many it names, and how many have a copy on this device (any size counts). */
+export interface ServerPhotos {
+  total: number;
+  cached: number;
+}
+
 export interface WorkListRow {
   id: string;
   /** The cached address, at most `TITLE_MAX` characters, or null when none is cached. */
@@ -44,6 +51,10 @@ export interface WorkListRow {
   /** A pinned package of this account that is not being removed can always be unpinned, even a quarantined one. */
   canUnpin: boolean;
   downloaded: boolean;
+  /** This one inspection can be downloaded now: confirmed, healthy, and not on the device yet. */
+  canDownload: boolean;
+  /** The report's server photos, and how many are already on the device. Null when the report is not on the device, so the row cannot say. */
+  serverPhotos: ServerPhotos | null;
   lastError: RefreshErrorCode | null;
   /** Made on this device and not yet acknowledged by the server. */
   createdLocally: boolean;
@@ -186,6 +197,34 @@ function isCreateOp(op: string): boolean {
 }
 
 /**
+ * The server photos of the downloaded rows: how many each cached report names, against how many copies the photo
+ * cache holds for it. Only rows whose report is on the device can say; a row without a cached results body is left
+ * out, and a body that does not parse is skipped rather than counted as no photos. A loose photo — uploaded but never
+ * attached to a finding — is not in the results, so it is counted in neither number.
+ */
+async function readServerPhotoStates(db: Db, account: Account, ids: readonly string[]): Promise<Map<string, ServerPhotos>> {
+  const out = new Map<string, ServerPhotos>();
+  if (ids.length === 0) return out;
+  const wanted = new Set(ids);
+  const key = accountKey(account);
+  const cached = new Map<string, number>();
+  for (const row of await db.query<{ inspection_id: string; n: number }>('SELECT inspection_id, COUNT(DISTINCT key) AS n FROM photo_cache WHERE account_key = ? GROUP BY inspection_id', [key])) {
+    cached.set(row.inspection_id, row.n);
+  }
+  for (const row of await db.query<{ package_id: string; body: string }>(`SELECT package_id, body FROM resource_cache WHERE account_key = ? AND key GLOB '/api/inspections/*/results'`, [key])) {
+    if (!wanted.has(row.package_id)) continue;
+    let total: number;
+    try {
+      total = listPhotoKeys(JSON.parse(row.body) as unknown).length;
+    } catch {
+      continue;
+    }
+    out.set(row.package_id, { total, cached: cached.get(row.package_id) ?? 0 });
+  }
+  return out;
+}
+
+/**
  * Everything the screen shows, read from the database (and the stack's own latest outcome) at one moment. Nothing is
  * remembered between calls except the parsed titles, which are keyed by the time the cached row was fetched.
  */
@@ -197,6 +236,8 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
   const outbox = await outboxCountsByInspection(db, { account });
   const media = await readMediaCounts(stack);
   const creates = await readCreateTargets(db);
+  const downloadedIds = [...packages.values()].filter((pkg) => sameAccount(account, pkg.tenant_id, pkg.user_id) && (states.get(pkg.inspection_id)?.cachedResources ?? 0) > 0).map((pkg) => pkg.inspection_id);
+  const serverPhotos = await readServerPhotoStates(db, account, downloadedIds);
   const plan: ReconcilePlan | null = stack.lastPlan();
   const planFresh = plan !== null && !planIsStale(plan, now);
 
@@ -211,6 +252,7 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
     const scheduledAt = pkg.scheduled_at === null ? null : Number(pkg.scheduled_at);
     const namedByPlan = blocked === 'none' && plan !== null && planFresh && namesMassSuspicious(plan, pkg.inspection_id, account);
     const neverSent = blocked === 'none' && !confirmed && !creates.has(pkg.inspection_id);
+    const downloaded = (state?.cachedResources ?? 0) > 0;
     rows.push({
       id: pkg.inspection_id,
       title: titles.get(pkg.inspection_id) ?? null,
@@ -219,7 +261,9 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
       pinned: Number(pkg.pinned) === 1,
       canPin: confirmed && blocked === 'none',
       canUnpin: Number(pkg.pinned) === 1 && blocked !== 'purging',
-      downloaded: (state?.cachedResources ?? 0) > 0,
+      downloaded,
+      canDownload: !downloaded && confirmed && blocked === 'none',
+      serverPhotos: serverPhotos.get(pkg.inspection_id) ?? null,
       lastError: state?.lastError ?? null,
       createdLocally: !confirmed,
       blocked,

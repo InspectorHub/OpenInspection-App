@@ -36,6 +36,17 @@ export async function seedCached(db: Db, id: string, address: string | null, fet
   await db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, ?, ?, ?)', [accountKey(ALICE), `/api/inspections/${id}`, body, fetchedAt, id]);
 }
 
+/** A cached results body naming these server photo keys, as the refresher stores it. */
+export async function seedResults(db: Db, id: string, keys: string[]): Promise<void> {
+  const body = JSON.stringify({ success: true, data: { results: { '_default:item-1': { photos: keys.map((key) => ({ key })) } } } });
+  await db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, ?, ?, ?)', [accountKey(ALICE), `/api/inspections/${id}/results`, body, NOW, id]);
+}
+
+/** One copy of a server photo in the photo cache, as if the editor had shown it. */
+export async function seedPhotoCopy(db: Db, id: string, key: string, size = 'original'): Promise<void> {
+  await db.run('INSERT INTO photo_cache (hash, account_key, inspection_id, key, size, path, bytes, content_type, last_used_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [`${id}|${key}|${size}`, accountKey(ALICE), id, key, size, `photo-cache/${id}-${key}.jpg`, 100, 'image/jpeg', NOW, NOW]);
+}
+
 export async function seedRefreshError(db: Db, id: string, code: string): Promise<void> {
   await db.run('INSERT INTO resource_cache (account_key, key, etag, body, fetched_at, package_id) VALUES (?, ?, NULL, ?, ?, ?)', [accountKey(ALICE), `$refresh_error:${id}`, code, NOW, id]);
 }

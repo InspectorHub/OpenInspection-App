@@ -149,17 +149,21 @@ sleep "${SMOKE_SETTLE_SECONDS:-8}"
 "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/00-launched.png"
 echo "ok: the app is running, starting part A against $ENGINE_ORIGIN (engine control $CONTROL_URL)"
 
-# Best-effort WKWebView warm-up. The real G5 flow's first heavy WebView render (sign-in -> work list) is the
+# WKWebView warm-up. The real G5 flow's first heavy WebView render (sign-in -> work list) is the
 # slow, flaky step on a cold simulator: it has timed out just past the 90 s assert. Pay that cold-start / JIT
 # cost up front against the light first screen, then relaunch so the OS has paged the app binary in and the
-# second launch starts faster. A warm-up miss is non-fatal: the G5 flow still runs either way.
+# second launch starts faster. A warm-up miss is fatal: a relaunch that silently did not happen leaves the
+# flow typing into a cold WebView, which is the case that drops keystrokes.
 warm_webview() {
   echo "warming the WKWebView before the G5 flow"
   "$TIMEOUT_BIN" -k 2 60 xcrun simctl io "$UDID" screenshot "$OUT/00b-warmup.png" > /dev/null 2>&1 || true
   "$TIMEOUT_BIN" -k 2 120 xcrun simctl terminate "$UDID" "$APP_ID" > /dev/null 2>&1 || true
   launch_app published "$UDID" || true
-  wait_for_app "$UDID" "${SMOKE_RECHECK_SECONDS:-60}" || echo "::warning::warm-up relaunch: app not running; the G5 flow will launch it"
+  wait_for_app "$UDID" "${SMOKE_RECHECK_SECONDS:-60}" || fail "warm-up relaunch: the app is not running"
   sleep "${SMOKE_SETTLE_SECONDS:-8}"
+  # Extra settle after the warm-up relaunch so the WebView content process
+  # finishes its cold start before the flow starts typing into it.
+  sleep "${SMOKE_WARMUP_SETTLE_SECONDS:-5}"
 }
 warm_webview
 

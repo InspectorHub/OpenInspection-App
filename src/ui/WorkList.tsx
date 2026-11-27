@@ -6,7 +6,8 @@ import type { Network } from '../platform/network';
 import { DialogFocusFallback } from './ConfirmDialog';
 import { Button, Notice } from './kit';
 import { useActionLatch } from './latch';
-import { LOAD_FAILED, PIN_REFUSED, REFRESH_THREW_TEXT, refreshSummaryText } from './worklist/copy';
+import type { RefreshProgress } from '../offline/work-package';
+import { LOAD_FAILED, PIN_REFUSED, REFRESH_HALT_TEXT, REFRESH_THREW_TEXT, DOWNLOAD_ONE_BUSY, DOWNLOAD_ONE_FAILED, downloadEtaMs, failedDownloadLines, pinRefusalText, refreshSummaryText } from './worklist/copy';
 import { FailedItemsPanel } from './worklist/FailedItemsPanel';
 import { GROUP_ORDER, GROUP_TITLES, type GroupKey } from './worklist/format';
 import { InspectionRow } from './worklist/InspectionRow';
@@ -103,7 +104,11 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
   const online = useOnline(network);
   const latch = useActionLatch();
   const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState<RefreshProgress | null>(null);
+  const downloadStartedAt = useRef(0);
   const [summary, setSummary] = useState<string | null>(null);
+  const [failedLines, setFailedLines] = useState<string[]>([]);
+  const [downloadingOne, setDownloadingOne] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [removing, setRemoving] = useState<WorkListRow | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -124,14 +129,38 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
 
   async function download(): Promise<void> {
     setDownloading(true);
+    setProgress(null);
+    setFailedLines([]);
     setSummary(null);
     setNote(null);
+    downloadStartedAt.current = now();
     try {
-      setSummary(refreshSummaryText(await stack.refresher.refresh({ reason: 'manual' })));
+      const result = await stack.refresher.refresh({ reason: 'manual', onProgress: (p) => setProgress(p) });
+      setSummary(refreshSummaryText(result));
+      const titles = new Map((snapshot?.rows ?? []).map((r) => [r.id, r.title]));
+      const names = result.failedIds.map((id) => titles.get(id) ?? null).filter((t): t is string => t !== null);
+      setFailedLines(failedDownloadLines(names, result.failed));
     } catch {
       setSummary(REFRESH_THREW_TEXT);
     } finally {
       setDownloading(false);
+      setProgress(null);
+      await model.reload();
+    }
+  }
+
+  async function downloadOne(row: WorkListRow): Promise<void> {
+    setNote(null);
+    setDownloadingOne(row.id);
+    try {
+      const outcome = await stack.refresher.refreshInspection(row.id);
+      if (outcome.kind === 'failed') setNote(DOWNLOAD_ONE_FAILED);
+      else if (outcome.kind === 'busy') setNote(DOWNLOAD_ONE_BUSY);
+      else if (outcome.kind === 'halted') setNote(REFRESH_HALT_TEXT[outcome.reason]);
+    } catch {
+      setNote(DOWNLOAD_ONE_FAILED);
+    } finally {
+      setDownloadingOne(null);
       await model.reload();
     }
   }
@@ -141,13 +170,12 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
 
   async function togglePin(row: WorkListRow): Promise<void> {
     setNote(null);
-    let done = false;
     try {
-      done = await setPinned(stack.db, stack.account, row.id, !row.pinned);
+      const outcome = await setPinned(stack.db, stack.account, row.id, !row.pinned);
+      if (!outcome.ok) setNote(pinRefusalText(outcome.reason));
     } catch {
-      done = false;
+      setNote(PIN_REFUSED);
     }
-    if (!done) setNote(PIN_REFUSED);
     await model.reload();
   }
 
@@ -177,6 +205,9 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
           locale={language}
           chip={connectionChip(online, status)}
           downloading={downloading}
+          progress={progress}
+          etaMs={progress === null ? null : downloadEtaMs(downloadStartedAt.current, progress.done, progress.total, now())}
+          failedLines={failedLines}
           summary={summary}
           onDownload={() => void latch(download)}
           onExport={onExportAll}
@@ -222,6 +253,8 @@ export function WorkList({ stack, onOpenInspection, onExport, onExportAll, netwo
                     locale={language}
                     onOpen={(r) => onOpenInspection?.(r.id)}
                     onTogglePin={(r) => void latch(() => togglePin(r))}
+                    onDownloadOne={(r) => void latch(() => downloadOne(r))}
+                    downloadBusy={downloadingOne === row.id}
                     onRemove={(r) => {
                       trigger.current = document.activeElement;
                       setRemoving(r);

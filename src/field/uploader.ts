@@ -11,8 +11,10 @@ import type { IsBlocked } from '../offline/blocked';
 import type { Files } from '../platform/files';
 import type { PhotoDiagnostic } from '../app/diagnostics';
 import { MESSAGES } from './messages';
+import { createDerivativeUploads } from './uploader-derivatives';
 import { createEntryOps } from './uploader-entries';
 import type { ForegroundUploads } from './uploader-foreground';
+import type { KeptKind } from './kept-notice';
 
 /**
  * `FieldDataSource.media.uploader(inspectionId, doc)`: the one object the editor uploads a photo through, whatever the
@@ -53,9 +55,12 @@ import type { ForegroundUploads } from './uploader-foreground';
  *    would come before that swap and a stop in between would lose the key. Its entry is the editor's, so a failure
  *    appends nothing for it.
  *
- * A crop or an annotation is a foreground Bearer request and keeps nothing when it fails.
+ * A crop or an annotation is a foreground request, and it is kept like a photo: the record (operation + bytes) is
+ * written to the device store before it is sent, so a failure that a later try can mend — the document ahead of the
+ * server, no connection — answers `kept` and the editor's drain sends it again when the document has caught up. Only
+ * a failure no retry can mend (the photo is gone, the bytes will never fit) answers `permanent` and drops the row.
  *
- * It never throws: every failure is `{ ok: false, error }` (plus `kept` when the bytes were kept). `TOO_LARGE` is a stable
+ * It never throws: every failure is `{ ok: false, error }` (plus `kept` when the bytes were kept, `permanent` when no retry can mend it). `TOO_LARGE` is a stable
  * reason code for the editor's localized photo-size guidance; all other returned errors remain fixed safe sentences.
  */
 
@@ -66,8 +71,8 @@ export interface UploaderDeps {
   /** Runs a function against the results document of an inspection; rejects with `BLOCKED` for a blocked inspection. */
   withDoc: WithDoc;
   foreground: ForegroundUploads;
-  /** Called once for every answer that carries `kept`: the photo is on the device and the document names it. Never throws into the answer. */
-  onKept?(inspectionId: string, kind: 'item' | 'defect'): void;
+  /** Called once for every answer that carries `kept`: the photo or the edit is on the device and the document names it. Never throws into the answer. */
+  onKept?(inspectionId: string, kind: KeptKind): void;
   /** Called once for a photo the device could not read (or that held no bytes) and so was not stored: the person must pick it again. Never throws into the answer. */
   onUnreadable?(inspectionId: string): void;
   /** Something that did not stop the answer: a row that could not be removed, an entry that could not be written. */
@@ -188,6 +193,7 @@ function isStoreTrouble(error: unknown): boolean {
 
 export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string, doc: Y.Doc | null) => MediaUploader {
   const entries = createEntryOps({ withDoc: deps.withDoc, timers: deps.timers, onError: deps.onError });
+  const derivatives = createDerivativeUploads({ store: deps.store, foreground: deps.foreground, onError: deps.onError });
 
   /** Tells the diagnostic sink, once, that a photo was answered as a plain failure. Never throws. */
   function lost(site: LossSite, detail: string): void {
@@ -336,9 +342,8 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
       case 'photo':
         return storedPhoto(inspectionId, await withRealType(rec));
       case 'crop':
-        return deps.foreground.crop(rec, doc);
       case 'annotate':
-        return deps.foreground.annotate(rec, doc);
+        return derivatives(inspectionId, rec, doc);
       default:
         // A kind this build does not know (a record from a newer editor): nothing is sent for it.
         return fail(MESSAGES.invalidValue);
@@ -347,7 +352,7 @@ export function createUploaderFactory(deps: UploaderDeps): (inspectionId: string
 
   function announceKept(inspectionId: string, rec: PendingMediaRecord): void {
     try {
-      deps.onKept?.(inspectionId, rec.kind === 'photo' && rec.meta.targetType === 'defect' ? 'defect' : 'item');
+      deps.onKept?.(inspectionId, rec.kind === 'photo' ? (rec.meta.targetType === 'defect' ? 'defect' : 'item') : rec.kind);
     } catch (error) {
       deps.onError?.(error);
     }

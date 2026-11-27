@@ -1,6 +1,6 @@
 import { Button } from '../kit';
 import { Badge } from './Badge';
-import { REFRESH_ERROR_TEXT, plural } from './copy';
+import { REFRESH_ERROR_TEXT, plural, serverPhotoBadge } from './copy';
 import { shortTitle, whenLabel } from './format';
 import type { WorkListRow } from './model';
 import { ExportButton, RowQuarantineBanner } from './QuarantineBanner';
@@ -14,6 +14,10 @@ export interface InspectionRowProps {
   onOpen(row: WorkListRow): void;
   onTogglePin(row: WorkListRow): void;
   onRemove(row: WorkListRow): void;
+  /** Downloads this one inspection. When absent, no download button is rendered. */
+  onDownloadOne?: ((row: WorkListRow) => void) | undefined;
+  /** True while this row's own download runs. */
+  downloadBusy?: boolean | undefined;
   /** When absent, no export button and no export wording is rendered. */
   onExport: ((id: string) => void) | undefined;
 }
@@ -26,12 +30,13 @@ function edgeOf(row: WorkListRow): string {
   return row.downloaded ? 'border-l-ih-ok' : 'border-l-ih-border-strong';
 }
 
-export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onExport }: InspectionRowProps) {
+export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onDownloadOne, downloadBusy = false, onExport }: InspectionRowProps) {
   const title = shortTitle(row);
   const inert = row.blocked !== 'none';
   const when = whenLabel(row.scheduledAt, row.group, locale);
   const quarantined = row.blocked === 'quarantined';
   const showCounts = row.blocked === 'none';
+  const photoBadge = row.serverPhotos === null ? null : serverPhotoBadge(row.serverPhotos.total, row.serverPhotos.cached);
   return (
     <li data-testid={`row-${row.id}`} className={`relative flex flex-col gap-3 rounded-ih-card border border-l-4 border-ih-border bg-ih-bg-card p-3 shadow-ih-card ${edgeOf(row)}`}>
       <div className="flex items-start gap-3">
@@ -51,6 +56,18 @@ export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onEx
           </h3>
           {when !== null && <p className="text-sm text-ih-fg-3">{when}</p>}
         </div>
+        {row.canDownload && onDownloadOne !== undefined && (
+          <button
+            type="button"
+            aria-label={`Download ${title}`}
+            aria-busy={downloadBusy ? true : undefined}
+            disabled={downloadBusy ? true : undefined}
+            onClick={() => onDownloadOne(row)}
+            className="relative z-10 min-h-11 min-w-11 rounded-ih-button border border-ih-border-strong bg-ih-bg-card px-3 text-sm font-semibold text-ih-fg-2 focus-visible:outline-none focus-visible:shadow-ih-focus"
+          >
+            Download
+          </button>
+        )}
         {(row.canPin || row.canUnpin) && (
           <button
             type="button"
@@ -67,6 +84,7 @@ export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onEx
         {quarantined && <Badge tone="watch">Quarantined</Badge>}
         {row.blocked === 'purging' && <Badge tone="neutral">Removing…</Badge>}
         {row.downloaded ? <Badge tone="ok">Downloaded</Badge> : <Badge tone="neutral">Not downloaded yet</Badge>}
+        {photoBadge !== null && <Badge tone={photoBadge.tone}>{photoBadge.text}</Badge>}
         {row.pinned && <Badge tone="info">Pinned</Badge>}
         {showCounts && row.waiting > 0 && <Badge tone="watch">{`Waiting to upload: ${String(row.waiting)}`}</Badge>}
         {showCounts && row.needAttention > 0 && <Badge tone="bad">{`${String(row.needAttention)} need attention`}</Badge>}

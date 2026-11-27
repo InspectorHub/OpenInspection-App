@@ -1,6 +1,7 @@
 import type { DiscardMediaOutcome, DiscardOutboxOutcome, RemoveOutcome } from '../../offline/user-actions';
 import type { DiscardResult } from '../../offline/replay';
-import type { RefreshErrorCode, RefreshHalt, RefreshSummary } from '../../offline/work-package';
+import type { PinRefusalReason } from '../../offline/pins';
+import type { RefreshErrorCode, RefreshHalt, RefreshProgress, RefreshSummary } from '../../offline/work-package';
 import type { OutboxErrorCode } from '../../platform/schema';
 
 /**
@@ -63,7 +64,7 @@ export function bytesLabel(n: number): string {
   return n === 1 ? '1 byte' : `${String(n)} bytes`;
 }
 
-const REFRESH_HALT_TEXT: Record<RefreshHalt, string> = {
+export const REFRESH_HALT_TEXT: Record<RefreshHalt, string> = {
   offline: 'You are offline. Connect to the internet to download.',
   rate_limited: 'The server asked the app to slow down. Try again in a few minutes.',
   upgrade_required: 'Update the app to keep syncing.',
@@ -98,7 +99,52 @@ export const SERVER_UNREACHABLE_CHIP_TEXT = "Can't reach the server";
 /** The editor header's short form of the work list's collaboration line: live editing with others failed, the stored document is fine. */
 export const COLLAB_ISSUE_CHIP_TEXT = 'Live collaboration is having trouble';
 
-/** One sentence group for what a download run did. */
+/**
+ * Milliseconds left at the current pace, or null when there is not enough to say: fewer than two inspections done (one
+ * sample is not a pace), nothing left, or no time passed. A remainder under five seconds is not worth announcing.
+ */
+export function downloadEtaMs(startedAt: number, done: number, total: number, now: number): number | null {
+  const remaining = total - done;
+  if (done < 2 || remaining <= 0) return null;
+  const elapsed = now - startedAt;
+  if (elapsed <= 0) return null;
+  const ms = (elapsed / done) * remaining;
+  return ms < 5000 ? null : Math.round(ms);
+}
+
+/** The live line while a download runs: the count, and the ETA once there is a pace to read it from. */
+export function downloadProgressText(progress: RefreshProgress, etaMs: number | null): string {
+  if (progress.total <= 0) return 'Downloading…';
+  const base = `Downloading… ${progress.done} of ${progress.total}`;
+  if (etaMs === null) return base;
+  const seconds = Math.round(etaMs / 1000);
+  if (seconds < 60) return `${base} · about ${seconds} seconds left`;
+  const minutes = Math.round(seconds / 60);
+  return `${base} · about ${minutes === 1 ? '1 minute' : `${minutes} minutes`} left`;
+}
+
+/**
+ * The failed inspections of a finished download, as lines under the summary sentence: at most five names, then the rest
+ * as a count. `titles` are the names the list could show; `failed` is how many failed in all.
+ */
+export function failedDownloadLines(titles: string[], failed: number): string[] {
+  const lines = titles.slice(0, 5);
+  const rest = failed - lines.length;
+  if (rest > 0) lines.push(`and ${rest} more`);
+  return lines;
+}
+
+export const DOWNLOAD_ONE_FAILED = 'Could not download this inspection. Try again.';
+export const DOWNLOAD_ONE_BUSY = 'Another sync step is running. Try again in a moment.';
+
+/** The photo badge for a row whose report is on the device. Null when the report names no photos: nothing to say. */
+export function serverPhotoBadge(total: number, cached: number): { text: string; tone: 'ok' | 'watch' | 'neutral' } | null {
+  if (total <= 0) return null;
+  if (cached >= total) return { text: 'Photos downloaded', tone: 'ok' };
+  if (cached === 0) return { text: 'Photos not downloaded', tone: 'neutral' };
+  return { text: `${String(cached)} of ${String(total)} photos downloaded`, tone: 'watch' };
+}
+
 export function refreshSummaryText(summary: RefreshSummary): string {
   if (summary.halted !== null) {
     const done = summary.refreshed > 0 ? ` Updated ${plural(summary.refreshed, 'inspection', 'inspections')} first.` : '';
@@ -226,6 +272,22 @@ export function discardChangeFailureText(outcome: Exclude<DiscardResult, { kind:
 }
 export const DISCARD_THREW = 'Could not discard this change. Try again.';
 export const PIN_REFUSED = 'This inspection cannot be pinned right now.';
+
+/** The sentence for a pin refusal, naming the reason instead of one fixed line. */
+export function pinRefusalText(reason: PinRefusalReason): string {
+  switch (reason) {
+    case 'not_confirmed':
+      return "This inspection hasn't finished downloading yet — try again when it's Downloaded.";
+    case 'quarantined':
+      return 'This inspection is quarantined, so it cannot be pinned.';
+    case 'purging':
+      return 'This inspection is being removed, so it cannot be pinned.';
+    case 'not_found':
+      return 'This inspection is no longer on this device.';
+    case 'not_an_inspection':
+      return PIN_REFUSED;
+  }
+}
 export const LOAD_FAILED = 'Could not read the work list from this device.';
 export const COUNTS_FAILED = 'Could not check what is on this device. Close this and try again.';
 
