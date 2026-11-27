@@ -5549,6 +5549,8 @@ export interface operations {
                             inspection: components["schemas"]["InspectionRecord"] & {
                                 /** @description Phone number of the primary client, or null when none is recorded. */
                                 clientPhone?: string | null;
+                                /** @description The primary client's preferred language (contacts.locale), or null when unknown. */
+                                clientLocale?: string | null;
                                 /** @description True when the client has signed an agreement for this inspection. */
                                 signedByClient?: boolean;
                             };
