@@ -95,6 +95,8 @@ export interface RefreshSummary {
   notVisible: number;
   /** Inspections whose download failed and whose previous cache was kept. Counts only; the codes are in `readPackageStates`. */
   failed: number;
+  /** The inspections counted in `failed`, in the order they failed, so the summary can name them. */
+  failedIds: string[];
   /** List rows whose id could not safely be put in a path. */
   invalidIds: number;
   requests: number;
@@ -198,7 +200,7 @@ export interface RefresherDeps {
 
 export interface WorkPackageRefresher {
   /** One run. Concurrent calls share it. A person asking (`manual`) re-downloads even what is fresh. */
-  refresh(options?: { reason?: RefreshReason }): Promise<RefreshSummary>;
+  refresh(options?: { reason?: RefreshReason; onProgress?: (progress: RefreshProgress) => void }): Promise<RefreshSummary>;
   /** `refresh` for an event: a trigger during a run makes one more run after it. */
   trigger(reason?: RefreshReason): void;
   /** Runs now, then on the network coming back, on the app coming to the front, on unlock, and on a slow timer. */
@@ -212,6 +214,12 @@ export interface WorkPackageRefresher {
    * Never rejects. It does not list, does not touch other inspections and does not run the globals.
    */
   refreshInspection(inspectionId: string): Promise<InspectionRefresh>;
+}
+
+/** The progress of one download run: inspections finished out of the inspections this run will download. */
+export interface RefreshProgress {
+  done: number;
+  total: number;
 }
 
 export type InspectionRefresh =
@@ -253,7 +261,7 @@ interface Run {
   replacedIds: string[];
 }
 
-const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, notVisible: 0, failed: 0, invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false });
+const emptySummary = (): RefreshSummary => ({ refreshed: 0, skipped: 0, notVisible: 0, failed: 0, failedIds: [], invalidIds: 0, requests: 0, globalRefreshed: false, halted: null, leaseBusy: false, listTruncated: 0, skippedCacheFull: 0, cacheFull: false });
 
 const utf8Length = (text: string): number => new TextEncoder().encode(text).byteLength;
 
@@ -285,6 +293,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
   const sleepers = new Set<() => void>();
   const permits: (() => void)[] = [];
   let inFlight = 0;
+  /** Listeners of the run in flight, from the callers that asked for progress. A background run has none. */
+  const progressListeners = new Set<(progress: RefreshProgress) => void>();
 
   function report(error: unknown): void {
     try {
@@ -300,6 +310,11 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     } catch {
       // A failing listener must not change what the run does.
     }
+  }
+
+  /** Progress of the run in flight, to every caller that asked. A failing listener is dropped, never retried. */
+  function emitProgress(progress: RefreshProgress): void {
+    for (const listener of [...progressListeners]) notify(() => listener(progress));
   }
 
   function sleep(ms: number): Promise<void> {
@@ -501,6 +516,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
 
   async function fail(run: Run, id: string, code: RefreshErrorCode): Promise<void> {
     run.summary.failed += 1;
+    run.summary.failedIds.push(id);
     if ((await gate(run, false)) !== null) return;
     try {
       await recordRefreshError(deps.db, { accountKey: run.key, inspectionId: id, code, at: deps.clock.now() });
@@ -795,6 +811,9 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
     }
     const queue = orderTargets(targets);
     let next = 0;
+    let done = 0;
+    const total = queue.length;
+    emitProgress({ done: 0, total });
     const worker = async (): Promise<void> => {
       for (;;) {
         if (run.halted !== null) return;
@@ -802,6 +821,8 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
         next += 1;
         if (target === undefined) return;
         await refreshOne(run, target);
+        done += 1;
+        emitProgress({ done, total });
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
@@ -910,9 +931,15 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
    * overrides. It queues one more manual run, and the promise it gets resolves with the summary of that follow-up run
    * (the last run of the flight). Any other reason during a run just shares the flight and queues nothing.
    */
-  function refresh(options: { reason?: RefreshReason } = {}): Promise<RefreshSummary> {
+  function refresh(options: { reason?: RefreshReason; onProgress?: (progress: RefreshProgress) => void } = {}): Promise<RefreshSummary> {
+    const onProgress = options.onProgress;
+    if (onProgress !== undefined) progressListeners.add(onProgress);
+    const forget = (): void => {
+      if (onProgress !== undefined) progressListeners.delete(onProgress);
+    };
     if (running !== null) {
       if ((options.reason ?? 'manual') === 'manual' && !stopped && runningReason !== 'manual') queued = 'manual';
+      if (onProgress !== undefined) void running.then(forget, forget);
       return running;
     }
     const flight: Promise<RefreshSummary> = (async (): Promise<RefreshSummary> => {
@@ -940,6 +967,7 @@ export function createWorkPackageRefresher(deps: RefresherDeps): WorkPackageRefr
       if (running === flight) running = null;
     });
     running = flight;
+    if (onProgress !== undefined) void flight.then(forget, forget);
     return flight;
   }
 

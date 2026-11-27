@@ -44,6 +44,8 @@ export interface WorkListRow {
   /** A pinned package of this account that is not being removed can always be unpinned, even a quarantined one. */
   canUnpin: boolean;
   downloaded: boolean;
+  /** This one inspection can be downloaded now: confirmed, healthy, and not on the device yet. */
+  canDownload: boolean;
   lastError: RefreshErrorCode | null;
   /** Made on this device and not yet acknowledged by the server. */
   createdLocally: boolean;
@@ -211,6 +213,7 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
     const scheduledAt = pkg.scheduled_at === null ? null : Number(pkg.scheduled_at);
     const namedByPlan = blocked === 'none' && plan !== null && planFresh && namesMassSuspicious(plan, pkg.inspection_id, account);
     const neverSent = blocked === 'none' && !confirmed && !creates.has(pkg.inspection_id);
+    const downloaded = (state?.cachedResources ?? 0) > 0;
     rows.push({
       id: pkg.inspection_id,
       title: titles.get(pkg.inspection_id) ?? null,
@@ -219,7 +222,8 @@ export async function readWorkListSnapshot(stack: SnapshotSource, now: number, m
       pinned: Number(pkg.pinned) === 1,
       canPin: confirmed && blocked === 'none',
       canUnpin: Number(pkg.pinned) === 1 && blocked !== 'purging',
-      downloaded: (state?.cachedResources ?? 0) > 0,
+      downloaded,
+      canDownload: !downloaded && confirmed && blocked === 'none',
       lastError: state?.lastError ?? null,
       createdLocally: !confirmed,
       blocked,

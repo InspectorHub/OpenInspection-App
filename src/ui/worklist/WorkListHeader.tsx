@@ -1,8 +1,10 @@
 import type { Ref } from 'react';
+import type { RefreshProgress } from '../../offline/work-package';
 import { Button } from '../kit';
 import { updatedLabel } from './format';
 import { LiveNote } from './LiveNote';
 import type { ConnectionChipView } from './connection';
+import { downloadProgressText } from './copy';
 
 export interface WorkListHeaderProps {
   updatedAt: number | null;
@@ -11,6 +13,12 @@ export interface WorkListHeaderProps {
   /** What the connection chip shows (see `connectionChip`), or null for no chip. */
   chip: ConnectionChipView | null;
   downloading: boolean;
+  /** The count of a download in progress, or null while the list is still being read. */
+  progress?: RefreshProgress | null;
+  /** Milliseconds left at the current pace, or null when there is no pace to read. */
+  etaMs?: number | null;
+  /** Lines for the inspections the last download could not fetch, or empty. Shown once the run is over. */
+  failedLines?: string[];
   /** The sentence about the last download, or null. */
   summary: string | null;
   onDownload(): void;
@@ -54,7 +62,7 @@ function GearIcon() {
   );
 }
 
-export function WorkListHeader({ updatedAt, now, locale, chip, downloading, summary, onDownload, onExport, headingRef, onSettings, settingsRef }: WorkListHeaderProps) {
+export function WorkListHeader({ updatedAt, now, locale, chip, downloading, progress = null, etaMs = null, failedLines = [], summary, onDownload, onExport, headingRef, onSettings, settingsRef }: WorkListHeaderProps) {
   return (
     <header className="flex flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -79,14 +87,18 @@ export function WorkListHeader({ updatedAt, now, locale, chip, downloading, summ
           )}
         </div>
       </div>
-      {/* The progress is drawn inside the button, so downloading adds no line of text and the list below does not move. */}
+      {/* The progress is drawn inside the button, so downloading adds no line of text and the list below does not move. Once the list is read the bar is determinate; before that it pulses. */}
       <div className="relative">
         <Button busy={downloading} onClick={onDownload}>
           Download today&apos;s work
         </Button>
         {downloading && (
           <span data-testid="download-progress" aria-hidden="true" className="pointer-events-none absolute inset-x-4 bottom-1.5 h-1 overflow-hidden rounded-full bg-ih-primary-fg/30">
-            <span className="block h-full w-2/5 rounded-full bg-ih-primary-fg motion-safe:animate-pulse" />
+            {progress !== null && progress.total > 0 ? (
+              <span className="block h-full rounded-full bg-ih-primary-fg" style={{ width: `${String(Math.min(100, Math.max(0, Math.round((progress.done / progress.total) * 100))))}%` }} />
+            ) : (
+              <span className="block h-full w-2/5 rounded-full bg-ih-primary-fg motion-safe:animate-pulse" />
+            )}
           </span>
         )}
       </div>
@@ -95,7 +107,14 @@ export function WorkListHeader({ updatedAt, now, locale, chip, downloading, summ
           Export unsent data
         </Button>
       )}
-      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? 'Downloading…' : (summary ?? '')} visuallyHidden={downloading} reserve />
+      <LiveNote testId="refresh-summary" className="text-sm leading-relaxed text-ih-fg-2" text={downloading ? downloadProgressText(progress ?? { done: 0, total: 0 }, etaMs) : (summary ?? '')} visuallyHidden={downloading} reserve />
+      {!downloading && failedLines.length > 0 && (
+        <ul aria-label="Inspections that could not be downloaded" className="flex flex-col gap-1 text-sm text-ih-fg-2">
+          {failedLines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
     </header>
   );
 }

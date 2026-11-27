@@ -14,6 +14,10 @@ export interface InspectionRowProps {
   onOpen(row: WorkListRow): void;
   onTogglePin(row: WorkListRow): void;
   onRemove(row: WorkListRow): void;
+  /** Downloads this one inspection. When absent, no download button is rendered. */
+  onDownloadOne?: ((row: WorkListRow) => void) | undefined;
+  /** True while this row's own download runs. */
+  downloadBusy?: boolean | undefined;
   /** When absent, no export button and no export wording is rendered. */
   onExport: ((id: string) => void) | undefined;
 }
@@ -26,7 +30,7 @@ function edgeOf(row: WorkListRow): string {
   return row.downloaded ? 'border-l-ih-ok' : 'border-l-ih-border-strong';
 }
 
-export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onExport }: InspectionRowProps) {
+export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onDownloadOne, downloadBusy = false, onExport }: InspectionRowProps) {
   const title = shortTitle(row);
   const inert = row.blocked !== 'none';
   const when = whenLabel(row.scheduledAt, row.group, locale);
@@ -51,6 +55,18 @@ export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onEx
           </h3>
           {when !== null && <p className="text-sm text-ih-fg-3">{when}</p>}
         </div>
+        {row.canDownload && onDownloadOne !== undefined && (
+          <button
+            type="button"
+            aria-label={`Download ${title}`}
+            aria-busy={downloadBusy ? true : undefined}
+            disabled={downloadBusy ? true : undefined}
+            onClick={() => onDownloadOne(row)}
+            className="relative z-10 min-h-11 min-w-11 rounded-ih-button border border-ih-border-strong bg-ih-bg-card px-3 text-sm font-semibold text-ih-fg-2 focus-visible:outline-none focus-visible:shadow-ih-focus"
+          >
+            Download
+          </button>
+        )}
         {(row.canPin || row.canUnpin) && (
           <button
             type="button"

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RefreshHalt, RefreshSummary } from '../offline/work-package';
 import { fakeNetwork } from '../offline/test-support/replay-world';
 import { refreshSummary, renderList } from './test-support/worklist-render';
-import { at, createListWorld, seedPkg, type ListWorld } from './test-support/worklist-world';
+import { at, createListWorld, seedCached, seedPkg, type ListWorld } from './test-support/worklist-world';
 
 let w: ListWorld;
 
@@ -30,8 +30,40 @@ describe('Download today\'s work', () => {
     const refresh = vi.spyOn(w.stack.refresher, 'refresh').mockResolvedValue(refreshSummary({ refreshed: 3 }));
     renderList(w.stack);
     await userEvent.setup().click(await screen.findByRole('button', DOWNLOAD));
-    expect(refresh).toHaveBeenCalledExactlyOnceWith({ reason: 'manual' });
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reason: 'manual' }));
     expect(await screen.findByText('Updated 3 inspections.')).toBeInTheDocument();
+  });
+
+  it('shows the live count while the run lasts, from the progress the refresher reports', async () => {
+    const gate = deferredSummary();
+    let onProgress: ((p: { done: number; total: number }) => void) | null = null;
+    vi.spyOn(w.stack.refresher, 'refresh').mockImplementation(async (options) => {
+      onProgress = options?.onProgress ?? null;
+      return gate.promise;
+    });
+    renderList(w.stack);
+    await userEvent.setup().click(await screen.findByRole('button', DOWNLOAD));
+    await waitFor(() => expect(screen.getByRole('button', DOWNLOAD)).toHaveAttribute('aria-busy', 'true'));
+    expect(onProgress).not.toBeNull();
+    await act(async () => {
+      onProgress?.({ done: 1, total: 3 });
+    });
+    expect(screen.getByTestId('refresh-summary')).toHaveTextContent('Downloading… 1 of 3');
+    await act(async () => {
+      gate.resolve(refreshSummary({ refreshed: 3 }));
+      await gate.promise;
+    });
+    expect(await screen.findByText('Updated 3 inspections.')).toBeInTheDocument();
+  });
+
+  it('names the inspections a run could not download, under the summary', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    await seedCached(w.db, 'a', '12 Oak Street');
+    vi.spyOn(w.stack.refresher, 'refresh').mockResolvedValue(refreshSummary({ refreshed: 2, failed: 1, failedIds: ['a'] }));
+    renderList(w.stack);
+    await userEvent.setup().click(await screen.findByRole('button', DOWNLOAD));
+    expect(await screen.findByText('Updated 2 inspections. 1 could not be downloaded.')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Inspections that could not be downloaded' })).toHaveTextContent('12 Oak Street');
   });
 
   it('is busy while the run lasts, and two taps in one frame start one run', async () => {

@@ -217,6 +217,44 @@ describe('WorkList: pin', () => {
   });
 });
 
+describe('WorkList: download one', () => {
+  it('a row that is not downloaded offers Download; a downloaded row does not', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    await seedPkg(w.db, { id: 'b', scheduledAt: at(0), refreshedAt: NOW });
+    await seedCached(w.db, 'b', 'B');
+    renderList(w.stack);
+    expect(within(await rowOf('a')).getByRole('button', { name: /^Download / })).toBeInTheDocument();
+    expect(within(await rowOf('b')).queryByRole('button', { name: /^Download / })).toBeNull();
+  });
+
+  it('downloading one inspection asks the refresher for that inspection only', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    const one = vi.spyOn(w.stack.refresher, 'refreshInspection').mockResolvedValue({ kind: 'refreshed' });
+    const all = vi.spyOn(w.stack.refresher, 'refresh');
+    renderList(w.stack);
+    await userEvent.setup().click(within(await rowOf('a')).getByRole('button', { name: /^Download / }));
+    expect(one).toHaveBeenCalledExactlyOnceWith('a');
+    expect(all).not.toHaveBeenCalled();
+  });
+
+  it('a failed one-download says so and leaves the button', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    vi.spyOn(w.stack.refresher, 'refreshInspection').mockResolvedValue({ kind: 'failed' });
+    renderList(w.stack);
+    await userEvent.setup().click(within(await rowOf('a')).getByRole('button', { name: /^Download / }));
+    expect(await screen.findByText('Could not download this inspection. Try again.')).toBeInTheDocument();
+    expect(within(await rowOf('a')).getByRole('button', { name: /^Download / })).toBeInTheDocument();
+  });
+
+  it('a busy one-download says another step is running', async () => {
+    await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });
+    vi.spyOn(w.stack.refresher, 'refreshInspection').mockResolvedValue({ kind: 'busy' });
+    renderList(w.stack);
+    await userEvent.setup().click(within(await rowOf('a')).getByRole('button', { name: /^Download / }));
+    expect(await screen.findByText('Another sync step is running. Try again in a moment.')).toBeInTheDocument();
+  });
+});
+
 describe('WorkList: opening a row', () => {
   it('a normal row calls onOpenInspection with its id', async () => {
     await seedPkg(w.db, { id: 'a', scheduledAt: at(0) });

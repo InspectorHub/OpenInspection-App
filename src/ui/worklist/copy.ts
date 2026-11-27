@@ -1,7 +1,7 @@
 import type { DiscardMediaOutcome, DiscardOutboxOutcome, RemoveOutcome } from '../../offline/user-actions';
 import type { DiscardResult } from '../../offline/replay';
 import type { PinRefusalReason } from '../../offline/pins';
-import type { RefreshErrorCode, RefreshHalt, RefreshSummary } from '../../offline/work-package';
+import type { RefreshErrorCode, RefreshHalt, RefreshProgress, RefreshSummary } from '../../offline/work-package';
 import type { OutboxErrorCode } from '../../platform/schema';
 
 /**
@@ -64,7 +64,7 @@ export function bytesLabel(n: number): string {
   return n === 1 ? '1 byte' : `${String(n)} bytes`;
 }
 
-const REFRESH_HALT_TEXT: Record<RefreshHalt, string> = {
+export const REFRESH_HALT_TEXT: Record<RefreshHalt, string> = {
   offline: 'You are offline. Connect to the internet to download.',
   rate_limited: 'The server asked the app to slow down. Try again in a few minutes.',
   upgrade_required: 'Update the app to keep syncing.',
@@ -99,7 +99,43 @@ export const SERVER_UNREACHABLE_CHIP_TEXT = "Can't reach the server";
 /** The editor header's short form of the work list's collaboration line: live editing with others failed, the stored document is fine. */
 export const COLLAB_ISSUE_CHIP_TEXT = 'Live collaboration is having trouble';
 
-/** One sentence group for what a download run did. */
+/**
+ * Milliseconds left at the current pace, or null when there is not enough to say: fewer than two inspections done (one
+ * sample is not a pace), nothing left, or no time passed. A remainder under five seconds is not worth announcing.
+ */
+export function downloadEtaMs(startedAt: number, done: number, total: number, now: number): number | null {
+  const remaining = total - done;
+  if (done < 2 || remaining <= 0) return null;
+  const elapsed = now - startedAt;
+  if (elapsed <= 0) return null;
+  const ms = (elapsed / done) * remaining;
+  return ms < 5000 ? null : Math.round(ms);
+}
+
+/** The live line while a download runs: the count, and the ETA once there is a pace to read it from. */
+export function downloadProgressText(progress: RefreshProgress, etaMs: number | null): string {
+  if (progress.total <= 0) return 'Downloading…';
+  const base = `Downloading… ${progress.done} of ${progress.total}`;
+  if (etaMs === null) return base;
+  const seconds = Math.round(etaMs / 1000);
+  if (seconds < 60) return `${base} · about ${seconds} seconds left`;
+  const minutes = Math.round(seconds / 60);
+  return `${base} · about ${minutes === 1 ? '1 minute' : `${minutes} minutes`} left`;
+}
+
+/**
+ * The failed inspections of a finished download, as lines under the summary sentence: at most five names, then the rest
+ * as a count. `titles` are the names the list could show; `failed` is how many failed in all.
+ */
+export function failedDownloadLines(titles: string[], failed: number): string[] {
+  const lines = titles.slice(0, 5);
+  const rest = failed - lines.length;
+  if (rest > 0) lines.push(`and ${rest} more`);
+  return lines;
+}
+
+export const DOWNLOAD_ONE_FAILED = 'Could not download this inspection. Try again.';
+export const DOWNLOAD_ONE_BUSY = 'Another sync step is running. Try again in a moment.';
 export function refreshSummaryText(summary: RefreshSummary): string {
   if (summary.halted !== null) {
     const done = summary.refreshed > 0 ? ` Updated ${plural(summary.refreshed, 'inspection', 'inspections')} first.` : '';
