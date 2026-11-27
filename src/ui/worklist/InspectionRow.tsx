@@ -1,6 +1,6 @@
 import { Button } from '../kit';
 import { Badge } from './Badge';
-import { REFRESH_ERROR_TEXT, plural } from './copy';
+import { REFRESH_ERROR_TEXT, plural, serverPhotoBadge } from './copy';
 import { shortTitle, whenLabel } from './format';
 import type { WorkListRow } from './model';
 import { ExportButton, RowQuarantineBanner } from './QuarantineBanner';
@@ -36,6 +36,7 @@ export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onDo
   const when = whenLabel(row.scheduledAt, row.group, locale);
   const quarantined = row.blocked === 'quarantined';
   const showCounts = row.blocked === 'none';
+  const photoBadge = row.serverPhotos === null ? null : serverPhotoBadge(row.serverPhotos.total, row.serverPhotos.cached);
   return (
     <li data-testid={`row-${row.id}`} className={`relative flex flex-col gap-3 rounded-ih-card border border-l-4 border-ih-border bg-ih-bg-card p-3 shadow-ih-card ${edgeOf(row)}`}>
       <div className="flex items-start gap-3">
@@ -83,6 +84,7 @@ export function InspectionRow({ row, locale, onOpen, onTogglePin, onRemove, onDo
         {quarantined && <Badge tone="watch">Quarantined</Badge>}
         {row.blocked === 'purging' && <Badge tone="neutral">Removing…</Badge>}
         {row.downloaded ? <Badge tone="ok">Downloaded</Badge> : <Badge tone="neutral">Not downloaded yet</Badge>}
+        {photoBadge !== null && <Badge tone={photoBadge.tone}>{photoBadge.text}</Badge>}
         {row.pinned && <Badge tone="info">Pinned</Badge>}
         {showCounts && row.waiting > 0 && <Badge tone="watch">{`Waiting to upload: ${String(row.waiting)}`}</Badge>}
         {showCounts && row.needAttention > 0 && <Badge tone="bad">{`${String(row.needAttention)} need attention`}</Badge>}

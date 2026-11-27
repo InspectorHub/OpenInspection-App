@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadEtaMs, downloadProgressText, failedDownloadLines } from './copy';
+import { downloadEtaMs, downloadProgressText, failedDownloadLines, serverPhotoBadge } from './copy';
 
 describe('downloadEtaMs', () => {
   it('is null until two are done: one sample is not a pace', () => {
@@ -33,6 +33,25 @@ describe('downloadProgressText', () => {
     expect(downloadProgressText({ done: 3, total: 12 }, 20_000)).toBe('Downloading… 3 of 12 · about 20 seconds left');
     expect(downloadProgressText({ done: 3, total: 12 }, 90_000)).toBe('Downloading… 3 of 12 · about 2 minutes left');
     expect(downloadProgressText({ done: 3, total: 12 }, 60_000)).toBe('Downloading… 3 of 12 · about 1 minute left');
+  });
+});
+
+describe('serverPhotoBadge', () => {
+  it('is null when the report names no photos', () => {
+    expect(serverPhotoBadge(0, 0)).toBeNull();
+  });
+
+  it('says Photos downloaded once every named photo has a copy', () => {
+    expect(serverPhotoBadge(3, 3)).toEqual({ text: 'Photos downloaded', tone: 'ok' });
+    expect(serverPhotoBadge(1, 1)).toEqual({ text: 'Photos downloaded', tone: 'ok' });
+  });
+
+  it('says Photos not downloaded when none has a copy', () => {
+    expect(serverPhotoBadge(3, 0)).toEqual({ text: 'Photos not downloaded', tone: 'neutral' });
+  });
+
+  it('counts how many have a copy in between', () => {
+    expect(serverPhotoBadge(3, 2)).toEqual({ text: '2 of 3 photos downloaded', tone: 'watch' });
   });
 });
 

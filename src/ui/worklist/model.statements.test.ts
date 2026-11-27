@@ -38,11 +38,11 @@ async function statementsFor(memo?: TitleMemo): Promise<{ count: number; rows: n
 
 /**
  * The most statements one snapshot may send, whatever the number of inspections: package states, package rows, the title stamps
- * (and, only when one is new or changed, the title bodies), outbox counts, media counts, create targets, unattributable writes,
- * failed writes, failed media, the company name.
+ * (and, only when one is new or changed, the title bodies), outbox counts, media counts, create targets, server photo counts
+ * and cached results bodies, unattributable writes, failed writes, failed media, the company name.
  */
-const MAX_COLD = 12;
-const MAX_WARM = 11;
+const MAX_COLD = 14;
+const MAX_WARM = 13;
 
 async function measure(n: number): Promise<{ cold: number; warm: number; rows: number }> {
   w = await createListWorld();

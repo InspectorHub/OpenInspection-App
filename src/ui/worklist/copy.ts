@@ -136,6 +136,15 @@ export function failedDownloadLines(titles: string[], failed: number): string[] 
 
 export const DOWNLOAD_ONE_FAILED = 'Could not download this inspection. Try again.';
 export const DOWNLOAD_ONE_BUSY = 'Another sync step is running. Try again in a moment.';
+
+/** The photo badge for a row whose report is on the device. Null when the report names no photos: nothing to say. */
+export function serverPhotoBadge(total: number, cached: number): { text: string; tone: 'ok' | 'watch' | 'neutral' } | null {
+  if (total <= 0) return null;
+  if (cached >= total) return { text: 'Photos downloaded', tone: 'ok' };
+  if (cached === 0) return { text: 'Photos not downloaded', tone: 'neutral' };
+  return { text: `${String(cached)} of ${String(total)} photos downloaded`, tone: 'watch' };
+}
+
 export function refreshSummaryText(summary: RefreshSummary): string {
   if (summary.halted !== null) {
     const done = summary.refreshed > 0 ? ` Updated ${plural(summary.refreshed, 'inspection', 'inspections')} first.` : '';

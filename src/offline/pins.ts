@@ -11,7 +11,9 @@ export type PinRefusalReason = 'not_confirmed' | 'purging' | 'quarantined' | 'no
 export type SetPinnedResult = { ok: true } | { ok: false; reason: PinRefusalReason };
 
 /**
- * Pins or unpins one package. A pinned inspection stays in the download window and gets its full-size photos.
+ * Pins or unpins one package. A pinned inspection stays in the download window and its cache is protected from
+ * eviction. Its photos are still fetched on demand — pinning alone does not download them — and the work list shows
+ * how many of the report's photos are already on the device.
  *
  * Only this account's package, confirmed by the server, not being purged and not quarantined can be pinned: a pin
  * on any other row would either be meaningless (nothing refreshes it) or look like a promise the device cannot keep.
