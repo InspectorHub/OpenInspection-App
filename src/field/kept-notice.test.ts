@@ -19,6 +19,22 @@ describe('createKeptNotice', () => {
     expect(said).toEqual([photosKeptMessage('item', 2), photosKeptMessage('defect', 1)]);
   });
 
+  it('a kept crop or annotation says so, counted apart from photos', () => {
+    const timers = createManualTimers();
+    const said: string[] = [];
+    const notice = createKeptNotice({ timers, say: (message) => said.push(message) });
+    notice('insp-1', 'crop');
+    notice('insp-1', 'crop');
+    notice('insp-1', 'annotate');
+    notice('insp-1', 'item');
+    timers.fireNext();
+    timers.fireNext();
+    timers.fireNext();
+    expect(said).toEqual([photosKeptMessage('crop', 2), photosKeptMessage('annotate', 1), photosKeptMessage('item', 1)]);
+    expect(photosKeptMessage('crop', 1)).toBe('The crop is saved on this device but has not been uploaded yet.');
+    expect(photosKeptMessage('annotate', 1)).toBe('The annotation is saved on this device but has not been uploaded yet.');
+  });
+
   it('opens a fresh window after the notice was shown', () => {
     const timers = createManualTimers();
     const said: string[] = [];

@@ -1,7 +1,7 @@
 import type { TimerPort } from '../collab/timers';
 import { MESSAGES, photosKeptMessage } from './messages';
 
-export type KeptKind = 'item' | 'defect';
+export type KeptKind = 'item' | 'defect' | 'crop' | 'annotate';
 
 /** Photos kept in one window are one notice. Long enough for a batch to fail together, short enough to feel immediate. */
 export const KEPT_WINDOW_MS = 400;
@@ -19,8 +19,8 @@ export interface KeptNoticeDeps {
  * photo that the server refuses for good is not retried, and the notice must hold for it too.
  */
 export function createKeptNotice(deps: KeptNoticeDeps): (inspectionId: string, kind: KeptKind) => void {
-  const counts: Record<KeptKind, number> = { item: 0, defect: 0 };
-  const open: Record<KeptKind, boolean> = { item: false, defect: false };
+  const counts: Record<KeptKind, number> = { item: 0, defect: 0, crop: 0, annotate: 0 };
+  const open: Record<KeptKind, boolean> = { item: false, defect: false, crop: false, annotate: false };
   return (_inspectionId, kind) => {
     counts[kind] += 1;
     if (open[kind]) return;

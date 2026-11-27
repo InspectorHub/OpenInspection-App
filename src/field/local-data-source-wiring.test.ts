@@ -77,14 +77,15 @@ describe('what is wired to what', () => {
     const uploader = w.source.media.uploader(INSPECTION, open.doc);
 
     w.sync.value = false;
-    expect(await uploader.upload(listed as PendingMediaRecord)).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect(await uploader.upload(listed as PendingMediaRecord)).toEqual({ ok: false, error: MESSAGES.waitForSync, kept: true });
     expect(w.api.calls).toHaveLength(0);
+    expect((await w.store.listRows()).map((row) => row.pendingId)).toEqual(['c1']);
 
     w.sync.value = true;
     w.api.calls.length = 0;
     const result = await uploader.upload(listed as PendingMediaRecord);
-    // The scripted server answers an empty body, which names no key: the request was made, and the answer is not a success.
-    expect(result).toEqual({ ok: false, error: MESSAGES.unreadableAnswer });
+    // The scripted server answers an empty body, which names no key: the request was made, and the answer is not a success — but the crop stays queued, so it is kept.
+    expect(result).toEqual({ ok: false, error: MESSAGES.unreadableAnswer, kept: true });
     expect(w.api.calls).toHaveLength(1);
     const image = w.api.calls[0]?.form?.get('image');
     expect(image instanceof Blob && image.size).toBeGreaterThan(0);
@@ -98,8 +99,9 @@ describe('what is wired to what', () => {
       kind: 'crop', pendingId: 'c2', inspectionId: INSPECTION, blob: jpegBlob(2), createdAt: 1,
       meta: { findingKey: FINDING, itemId: 'i1', photoIndex: 0, photoKey: 'photo-b', crop: { aspect: 'free', orientation: 'landscape', x: 0, y: 0, width: 4, height: 4 } },
     };
-    expect(await w.source.media.uploader(INSPECTION, orphan).upload(crop)).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect(await w.source.media.uploader(INSPECTION, orphan).upload(crop)).toEqual({ ok: false, error: MESSAGES.waitForSync, kept: true });
     expect(w.api.calls).toHaveLength(0);
+    expect((await w.store.listRows()).map((row) => row.pendingId)).toEqual(['c2']);
   });
 });
 

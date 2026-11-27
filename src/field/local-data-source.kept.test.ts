@@ -139,3 +139,31 @@ describe('a server too old still keeps an item photo and a defect photo; editing
     expect(timers.requested()).not.toContain(KEPT_WINDOW_MS);
   });
 });
+
+describe('the notice for a kept crop or annotation', () => {
+  const crop = (pendingId: string): PendingMediaRecord => ({
+    kind: 'crop',
+    pendingId,
+    inspectionId: INSPECTION,
+    blob: photoRecord(pendingId).blob,
+    createdAt: 1,
+    meta: { findingKey: FK, itemId: 'i1', photoIndex: 0, photoKey: 'photo-a', crop: { aspect: 'free', orientation: 'landscape', x: 0, y: 0, width: 4, height: 4 } },
+  });
+
+  it('a kept crop says the crop sentence, counted apart from photos', async () => {
+    const { w, timers } = await failingWorld();
+    const upload = w.source.media.uploader(INSPECTION, null).upload;
+    expect(await upload(crop('c1'))).toMatchObject({ kept: true });
+    expect(await upload(crop('c2'))).toMatchObject({ kept: true });
+    await kept(w, 'p1');
+    timers.fireWithDelay(KEPT_WINDOW_MS);
+    timers.fireWithDelay(KEPT_WINDOW_MS);
+    expect(toasts(w).sort()).toEqual([photosKeptMessage('crop', 2), MESSAGES.photoKept].sort());
+  });
+
+  it('a kept crop leaves its row on the device', async () => {
+    const { base, w } = await failingWorld();
+    expect(await w.source.media.uploader(INSPECTION, null).upload(crop('c1'))).toMatchObject({ kept: true });
+    expect((await base.store.listRows()).map((r) => r.pendingId)).toEqual(['c1']);
+  });
+});

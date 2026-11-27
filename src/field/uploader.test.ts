@@ -1,11 +1,13 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 import type { PendingMediaRecord } from '@inspectorhub/field-ui';
+import { MediaError } from '../media/errors';
 import { INSPECTION, jpegBlob, photoRecord } from '../media/test-support/fakes';
 import { MAX_MEDIA_BYTES } from '../media/media-types';
 import { MESSAGES } from './messages';
 import { photosOf, seedPhotos } from './test-support/doc-seed';
-import { reply, scriptedApi } from './test-support/scripted-api';
+import { reply, scriptedApi, type ScriptedApi } from './test-support/scripted-api';
+import type { ApiOutcome } from './api-client';
 import { createUploaderWorld } from './test-support/uploader-world';
 import { createStoredBlobReader, createUploaderFactory, type UploaderDeps } from './uploader';
 
@@ -198,28 +200,98 @@ describe('crop and annotate never reach the background uploader', () => {
     expect((await w.world.store.listRows()).map((row) => [row.pendingId, row.state, row.attempts])).toEqual([['p1', 'pending', 0]]);
   });
 
-  it('a crop whose photo is gone, or without a document, answers a failure and sends nothing', async () => {
+  it('a crop whose photo is gone is refused for good and leaves no row; without a document it waits, kept', async () => {
     const w = await createUploaderWorld();
     const gone = new Y.Doc();
     seedPhotos(gone, '_default:s1:i1', [{ key: 'photo-a' }]);
-    expect(await w.factory(INSPECTION, gone).upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.photoGone });
-    expect((await w.factory(INSPECTION, null).upload(annotateRecord('p2'))).ok).toBe(false);
+    expect(await w.factory(INSPECTION, gone).upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.photoGone, permanent: true });
+    expect(await w.world.store.listRows()).toEqual([]);
+    expect(await w.factory(INSPECTION, null).upload(annotateRecord('p2'))).toEqual({ ok: false, error: MESSAGES.waitForSync, kept: true });
+    expect((await w.world.store.listRows()).map((row) => row.pendingId)).toEqual(['p2']);
     expect(w.api.calls).toHaveLength(0);
     expect(w.nativeCalls).toEqual([]);
   });
 });
 
 describe('crop and annotate wait for the document to catch up with the server', () => {
-  it('refused with no request while the document is ahead; sent once it has caught up', async () => {
+  it('refused with no request while the document is ahead, kept on the device; sent once it has caught up', async () => {
     const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { croppedKey: 'cropped-key' } })) });
     w.sync.value = false;
     const uploader = w.factory(INSPECTION, docWithPhoto());
-    expect(await uploader.upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.waitForSync });
-    expect(await uploader.upload(annotateRecord('p2'))).toEqual({ ok: false, error: MESSAGES.waitForSync });
+    expect(await uploader.upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.waitForSync, kept: true });
+    expect(await uploader.upload(annotateRecord('p2'))).toEqual({ ok: false, error: MESSAGES.waitForSync, kept: true });
     expect(w.api.calls).toHaveLength(0);
+    expect((await w.world.store.listRows()).map((row) => row.pendingId)).toEqual(['p1', 'p2']);
     w.sync.value = true;
     expect((await uploader.upload(cropRecord('p1'))).ok).toBe(true);
     expect(w.api.calls).toHaveLength(1);
+  });
+});
+
+describe('a crop or annotation that fails is kept for the drain', () => {
+  it('a network failure keeps the crop, and the stored row the drain retries sends it', async () => {
+    const w = await createUploaderWorld({
+      api: scriptedApi({ kind: 'problem', problem: 'offline' }, reply(200, { data: { croppedKey: 'cropped-key' } })),
+    });
+    const uploader = w.factory(INSPECTION, docWithPhoto());
+    expect(await uploader.upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.needsConnection, kept: true });
+    expect(w.api.calls).toHaveLength(1);
+    expect((await w.world.store.listRows()).map((row) => [row.pendingId, row.state])).toEqual([['p1', 'pending']]);
+    const [listed] = await w.world.store.list(INSPECTION);
+    expect(listed?.blob.size).toBe(0);
+    expect(await uploader.upload(listed as PendingMediaRecord)).toEqual({ ok: true, key: 'cropped-key' });
+    expect(w.api.calls).toHaveLength(2);
+  });
+
+  it('a crop too large for the device store is refused for good and leaves no row', async () => {
+    const w = await createUploaderWorld();
+    const big = { ...cropRecord('p1'), blob: new Blob([new Uint8Array(MAX_MEDIA_BYTES + 1)], { type: 'image/jpeg' }) };
+    expect(await w.factory(INSPECTION, docWithPhoto()).upload(big)).toEqual({ ok: false, error: 'TOO_LARGE', permanent: true });
+    expect(await w.world.store.listRows()).toEqual([]);
+    expect(w.api.calls).toHaveLength(0);
+  });
+
+  it('a crop under an id that already has a photo row is never sent or removed under it', async () => {
+    const w = await createUploaderWorld();
+    await w.world.store.put(itemPhoto('p1'));
+    expect(await w.factory(INSPECTION, docWithPhoto()).upload(cropRecord('p1'))).toEqual({ ok: false, error: MESSAGES.photoNotPrepared });
+    expect((await w.world.store.listRows()).map((row) => row.kind)).toEqual(['photo']);
+    expect(w.api.calls).toHaveLength(0);
+  });
+
+  it('disk trouble keeps nothing but still tries the foreground send once', async () => {
+    const w = await createUploaderWorld({ api: scriptedApi(reply(200, { data: { croppedKey: 'cropped-key' } })) });
+    const factory = createUploaderFactory({
+      ...w.deps,
+      store: { ...w.world.store, put: () => Promise.reject(new MediaError('WRITE_FAILED')) },
+    });
+    expect(await factory(INSPECTION, docWithPhoto()).upload(cropRecord('p1'))).toEqual({ ok: true, key: 'cropped-key' });
+    expect(w.api.calls).toHaveLength(1);
+    expect(await w.world.store.listRows()).toEqual([]);
+  });
+
+  it('two uploads of the same crop at once send once', async () => {
+    const calls: unknown[] = [];
+    let resolveReply: ((outcome: ApiOutcome) => void) | undefined;
+    const api = {
+      calls,
+      send: () => {
+        calls.push(1);
+        return new Promise<ApiOutcome>((resolve) => {
+          resolveReply = resolve;
+        });
+      },
+    } as unknown as ScriptedApi;
+    const w = await createUploaderWorld({ api });
+    const uploader = w.factory(INSPECTION, docWithPhoto());
+    const first = uploader.upload(cropRecord('p1'));
+    const second = uploader.upload(cropRecord('p1'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toHaveLength(1);
+    resolveReply?.({ kind: 'response', status: 200, json: { data: { croppedKey: 'cropped-key' } } });
+    expect(await first).toEqual({ ok: true, key: 'cropped-key' });
+    expect(await second).toEqual({ ok: true, key: 'cropped-key' });
+    expect(calls).toHaveLength(1);
   });
 });
 

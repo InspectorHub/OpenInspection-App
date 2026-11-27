@@ -127,9 +127,9 @@ describe('crop', () => {
 
   it('the photo being gone, or there being no document, fails without a request', async () => {
     const gone = setup([]);
-    expect(await gone.fg.crop(cropRec({ photoKey: 'removed' }), docWith('photo-a', 'photo-b'))).toEqual({ ok: false, error: MESSAGES.photoGone });
+    expect(await gone.fg.crop(cropRec({ photoKey: 'removed' }), docWith('photo-a', 'photo-b'))).toEqual({ ok: false, error: MESSAGES.photoGone, permanent: true });
     const noDoc = setup([]);
-    expect((await noDoc.fg.crop(cropRec(), null)).ok).toBe(false);
+    expect(await noDoc.fg.crop(cropRec(), null)).toEqual({ ok: false, error: MESSAGES.waitForSync });
     const rebuilt = setup([reply(200, { data: { croppedKey: 'k' } })]);
     expect((await rebuilt.fg.crop(cropRec(), docWith('photo-b'))).ok).toBe(true);
     expect([gone, noDoc].map((s) => s.api.calls.length)).toEqual([0, 0]);
@@ -203,9 +203,9 @@ describe('annotate', () => {
 
   it('fails without a request when the photo is gone or there is no document', async () => {
     const gone = setup([]);
-    expect(await gone.fg.annotate(annotateRec({ photoKey: 'removed' }), docWith('photo-a'))).toEqual({ ok: false, error: MESSAGES.photoGone });
+    expect(await gone.fg.annotate(annotateRec({ photoKey: 'removed' }), docWith('photo-a'))).toEqual({ ok: false, error: MESSAGES.photoGone, permanent: true });
     const noDoc = setup([]);
-    expect((await noDoc.fg.annotate(annotateRec(), null)).ok).toBe(false);
+    expect(await noDoc.fg.annotate(annotateRec(), null)).toEqual({ ok: false, error: MESSAGES.waitForSync });
     expect([gone, noDoc].map((s) => s.api.calls.length)).toEqual([0, 0]);
   });
 

@@ -20,7 +20,7 @@ import { MESSAGES } from './messages';
  * document here, by the photo's key: a queued position is a snapshot and goes stale when photos are added or removed.
  */
 
-export type UploadResult = { ok: true; key: string } | { ok: false; error: string };
+export type UploadResult = { ok: true; key: string } | { ok: false; error: string; permanent?: true };
 
 type PhotoRecord = Extract<PendingMediaRecord, { kind: 'photo' }>;
 type CropRecord = Extract<PendingMediaRecord, { kind: 'crop' }>;
@@ -51,6 +51,9 @@ export interface ForegroundUploads {
 }
 
 const fail = (error: string): UploadResult => ({ ok: false, error });
+
+/** A failure no retry can mend: the photo is gone, or the bytes will never fit. The caller drops the record. */
+const failPermanent = (error: string): UploadResult => ({ ok: false, error, permanent: true });
 
 const FILE_EXTENSION: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -94,13 +97,18 @@ async function safely(work: () => Promise<UploadResult>): Promise<UploadResult> 
 }
 
 export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads {
-  /** The photo's current position, or the sentence for why there is none. Nothing is sent without one. */
-  function positionOf(doc: Y.Doc | null, inspectionId: string, meta: { findingKey: string; photoKey: string }): number | string {
-    if (doc === null) return MESSAGES.photoGone;
+  /**
+   * The photo's current position, or why there is none. `gone`: the photo is not in the document, so no retry can
+   * place the edit. `wait`: the document is not here, or has not caught up with the server, or a photo still only on
+   * this device precedes the target — the position would be wrong right now, but may be right later. Nothing is sent
+   * without a position.
+   */
+  function positionOf(doc: Y.Doc | null, inspectionId: string, meta: { findingKey: string; photoKey: string }): number | 'gone' | 'wait' {
+    if (doc === null) return 'wait';
     const index = findPhotoIndex(doc, meta.findingKey, meta.photoKey);
-    if (index < 0) return MESSAGES.photoGone;
+    if (index < 0) return 'gone';
     // The position is only meaningful to the server when the server's copy has the same photos before this one.
-    if (!deps.isSynced(inspectionId) || hasPendingBefore(doc, meta.findingKey, index)) return MESSAGES.waitForSync;
+    if (!deps.isSynced(inspectionId) || hasPendingBefore(doc, meta.findingKey, index)) return 'wait';
     return index;
   }
 
@@ -130,11 +138,13 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
   }
 
   async function crop(rec: CropRecord, doc: Y.Doc | null): Promise<UploadResult> {
-    const index = positionOf(doc, rec.inspectionId, rec.meta);
-    if (typeof index === 'string') return fail(index);
+    const position = positionOf(doc, rec.inspectionId, rec.meta);
+    if (position === 'gone') return failPermanent(MESSAGES.photoGone);
+    if (position === 'wait') return fail(MESSAGES.waitForSync);
+    const index = position;
     const blob = await bytesOf(deps, rec);
     if (blob === null) return fail(MESSAGES.photoNotPrepared);
-    if (blob.size > MAX_MEDIA_BYTES) return fail(MESSAGES.photoTooLarge);
+    if (blob.size > MAX_MEDIA_BYTES) return failPermanent(MESSAGES.photoTooLarge);
     const form = new FormData();
     addFile(form, 'image', blob, 'cropped.jpg');
     form.append('crop', JSON.stringify(rec.meta.crop));
@@ -144,11 +154,13 @@ export function createForegroundUploads(deps: ForegroundDeps): ForegroundUploads
   }
 
   async function annotate(rec: AnnotateRecord, doc: Y.Doc | null): Promise<UploadResult> {
-    const index = positionOf(doc, rec.inspectionId, rec.meta);
-    if (typeof index === 'string') return fail(index);
+    const position = positionOf(doc, rec.inspectionId, rec.meta);
+    if (position === 'gone') return failPermanent(MESSAGES.photoGone);
+    if (position === 'wait') return fail(MESSAGES.waitForSync);
+    const index = position;
     const blob = await bytesOf(deps, rec);
     if (blob === null) return fail(MESSAGES.photoNotPrepared);
-    if (blob.size > MAX_MEDIA_BYTES) return fail(MESSAGES.photoTooLarge);
+    if (blob.size > MAX_MEDIA_BYTES) return failPermanent(MESSAGES.photoTooLarge);
     const form = new FormData();
     addFile(form, 'image', blob, 'annotated.png');
     form.append('nodes', rec.meta.nodesJson);

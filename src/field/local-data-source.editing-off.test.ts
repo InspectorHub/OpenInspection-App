@@ -99,7 +99,7 @@ describe('a server too old: the editor uploader says so instead of pretending th
     expect(MESSAGES.serverTooOld).toBe(OLD);
   });
 
-  it('refuses a kind that keeps nothing (a crop, an annotation) before anything is stored or sent (control: a sufficient server uploads; photos of an item or of a defect row are kept, see local-data-source.kept.test.ts)', async () => {
+  it('a crop or an annotation on a server too old is kept like a photo (a row, a kept answer naming the server, nothing sent)', async () => {
     const base = await world();
     const old = await world({ stack: { ...base.stack, serverTooOld: () => true } });
     const uploader = old.source.media.uploader(INSPECTION, null);
@@ -119,11 +119,11 @@ describe('a server too old: the editor uploader says so instead of pretending th
       createdAt: 4,
       meta: { findingKey: '_default:s1:i1', itemId: 'i1', photoIndex: 0, photoKey: 'photo-a', nodesJson: '[]' },
     };
-    expect(await uploader.upload(crop)).toEqual({ ok: false, error: OLD });
-    expect(await uploader.upload(annotation)).toEqual({ ok: false, error: OLD });
+    expect(await uploader.upload(crop)).toEqual({ ok: false, error: OLD, kept: true });
+    expect(await uploader.upload(annotation)).toEqual({ ok: false, error: OLD, kept: true });
     expect(base.nativeCalls).toEqual([]);
     expect(old.api.calls).toHaveLength(0);
-    expect(await base.store.listRows()).toEqual([]);
+    expect((await base.store.listRows()).map((r) => r.pendingId)).toEqual(['c1', 'a1']);
     const fine = await world({ stack: { ...base.stack, serverTooOld: () => false } });
     expect((await fine.source.media.uploader(INSPECTION, null).upload(photoRecord('p1') as PendingMediaRecord)).ok).toBe(true);
   });
