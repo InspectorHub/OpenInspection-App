@@ -12,6 +12,7 @@ import { systemClock } from '../platform/clock';
 import type { Db } from '../platform/db';
 import type { Network } from '../platform/network';
 import { clearSyncProof, recordServerDeleteSet, recordServerStateVector } from './sync-proof';
+import { backupStateOf, deleteRestoreBackup, saveRestoreBackup } from './restore-backup';
 import { realTimers, type TimerPort } from './timers';
 import { SqlitePersistence, deleteDocRows, rethrowLater } from './y-sqlite';
 
@@ -118,6 +119,13 @@ export interface CollabSocket {
 /** Opens a WebSocket to `url`. The real one is in `real.ts`; tests pass a fake. */
 export type SocketFactory = (url: string, handlers: SocketHandlers) => CollabSocket;
 
+/** What a version restore set aside: the inspection whose copy was kept, and when it was set aside (epoch ms). */
+export interface RestoreBackupNotice {
+  inspectionId: string;
+  /** Epoch ms the restore set the copy aside, for the notice ("Your offline copy from [time] couldn't be merged"). */
+  backedUpAt: number;
+}
+
 export interface CollabConnectorDeps {
   db: Db;
   http: Http;
@@ -134,6 +142,12 @@ export interface CollabConnectorDeps {
   random?: () => number;
   /** Receives storage failures and socket-construction failures. Never receives a ticket or a token. */
   onError?: (error: unknown) => void;
+  /**
+   * Receives the notice for a version restore that set aside a copy of the inspection's offline edits (see
+   * `restore-backup.ts`). Called only when a copy was actually saved: an empty document has nothing to lose and
+   * raises no notice. A failing listener must not change what the connection does.
+   */
+  onRestoreBackup?: (notice: RestoreBackupNotice) => void;
   onStatus?: (inspectionId: string, status: CollabStatus) => void;
   /**
    * Receives a failure to record what the server said about its copy (see `sync-proof.ts`). It never means data was
@@ -503,8 +517,15 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
     }
 
     /**
-     * A version restore: Yjs updates only add, so edits made since could never be undone by merging. Drop the
-     * document and its stored rows and pull the restored state on the open socket.
+     * A version restore: Yjs updates only add, so edits made since could never be undone by merging. Save the
+     * discarded document's whole state in the one backup slot first (`restore-backup.ts`), then drop the document
+     * and its stored rows and pull the restored state on the open socket. An edit typed into the old document while
+     * it is being torn down is saved again just before the old document is destroyed, so the backup holds it too.
+     *
+     * The backup write is the one step that may fail: unlike the web, this app has no lineage re-judgment on the
+     * next socket open to retry the restore from, so abandoning the discard here would wedge the inspection in a
+     * held state with no way back. A failed write is therefore reported (the storage the edits rely on is failing,
+     * which the stack already surfaces as "edits are not being saved") and the restore goes on without a copy.
      */
     async function handleRestore(): Promise<void> {
       if (destroyed || restoring || persistence === null) return;
@@ -513,6 +534,27 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         doc.off('update', forward);
         const old = persistence;
         const oldDoc = doc;
+        const state = backupStateOf(oldDoc);
+        let savedVector: Uint8Array | null = null;
+        let backedUpAt = 0;
+        if (state !== null) {
+          backedUpAt = clock.now();
+          try {
+            await saveRestoreBackup(deps.db, docName, state, backedUpAt);
+            savedVector = Y.encodeStateVectorFromUpdate(state);
+          } catch (error) {
+            // Reported, not hidden: the copy is lost, and the storage behind it is failing.
+            report(error);
+          }
+          // Only a copy that was actually saved raises a notice.
+          if (savedVector !== null && !destroyed) {
+            try {
+              deps.onRestoreBackup?.({ inspectionId, backedUpAt });
+            } catch {
+              // A failing listener must not change what the connection does.
+            }
+          }
+        }
         await old.destroy();
         if (destroyed) return;
         try {
@@ -532,6 +574,19 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
         persistence = new SqlitePersistence(deps.db, docName, doc, { onError: report, timers });
         persistence.whenSynced.then(undefined, failStorage);
         doc.on('update', forward);
+        // Edits typed into the old document while it was being torn down are not in the first backup: save again
+        // (best-effort, overwriting the slot, under the same time the notice names). Residual: an edit applied
+        // during this last write is not in the backup.
+        if (savedVector !== null && !destroyed) {
+          const now = Y.encodeStateVector(oldDoc);
+          if (now.length !== savedVector.length || now.some((b, i) => b !== savedVector[i])) {
+            try {
+              await saveRestoreBackup(deps.db, docName, Y.encodeStateAsUpdate(oldDoc), backedUpAt);
+            } catch {
+              // The first backup stands.
+            }
+          }
+        }
         oldDoc.destroy();
         synced = false;
         notify(opts.onChange);
@@ -757,11 +812,13 @@ export function createCollabConnector(deps: CollabConnectorDeps): NativeCollabCo
       if (!isValidInspectionId(inspectionId)) throw new RangeError('Invalid inspection id');
       // Close first and wait: a write still in flight must land before the rows are deleted, not after.
       await Promise.all([...(live.get(inspectionId) ?? [])].map((entry) => entry.close()));
-      // One transaction: the rows and their proof go together or not at all. A stale marker must never outlive the
-      // rows it described, and a failure to clear it must not leave the rows deleted while the purge reports failure.
+      // One transaction: the rows, their proof and the restore backup go together or not at all. A stale marker must
+      // never outlive the rows it described, and a failure to clear it must not leave the rows deleted while the
+      // purge reports failure. The backup belongs to the inspection: it goes with it.
       await deps.db.transaction(async (tx) => {
         await deleteDocRows(tx, resultsDocName(inspectionId));
         await clearSyncProof(tx, resultsDocName(inspectionId));
+        await deleteRestoreBackup(tx, resultsDocName(inspectionId));
       });
     },
     closeFor: async (inspectionId) => {

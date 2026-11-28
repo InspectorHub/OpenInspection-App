@@ -1,4 +1,5 @@
 import { resultsDocName, type NativeCollabConnector } from '../collab/connector';
+import { deleteRestoreBackup } from '../collab/restore-backup';
 import { clearSyncProof } from '../collab/sync-proof';
 import { deleteDocRows } from '../collab/y-sqlite';
 import type { NativeUploader } from '../media/native-uploader';
@@ -376,6 +377,8 @@ export async function purgeInspection(deps: PurgeDeps, inspectionId: string, opt
       // Anything a late writer left since the earlier steps goes in the same transaction that deletes the package row.
       await deleteDocRows(tx, docName);
       await clearSyncProof(tx, docName);
+      // The restore backup belongs to the inspection: it goes with it.
+      await deleteRestoreBackup(tx, docName);
       await tx.run('DELETE FROM resource_cache WHERE account_key = ? AND package_id = ?', [accountKey(account), inspectionId]);
       await tx.run('DELETE FROM item_tags WHERE account_key = ? AND inspection_id = ?', [accountKey(account), inspectionId]);
       await tx.run('DELETE FROM work_package WHERE inspection_id = ? AND tenant_id = ? AND user_id = ? AND purging IN (1, 2)', [inspectionId, account.tenantId, account.userId]);

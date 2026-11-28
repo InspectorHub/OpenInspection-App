@@ -16,6 +16,7 @@ import {
   type CollabConnectorDeps,
   type CollabSocket,
   type CollabStatus,
+  type RestoreBackupNotice,
   type SocketHandlers,
 } from './connector';
 import { createManualTimers, type ManualTimers } from './test-support/manual-timers';
@@ -108,6 +109,7 @@ interface World {
   socketSignal: Signals<FakeSocket>;
   statuses: Signals<CollabStatus>;
   errors: unknown[];
+  restoreNotices: RestoreBackupNotice[];
   changes: Signals<null>;
   online: boolean;
   locked: boolean;
@@ -134,6 +136,7 @@ async function createWorld(overrides: Partial<CollabConnectorDeps> = {}, dbWrap?
     socketSignal,
     statuses: new Signals<CollabStatus>(),
     errors: [],
+    restoreNotices: [],
     changes: new Signals<null>(),
     online: true,
     locked: false,
@@ -181,6 +184,7 @@ async function createWorld(overrides: Partial<CollabConnectorDeps> = {}, dbWrap?
     timers,
     random: () => 1,
     onError: (error) => world.errors.push(error),
+    onRestoreBackup: (notice) => world.restoreNotices.push(notice),
     onStatus: (_id, status) => world.statuses.push(status),
     ...overrides,
   });
@@ -194,6 +198,17 @@ async function barrier(db: Db): Promise<void> {
 async function rows(db: Db, docName: string): Promise<number> {
   const result = await db.query<{ n: number }>('SELECT COUNT(*) AS n FROM ydoc_updates WHERE doc_name = ?', [docName]);
   return Number(result[0]?.n);
+}
+
+async function backupRows(db: Db, docName: string): Promise<number> {
+  const result = await db.query<{ n: number }>('SELECT COUNT(*) AS n FROM restore_backups WHERE doc_name = ?', [docName]);
+  return Number(result[0]?.n);
+}
+
+async function readBackup(db: Db, docName: string): Promise<Uint8Array | null> {
+  const rows = await db.query<{ data: unknown }>('SELECT data FROM restore_backups WHERE doc_name = ?', [docName]);
+  const data = rows[0]?.data;
+  return data instanceof Uint8Array ? data : null;
 }
 
 function connect(world: World, id = 'insp-1'): ReturnType<World['connector']['connect']> {
@@ -675,6 +690,14 @@ describe('messages from the socket', () => {
     expect(handle.synced()).toBe(false);
     expect(await rows(world.db, 'results-insp-1')).toBe(0);
     expect(socket.sent.filter((m) => messageKind(m) === STEP1)).toHaveLength(2);
+    // The discarded copy is kept, not lost: one backup row, and a notice naming the inspection.
+    expect(await backupRows(world.db, 'results-insp-1')).toBe(1);
+    expect(world.restoreNotices).toHaveLength(1);
+    expect(world.restoreNotices[0]?.inspectionId).toBe('insp-1');
+    expect(typeof world.restoreNotices[0]?.backedUpAt).toBe('number');
+    const copy = new Y.Doc();
+    Y.applyUpdate(copy, (await readBackup(world.db, 'results-insp-1')) as Uint8Array);
+    expect(copy.getMap<unknown>('m').get('stale')).toBe(1);
 
     const restored = new Y.Doc();
     restored.getMap<unknown>('m').set('restored', true);
@@ -683,6 +706,105 @@ describe('messages from the socket', () => {
     expect(handle.synced()).toBe(true);
     await barrier(world.db);
     expect(await rows(world.db, 'results-insp-1')).toBe(1);
+    handle.destroy();
+  });
+
+  it('saves no backup and raises no notice when the restored document was empty', async () => {
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    const changesBefore = world.changes.items.length;
+
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await world.changes.waitFor(changesBefore + 1);
+    expect(await backupRows(world.db, 'results-insp-1')).toBe(0);
+    expect(world.restoreNotices).toEqual([]);
+    expect(world.errors).toEqual([]);
+    handle.destroy();
+  });
+
+  it('a backup that cannot be written is reported, and the restore still goes on without a copy', async () => {
+    world = await createWorld({}, (real) => ({
+      ...real,
+      run: async (sql, params) => {
+        if (sql.includes('restore_backups')) throw new Error('injected write failure');
+        return real.run(sql, params);
+      },
+    }));
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('stale', 1);
+    await barrier(world.db);
+    const changesBefore = world.changes.items.length;
+
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await world.changes.waitFor(changesBefore + 1);
+    expect(await backupRows(world.db, 'results-insp-1')).toBe(0);
+    expect(world.restoreNotices).toEqual([]);
+    expect(world.errors).toHaveLength(1);
+    // The restore itself is not wedged by the failed backup: the document was replaced and resyncs.
+    expect(handle.doc.getMap<unknown>('m').get('stale')).toBeUndefined();
+    expect(await rows(world.db, 'results-insp-1')).toBe(0);
+    expect(socket.sent.filter((m) => messageKind(m) === STEP1)).toHaveLength(2);
+    handle.destroy();
+  });
+
+  it('a purge deletes the backup with the document it belongs to', async () => {
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('stale', 1);
+    await barrier(world.db);
+    const changesBefore = world.changes.items.length;
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await world.changes.waitFor(changesBefore + 1);
+    expect(await backupRows(world.db, 'results-insp-1')).toBe(1);
+    handle.destroy();
+
+    await world.connector.purge('insp-1');
+    expect(await backupRows(world.db, 'results-insp-1')).toBe(0);
+  });
+
+  it('backs up an edit typed while the restore is in progress, not just the state at the frame', async () => {
+    const deleting = new Signals<() => void>();
+    world = await createWorld({}, (real) => ({
+      ...real,
+      run: async (sql, params) => {
+        if (sql.startsWith('DELETE FROM ydoc_updates')) {
+          await new Promise<void>((resolve) => {
+            deleting.push(resolve);
+          });
+        }
+        return real.run(sql, params);
+      },
+    }));
+    const handle = connect(world);
+    await handle.persistenceSynced;
+    await world.socketSignal.waitFor(1);
+    const socket = world.sockets[0] as FakeSocket;
+    socket.serverOpens();
+    handle.doc.getMap<unknown>('m').set('stale', 1);
+    await barrier(world.db);
+    const changesBefore = world.changes.items.length;
+
+    socket.serverSends(Uint8Array.from([MSG_RESTORE]));
+    await deleting.waitFor(1);
+    // The editor is still typing into the document being thrown away.
+    handle.doc.getMap<unknown>('m').set('late', 1);
+    (deleting.items[0] as () => void)();
+    await world.changes.waitFor(changesBefore + 1);
+    expect(await backupRows(world.db, 'results-insp-1')).toBe(1);
+    const copy = new Y.Doc();
+    Y.applyUpdate(copy, (await readBackup(world.db, 'results-insp-1')) as Uint8Array);
+    expect(copy.getMap<unknown>('m').get('stale')).toBe(1);
+    expect(copy.getMap<unknown>('m').get('late')).toBe(1);
     handle.destroy();
   });
 });

@@ -142,6 +142,21 @@ export const MIGRATIONS: readonly Migration[] = [
       'CREATE INDEX IF NOT EXISTS idx_photo_cache_used ON photo_cache(last_used_at)',
     ],
   },
+  {
+    // The copy of an inspection's document a version restore set aside instead of merging (see
+    // `src/collab/restore-backup.ts`). One row per document: the next restore overwrites the slot. The row is
+    // the notice as well as the recovery, so it goes with the inspection when it is purged or local data is
+    // cleared, and it is never synced.
+    toVersion: 4,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS restore_backups (
+        doc_name TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        created_at INTEGER NOT NULL,
+        reason TEXT NOT NULL
+      )`,
+    ],
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.toVersion ?? 0;

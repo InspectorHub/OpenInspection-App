@@ -80,6 +80,7 @@ describe('migrate() on the sql.js double', () => {
       'outbox',
       'photo_cache',
       'resource_cache',
+      'restore_backups',
       'work_package',
       'ydoc_updates',
       'ydoc_sync',
@@ -165,6 +166,12 @@ describe('migrate() on the sql.js double', () => {
       ['doc_name', 'TEXT', 0, 1],
       ['covered_state', 'BLOB', 0, 0],
       ['updated_at', 'INTEGER', 1, 0],
+    ]);
+    expect(await shape('restore_backups')).toEqual([
+      ['doc_name', 'TEXT', 0, 1],
+      ['data', 'BLOB', 1, 0],
+      ['created_at', 'INTEGER', 1, 0],
+      ['reason', 'TEXT', 1, 0],
     ]);
     expect(await shape('lease')).toEqual([
       ['name', 'TEXT', 0, 1],
