@@ -25,6 +25,7 @@ import { editorObserver } from './editor-observer';
 import { EditorStatus } from './EditorStatus';
 import { BackLink, Body, Heading, Notice, Screen } from './kit';
 import { PublishedReportBanner } from './PublishedReportBanner';
+import { RestoreBackupNotice } from './RestoreBackupNotice';
 import { useOnline } from './worklist/useOnline';
 import { useBackHandler } from './use-back-handler';
 
@@ -287,6 +288,7 @@ function EditorSession({ services, stack, origin, inspectionId, onExit, onRestar
           <Notice tone="watch">{READ_ONLY_NOTICE}</Notice>
         </div>
       )}
+      <RestoreBackupNotice stack={stack} inspectionId={inspectionId} />
       <FieldDataSourceProvider dataSource={phase.source} slots={slots}>
         <FieldEditor data={phase.data} readOnly={readOnly} />
       </FieldDataSourceProvider>

@@ -1,6 +1,6 @@
 import type { FieldResources } from '@inspectorhub/field-ui';
 import { createCommentsLibrary, createCostItems, createPrefs, createRepairItems } from './resources-library';
-import { createMediaPool, createSettingsSheet, createTemplateSearch } from './resources-media';
+import { createMediaPool, createTemplateSearch } from './resources-media';
 import { createAiAssist, createPublishReadiness, createVersionHistory } from './resources-misc';
 import { createItemTags, type ItemTagsHooks } from './resources-tags';
 import type { ResourceDeps } from './resources-shared';
@@ -24,7 +24,6 @@ export function createResources(deps: ResourceDeps, hooks: ItemTagsHooks = {}): 
     costItems: createCostItems(deps),
     repairItems: createRepairItems(deps),
     mediaPool: createMediaPool(deps),
-    settingsSheet: createSettingsSheet(deps),
     aiAssist: createAiAssist(deps),
     publishReadiness: createPublishReadiness(deps),
     templateSearch: createTemplateSearch(deps),

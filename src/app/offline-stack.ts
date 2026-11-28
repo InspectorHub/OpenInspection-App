@@ -1,9 +1,12 @@
+import * as Y from 'yjs';
 import type { Doc } from 'yjs';
 import type { Http } from '../auth/http';
 import { safeClientHeaders } from '../auth/client-headers';
 import { loadIdentity, writeDeviceState, type StoredIdentity } from '../auth/server-config';
 import type { TokenManager } from '../auth/tokens';
-import { CollabIssue, createCollabConnector, type CollabStatus, type NativeCollabConnector, type SocketFactory } from '../collab/connector';
+import { CollabIssue, createCollabConnector, isValidInspectionId, resultsDocName, type CollabStatus, type NativeCollabConnector, type RestoreBackupNotice, type SocketFactory } from '../collab/connector';
+import { deleteRestoreBackup, listRestoreBackups, readRestoreBackup } from '../collab/restore-backup';
+import { SqlitePersistence } from '../collab/y-sqlite';
 import { realTimers, type TimerPort } from '../collab/timers';
 import { createApiClient } from '../field/api-client';
 import { recordRejected } from '../field/item-tags-notice';
@@ -12,6 +15,7 @@ import type { PrefsStore } from '../field/prefs-store';
 import { createPrefs } from '../field/resources-library';
 import { createNativeUploader, type NativeUploader } from '../media/native-uploader';
 import { createDefectResolver, createWithDoc, createPendingResolver, type WithDoc } from '../media/pending-doc';
+import { MediaError } from '../media/errors';
 import { createMediaReconciler, type MediaReconciler } from '../media/reconcile';
 import { createMediaStore, type MediaStore } from '../media/store';
 import { sweepOrphanFiles } from '../media/sweep';
@@ -181,11 +185,36 @@ export interface BoundUserActions {
   listUnattributableOutbox: () => Promise<Awaited<ReturnType<typeof listUnattributableOutbox>>>;
 }
 
+export type RestoreBackupOutcome =
+  | { ok: true }
+  | {
+      ok: false;
+      /** `missing`: no copy was saved for this inspection. `not-stored`: the copy could not be confirmed in the stored rows, so it was kept for another try. `blocked`: the inspection is being removed. `failed`: anything else. */
+      reason: 'missing' | 'not-stored' | 'blocked' | 'failed';
+    };
+
 export interface OfflineStack {
   readonly db: Db;
   /** The account this stack works for. */
   readonly account: Account;
   readonly status: ReadableStore<StackStatus>;
+  /**
+   * Copies a version restore set aside, one per inspection, that the person has not dealt with yet. A copy the
+   * person restores or discards leaves the list; a copy saved before this stack started is loaded into it at start,
+   * so the notice survives an app restart.
+   */
+  readonly restoreNotices: ReadableStore<readonly RestoreBackupNotice[]>;
+  /**
+   * Puts a set-aside copy back into the inspection's document: the ratings, notes and defects the restore dropped
+   * merge back in, and the copy is deleted once its content is confirmed in the stored rows. The media reconciler is
+   * then asked to look again, so the pending photo entries that came back get their uploaded photos attached.
+   */
+  restoreBackup(inspectionId: string): Promise<RestoreBackupOutcome>;
+  /**
+   * Deletes a set-aside copy the person chose not to restore. True when the copy is gone (or there never was one);
+   * false when the row could not be deleted, in which case the notice stays.
+   */
+  discardRestoreBackup(inspectionId: string): Promise<boolean>;
   readonly replayer: Replayer;
   readonly refresher: WorkPackageRefresher;
   readonly reconciler: ReconcilerHandle;
@@ -307,6 +336,39 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
   const handles = new Set<{ destroy(): void }>();
   const editorListeners = new Set<(event: EditorEvent) => void>();
   const status = createStore<StackStatus>({ auth: false, serverUnreachable: false, syncPaused: false, upgrade: false, editsNotSaved: false, collabIssue: false, reconcile: 'never' });
+  /**
+   * Copies a version restore set aside that the person has not dealt with yet. The list is the whole value, replaced
+   * on every change, so a removal cannot leave a stale entry behind (a `patch` merge would).
+   */
+  const restoreNoticesState = createStore<{ list: readonly RestoreBackupNotice[] }>({ list: [] });
+  const restoreNotices: ReadableStore<readonly RestoreBackupNotice[]> = {
+    get: () => restoreNoticesState.get().list,
+    subscribe: (listener) => restoreNoticesState.subscribe(listener),
+  };
+  function noteRestoreBackup(notice: RestoreBackupNotice): void {
+    if (stopped) return;
+    const list = restoreNoticesState.get().list.filter((n) => n.inspectionId !== notice.inspectionId);
+    restoreNoticesState.patch({ list: [...list, notice] });
+  }
+  function unnoteRestoreBackup(inspectionId: string): void {
+    const list = restoreNoticesState.get().list.filter((n) => n.inspectionId !== inspectionId);
+    if (list.length !== restoreNoticesState.get().list.length) restoreNoticesState.patch({ list });
+  }
+  /** Copies saved before this stack started, so the notice survives an app restart. Best-effort: a failed read leaves the rows for the next start. */
+  async function loadRestoreNotices(): Promise<void> {
+    if (stopped) return;
+    try {
+      const saved = await listRestoreBackups(db);
+      if (stopped) return;
+      restoreNoticesState.patch({
+        list: saved
+          .filter((backup) => backup.docName.startsWith('results-'))
+          .map((backup) => ({ inspectionId: backup.docName.slice('results-'.length), backedUpAt: backup.createdAt })),
+      });
+    } catch {
+      report('collab_error')();
+    }
+  }
   // Every server contact reports whether the server answered, so a refused connection is told apart from a refused sign-in.
   const { http, tokens } = observeServerContact(deps.http, deps.tokens, { reached: () => status.patch(NO_GREY_LINE), unreachable: () => status.patch({ serverUnreachable: true, syncPaused: false }), paused: () => status.patch({ serverUnreachable: false, syncPaused: true }) });
 
@@ -371,6 +433,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
       report('collab_error')();
     },
     onProofError: report('proof_error'),
+    onRestoreBackup: (notice) => noteRestoreBackup(notice),
     onStatus: (inspectionId, collabStatus) => {
       if (collabStatus === 'storage_failed') status.patch({ editsNotSaved: true });
       else if (collabStatus === 'synced') status.patch({ collabIssue: false });
@@ -995,6 +1058,81 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     enqueueLaunch();
   }
 
+  /**
+   * True when the stored rows of `docName` hold every struct `backup` carries. Read back from the table, not from a
+   * live document: the copy must be durable before its row is deleted, and a live document can hold an update its
+   * persistence has not stored yet. Retried a few times for the live path, whose write lands just after the apply.
+   */
+  async function storedCoversBackup(docName: string, backup: Uint8Array): Promise<boolean> {
+    const wanted = Y.decodeStateVector(Y.encodeStateVectorFromUpdate(backup));
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (stopped) return false;
+      if (attempt > 0) await pause(100);
+      const scratch = new Y.Doc();
+      const reader = new SqlitePersistence(db, docName, scratch, { timers: timerPort });
+      let readFailed = false;
+      try {
+        await reader.whenSynced;
+      } catch {
+        readFailed = true;
+      }
+      let covered = false;
+      if (!readFailed) {
+        const stored = Y.decodeStateVector(Y.encodeStateVector(scratch));
+        covered = [...wanted].every(([client, clock]) => (stored.get(client) ?? 0) >= clock);
+      }
+      await reader.destroy().catch(() => undefined);
+      scratch.destroy();
+      if (covered) return true;
+    }
+    return false;
+  }
+
+  async function restoreBackup(inspectionId: string): Promise<RestoreBackupOutcome> {
+    if (stopped || !isValidInspectionId(inspectionId)) return { ok: false, reason: 'failed' };
+    const docName = resultsDocName(inspectionId);
+    let backup;
+    try {
+      backup = await readRestoreBackup(db, docName);
+    } catch {
+      return { ok: false, reason: 'failed' };
+    }
+    if (backup === null) {
+      unnoteRestoreBackup(inspectionId);
+      return { ok: false, reason: 'missing' };
+    }
+    try {
+      await withDoc(inspectionId, (doc) => {
+        Y.applyUpdate(doc, backup.data);
+      });
+    } catch (error) {
+      if (error instanceof MediaError && error.code === 'BLOCKED') return { ok: false, reason: 'blocked' };
+      return { ok: false, reason: 'failed' };
+    }
+    // The copy stays until its content is confirmed in the stored rows: deleting it first would lose both on a crash.
+    if (!(await storedCoversBackup(docName, backup.data))) return { ok: false, reason: 'not-stored' };
+    try {
+      await deleteRestoreBackup(db, docName);
+    } catch {
+      return { ok: false, reason: 'failed' };
+    }
+    unnoteRestoreBackup(inspectionId);
+    // The pending photo entries are back in the document: the uploads the reconciler kept waiting can attach now.
+    media.recheckMissing();
+    return { ok: true };
+  }
+
+  async function discardRestoreBackup(inspectionId: string): Promise<boolean> {
+    if (!isValidInspectionId(inspectionId)) return false;
+    try {
+      await deleteRestoreBackup(db, resultsDocName(inspectionId));
+    } catch {
+      return false;
+    }
+    unnoteRestoreBackup(inspectionId);
+    return true;
+  }
+
   async function enqueueAndTrigger(op: string, input: unknown): Promise<OutboxRow> {
     const who = await account();
     if (who === null) throw new OutboxError('invalid_account');
@@ -1031,6 +1169,9 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     db,
     account: bound,
     status,
+    restoreNotices,
+    restoreBackup,
+    discardRestoreBackup,
     replayer: replay,
     refresher,
     withDoc,
@@ -1068,6 +1209,7 @@ export function createOfflineStack(deps: OfflineStackDeps): OfflineStack {
     start: () => {
       if (started || stopped) return;
       started = true;
+      void loadRestoreNotices();
       chain = chain.then(begin).catch(report('start_failed'));
     },
     stop,

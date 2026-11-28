@@ -1,4 +1,4 @@
-import type { CommandResult, FieldResources, MediaPoolListing, SettingsSheetData } from '@inspectorhub/field-ui';
+import type { CommandResult, FieldResources, MediaPoolListing } from '@inspectorhub/field-ui';
 import type { IsBlocked } from '../offline/blocked';
 import { accountKey, type Account } from '../offline/outbox';
 import { readCached } from '../offline/resource-cache';
@@ -60,5 +60,4 @@ export const text = (value: unknown): string | undefined => (typeof value === 's
 
 /** The package exports the listing types but not their elements; these are the same types, named. */
 export type GalleryPhoto = MediaPoolListing['photos'][number];
-export type CoverPhotoOption = SettingsSheetData['photos'][number];
 export type PublishReadiness = NonNullable<Awaited<ReturnType<NonNullable<FieldResources['publishReadiness']>['check']>>>;

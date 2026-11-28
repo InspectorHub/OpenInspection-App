@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMediaPool, createSettingsSheet, createTemplateSearch } from './resources-media';
+import { createMediaPool, createTemplateSearch } from './resources-media';
 import { resourceWorld } from './test-support/resource-world';
 import { reply } from './test-support/scripted-api';
 
@@ -45,49 +45,6 @@ describe('media pool', () => {
     expect(w.api.calls).toHaveLength(0);
     w.state.blocked.clear();
     expect((await createMediaPool(w.deps).list('i1')).answered).toBe(true);
-  });
-});
-
-describe('settings sheet', () => {
-  const inspection = { data: { inspection: { id: 'i1', templateId: 't1', propertyType: 'single_family' } } };
-  const templates = { data: [{ id: 't1', name: 'Standard' }, { id: '', name: 'bad' }], meta: { page: 1, totalPages: 1 } };
-
-  it('bundles the inspection row, the templates, the cover photos and the appearance profiles', async () => {
-    const w = await resourceWorld({ answers: [reply(200, inspection), reply(200, templates), reply(200, media)] });
-    const sheet = await createSettingsSheet(w.deps).load('i1');
-    expect(sheet?.inspection).toEqual({ id: 'i1', templateId: 't1', propertyType: 'single_family' });
-    expect(sheet?.templates).toEqual([{ id: 't1', name: 'Standard' }]);
-    expect(sheet?.photos.map((photo) => photo.url)).toEqual(['local://i1/t/inspections/i1/photos/a.jpg', 'local://i1/t/inspections/i1/photos/loose.jpg']);
-    expect(sheet?.profiles.map((profile) => profile.id)).toEqual(['signature', 'meridian', 'terra']);
-    const templateCall = w.api.calls.find((call) => call.path === '/api/inspections/templates');
-    expect(templateCall?.query).toEqual({ page: '1', pageSize: '100' });
-  });
-
-  it('without the inspection row it is null, so the sheet offers a retry and not a form that saves blanks', async () => {
-    const w = await resourceWorld({ answers: [reply(500), reply(200, templates), reply(200, media)] });
-    expect(await createSettingsSheet(w.deps).load('i1')).toBeNull();
-  });
-
-  it('an answer that names no inspection is not a form', async () => {
-    const w = await resourceWorld({ answers: [reply(200, { data: {} }), reply(200, templates), reply(200, media)] });
-    expect(await createSettingsSheet(w.deps).load('i1')).toBeNull();
-  });
-
-  it('templates or photos that cannot be read leave the rest of the sheet usable', async () => {
-    const w = await resourceWorld({ answers: [reply(200, inspection), reply(500), reply(500)] });
-    const sheet = await createSettingsSheet(w.deps).load('i1');
-    expect(sheet?.inspection).not.toBeNull();
-    expect(sheet?.templates).toEqual([]);
-    expect(sheet?.photos).toEqual([]);
-  });
-
-  it('offline and blocked: null, nothing sent', async () => {
-    const w = await resourceWorld({ online: false });
-    expect(await createSettingsSheet(w.deps).load('i1')).toBeNull();
-    w.state.online = true;
-    w.state.blocked.add('i1');
-    expect(await createSettingsSheet(w.deps).load('i1')).toBeNull();
-    expect(w.api.calls).toHaveLength(0);
   });
 });
 

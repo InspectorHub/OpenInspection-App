@@ -56,7 +56,13 @@ export const appSlotsWithStatus: FieldHostSlots = { humanCheck: 'not-required', 
 // source change that reaches the app is DEFAULT_INSPECTION_PREFS: autoAdvance 'always' -> 'keyboard', agentRepairAccess 'readwrite' -> 'read', and
 // reportLinkTtl 'never' -> a count/unit object -- which is the behaviour the app keeps a local copy of and asserts ('keyboard'). The dist was split:
 // the editor UI strings moved out of index.js into a chunk file, which the maestro-flows text-origin check now reads as well.
-const PINNED = '0.10.1';
+// 0.11.0 (2026-11-28): re-read by a diff of the sources of field-ui-v0.10.1 and field-ui-v0.11.0. appendPendingPhoto, appendPhoto, pushPendingPhoto,
+// upsertElement, orderPhotoBatch, attachPhotoBatch, FieldUrls and DEFAULT_INSPECTION_PREFS are untouched (none appears in the diff); the dist regex
+// check in uploader-write-ahead.test.ts still matches the installed dist. The one results-binding.ts change is the defect-photo dedup, which dedups
+// pending entries by pendingId instead of by their empty key -- the app's resolveDefectInDoc only ever appends resolved keys, so it does not apply
+// there. The changes that reach the app are the settings sheet's removal from FieldResources (the app's settings-sheet resource and its tests are
+// gone) and three optional additions the app does not send: EditorData's courtesy-translation fields and the publish command's translateTo.
+const PINNED = '0.11.0';
 const REREAD = `@inspectorhub/field-ui is no longer ${PINNED}. Before bumping the pin, re-read: this file, src/field/batch-attach.test.ts (it has its own pin and models the photo-batch ordering of field-ui), src/field/uploader-refusal.test.ts, src/media/pending-doc-append.ts against the package's appendPendingPhoto, and src/field/photo-urls.ts against FieldUrls. Then update PINNED here and in batch-attach.test.ts after re-reading.`;
 
 describe('the installed @inspectorhub/field-ui', () => {
