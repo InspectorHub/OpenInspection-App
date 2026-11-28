@@ -56,7 +56,9 @@ test('an uploaded photo keeps a real thumbnail, and a server-only photo is fetch
   const asked = engine.photoRequests;
   expect(asked.length).toBeGreaterThanOrEqual(1);
   expect(asked.every((r) => r.authorized)).toBe(true);
-  expect(asked[0]?.w).toBe('480');
+  // field-ui 0.11.0 asks for the original first (the download-for-offline check calls photo() with no size hint),
+  // so the thumbnail's 480-wide request is no longer necessarily first; it must still be among the requests.
+  expect(asked.some((r) => r.w === '480')).toBe(true);
   expect(asked.every((r) => r.key.startsWith('renderer-tenant/inspections/insp-7/photos/'))).toBe(true);
 
   // Offline from now on: the copy is on the device, so the thumbnail still shows after a restart.

@@ -32,7 +32,9 @@ test.beforeAll(async () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const fieldUiPath = resolve('node_modules/@inspectorhub/field-ui/dist/index.js');
   const fieldUiSource = await readFile(fieldUiPath, 'utf8');
-  const branchMarker = '        const doc = writeDoc;\n        const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;\n        if (!dataSource.isOnline() && doc && sid && !target) {';
+  // field-ui 0.11.0 queues offline photos with a defect target too (the `!target` guard is gone: the branch passes
+  // `defectTarget` to addOfflinePhotos), so the marker is the branch without it.
+  const branchMarker = '        const doc = writeDoc;\n        const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;\n        if (!dataSource.isOnline() && doc && sid) {';
   if (fieldUiSource.split(branchMarker).length !== 2) throw new Error('field-ui photo branch instrumentation target was not unique');
   const branchProbe = `        const doc = writeDoc;
         const sid = state.sectionIdForItem(itemId) ?? state.currentSection?.id;
@@ -42,7 +44,7 @@ test.beforeAll(async () => {
           branchReads.push({ hasDoc: doc !== null && doc !== undefined, sectionId: sid ?? null, hasTarget: target !== null && target !== undefined });
           if (!Array.isArray(reads)) Reflect.set(window, '__oiE2EPhotoBranchReads', branchReads);
         }
-        if (!dataSource.isOnline() && doc && sid && !target) {`;
+        if (!dataSource.isOnline() && doc && sid) {`;
   const branchWithProbe = fieldUiSource.replace(branchMarker, branchProbe);
   process.env.NODE_ENV = 'development';
   try {
