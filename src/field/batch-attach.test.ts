@@ -69,6 +69,10 @@ function attach(doc: Y.Doc, keys: string[]): void {
  *
  * Re-read against field-ui 0.10.1 (2026-11-15, a diff of the sources of field-ui-v0.9.0 and field-ui-v0.10.1): orderPhotoBatch and attachPhotoBatch
  * are byte-identical (neither appears in the diff); the photo-batch ordering is unchanged.
+ *
+ * Re-read against field-ui 0.11.0 (2026-11-28, a diff of the sources of field-ui-v0.10.1 and field-ui-v0.11.0): orderPhotoBatch and attachPhotoBatch
+ * are byte-identical (neither appears in the diff); the photo-batch ordering is unchanged. (offline-photo-batch.ts gained a defect target, which
+ * routes a defect photo's pending entry to the defect row; the item-photo ordering this model covers is untouched.)
  */
 /** Hand copy of field-ui 0.7.0 `orderPhotoBatch`: put the named entries into the slots they already occupy, in selection order. */
 function orderPhotoBatch(doc: Y.Doc, selection: Named[]): void {
@@ -144,9 +148,9 @@ describe('a selection where some uploads fail and are kept', () => {
     expect(entries.map(idOf)).toEqual(['batch-1', 'batch-2', 'batch-3', 'batch-4', 'batch-5']);
   });
 
-  it('is modelled on field-ui 0.10.1; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
+  it('is modelled on field-ui 0.11.0; re-read photo-batch-order and attachPhotoBatch when the version changes', () => {
     const manifest = JSON.parse(readFileSync('node_modules/@inspectorhub/field-ui/package.json', 'utf8')) as { version: string };
-    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.10.1');
+    expect(manifest.version, 'field-ui changed: re-read orderPhotoBatch / attachPhotoBatch in its dist and update the model in this file').toBe('0.11.0');
   });
 });
 

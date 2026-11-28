@@ -1,27 +1,16 @@
-import type { FieldResources, MediaPoolListing, SettingsSheetData, TemplateSearchResult, TemplateSummary } from '@inspectorhub/field-ui';
+import type { FieldResources, MediaPoolListing, TemplateSearchResult, TemplateSummary } from '@inspectorhub/field-ui';
 import { apiPath, templatePath } from './api-client';
 import { bodyData, isRec } from './commands-shared';
-import { asList, readBody, text, type CoverPhotoOption, type GalleryPhoto, type ResourceDeps } from './resources-shared';
+import { asList, readBody, text, type GalleryPhoto, type ResourceDeps } from './resources-shared';
 
 /**
- * The picture and template reads: the gallery of an inspection's photos, the settings sheet, and the template picker.
+ * The picture and template reads: the gallery of an inspection's photos and the template picker.
  * Nothing of these is in the work package, so offline they answer the contract's "could not read" shapes.
  */
 
 const UNANSWERED: MediaPoolListing = { photos: [], answered: false };
 const EMPTY_PAGE: TemplateSearchResult = { templates: [], hasMore: false, page: 1, totalPages: 1 };
 const TEMPLATE_PAGE_SIZE = 25;
-const SHEET_TEMPLATE_LIMIT = 100;
-
-/**
- * The built-in report appearance profiles, id and name only. A mirror of the engine's list (`BUILTIN_PROFILES`): the
- * settings sheet only needs to offer them, and the engine validates the id it is sent.
- */
-const REPORT_PROFILES = [
-  { id: 'signature', name: 'Signature' },
-  { id: 'meridian', name: 'Meridian' },
-  { id: 'terra', name: 'Terra' },
-] as const;
 
 /**
  * The attached and loose photos of one inspection as one deduplicated list (the engine's `flattenMedia`). A photo's
@@ -71,36 +60,6 @@ function templateSummaries(value: unknown): TemplateSummary[] {
     if (isRec(entry) && typeof entry.id === 'string' && entry.id !== '' && typeof entry.name === 'string' && entry.name !== '') out.push({ id: entry.id, name: entry.name });
   }
   return out;
-}
-
-export function createSettingsSheet(deps: ResourceDeps): NonNullable<FieldResources['settingsSheet']> {
-  return {
-    load: async (inspectionId): Promise<SettingsSheetData | null> => {
-      try {
-        if (!deps.isOnline() || (await deps.isBlocked(inspectionId))) return null;
-        const [row, templates, media] = await Promise.all([
-          readBody(deps.api, { method: 'GET', path: apiPath(inspectionId) }),
-          readBody(deps.api, { method: 'GET', path: templatePath(), query: { page: '1', pageSize: String(SHEET_TEMPLATE_LIMIT) } }),
-          readBody(deps.api, { method: 'GET', path: apiPath(inspectionId, 'media') }),
-        ]);
-        // Without the inspection row the sheet would offer a form that saves blanks over the stored values.
-        const data = row === null ? undefined : bodyData(row.json);
-        if (data === undefined) return null;
-        const inspection = isRec(data.inspection) ? data.inspection : data;
-        // A body that names no inspection is not one: the sheet would offer a form that saves blanks.
-        if (typeof inspection.id !== 'string') return null;
-        const photos: CoverPhotoOption[] = media === null ? [] : flattenMedia(deps, inspectionId, media.json).map((p) => ({ key: p.key, url: p.url, label: p.label }));
-        return {
-          inspection,
-          templates: templates === null || !isRec(templates.json) ? [] : templateSummaries(templates.json.data),
-          photos,
-          profiles: REPORT_PROFILES.map((p) => ({ id: p.id, name: p.name })),
-        };
-      } catch {
-        return null;
-      }
-    },
-  };
 }
 
 export function createTemplateSearch(deps: ResourceDeps): NonNullable<FieldResources['templateSearch']> {
