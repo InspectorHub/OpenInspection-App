@@ -27,6 +27,14 @@ appId: io.inspectorhub.app
 # Wait for the screen to be still first, so the tile is not caught half drawn.
 - waitForAnimationToEnd:
     timeout: 5000
+# The 0.11.0 download-for-offline banner at the top of the editor pushes the photos down, so the tile sits half below the fold when the
+# item opens and a crop of it is mostly off-screen white. One drag brings it fully into view first.
+- swipe:
+    start: 50%,75%
+    end: 50%,40%
+    duration: 2500
+- waitForAnimationToEnd:
+    timeout: 5000
 - takeScreenshot:
     path: g4-thumbnail-offline
     cropOn:

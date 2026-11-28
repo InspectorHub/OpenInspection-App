@@ -138,9 +138,11 @@ async function openLibrary(): Promise<FileChooser> {
   return picker;
 }
 
-async function openReportSettings(): Promise<void> {
+async function openMoreMenu(): Promise<void> {
+  // field-ui 0.11.0 moved the original-quality toggle out of the settings sheet (now on the hub) into the header's
+  // More menu, as a checkbox row with no test id. The menu stays open after the toggle is flipped.
   await page.getByRole('button', { name: 'More actions' }).click();
-  await page.getByRole('button', { name: 'Report settings' }).click();
+  await expect(page.getByLabel('Original quality uploads')).toBeVisible();
 }
 
 test('a file dropped on the renderer is cancelled and does not navigate', async () => {
@@ -230,8 +232,8 @@ test('online: an oversized original is refused with the size sentence while its 
   test.setTimeout(120_000);
   await signIn();
   await seedEditorPackage();
-  await openReportSettings();
-  await page.getByTestId('original-quality-uploads').check();
+  await openMoreMenu();
+  await page.getByLabel('Original quality uploads').check();
   await page.getByRole('button', { name: 'Close' }).click();
   const jpeg = await readFile(resolve('e2e-electron/fixtures/photo-import.jpg'));
   const oversized = Buffer.concat([jpeg, Buffer.alloc(12 * 1024 * 1024 - jpeg.length)]);
@@ -452,8 +454,8 @@ test('original-quality rejects an oversized JPEG but keeps JPEG and PNG original
   await signIn();
   await seedEditorPackage();
 
-  await openReportSettings();
-  const originalQuality = page.getByTestId('original-quality-uploads');
+  await openMoreMenu();
+  const originalQuality = page.getByLabel('Original quality uploads');
   await expect(originalQuality).toBeVisible();
   await originalQuality.check();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('oi.uploads.originalQuality'))).toBe('1');
@@ -479,7 +481,7 @@ test('original-quality rejects an oversized JPEG but keeps JPEG and PNG original
   expect(engine.uploadContentLengths).toHaveLength(2);
   expect(engine.uploadContentLengths.every((length) => length !== null && length > 0)).toBe(true);
 
-  await openReportSettings();
+  await openMoreMenu();
   await expect(originalQuality).toBeVisible();
   await originalQuality.uncheck();
   await page.getByRole('button', { name: 'Close' }).click();
